@@ -1,0 +1,12 @@
+# Never push these
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+icebadger.db
+icebadger_backups/
+.env
+settings.json
+*.tar.gz
+*.log

