@@ -10,3 +10,5 @@ icebadger_backups/
 settings.json
 *.tar.gz
 *.log
+victims/
+scratch/

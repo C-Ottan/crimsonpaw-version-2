@@ -378,7 +378,7 @@ html_content = f"""<!DOCTYPE html>
     <!-- Document Header -->
     <div class="doc-header">
         <div>
-            <div class="brand-pill">Infrastructure Engineering Manual</div>
+            <div class="brand-pill">CRIMSON PAW // Production Manual</div>
             <div class="doc-title">VPS Connectivity, Cloudflare DNS &amp; Production Deployment</div>
             <div class="doc-subtitle">Standard Operating Procedure for Server Staging, Code Migration &amp; Database Resilience</div>
         </div>
@@ -563,53 +563,38 @@ html_content = f"""<!DOCTYPE html>
     <!-- PART E -->
     <div class="part-header">
         <span class="part-tag">Part E</span>
-        <span>Moving Your Codebase from Windows to the VPS</span>
+        <span>Deploying Codebase to VPS via GitHub (Recommended Workflow)</span>
     </div>
 
-    <p>To deploy cleanly without transferring bulky virtual environment binaries or temporary files, archive the project on Windows and transfer via native OpenSSH SCP:</p>
+    <p>Because your codebase is synchronized on GitHub (<code>C-Ottan/CRIMSONPAW</code>), deployment to your Linux VPS is instant, clean, and version-controlled. Virtual environments and database locks are never contaminated.</p>
 
     <div class="step-list">
         <div class="step-item">
-            <strong>Package the Project on Windows (PowerShell):</strong>
-            Compress your workspace into a single archive, excluding <code>venv</code> and <code>__pycache__</code>:
+            <strong>Clone Repository to VPS via SSH:</strong>
+            Connect to your Linux VPS via SSH as root and clone directly into <code>/opt/crimsonpaw</code>:
         </div>
     </div>
 
     <div class="terminal-block">
         <div class="terminal-header">
-            <span>PowerShell (Windows)</span>
+            <span>Ubuntu / Debian Shell (root@vps)</span>
         </div>
-        <pre class="code-content"><span class="cmd-prompt">PS C:\\Users\\Admin&gt;</span> cd c:\\Users\\IT-ADMIN\\Desktop\\FLOW\\ICEBADGER\\icebadger
-<span class="cmd-prompt">PS C:\\Users\\...\\icebadger&gt;</span> tar -czvf ..\\icebadger_deploy.tar.gz --exclude="venv" --exclude="__pycache__" --exclude=".git" .</pre>
+        <pre class="code-content"><span class="cmd-prompt">root@vps:~#</span> git clone https://github.com/C-Ottan/CRIMSONPAW.git /opt/crimsonpaw
+<span class="cmd-prompt">root@vps:~#</span> cd /opt/crimsonpaw</pre>
     </div>
 
     <div class="step-list" style="counter-reset: step-counter 1;">
         <div class="step-item">
-            <strong>Transfer to VPS via SCP:</strong>
-            Copy the archive to your remote VPS <code>/opt</code> directory:
+            <strong>Or Pull Latest Updates if Already Cloned:</strong>
+            If you already cloned the repository on your VPS previously, simply pull the latest branch:
         </div>
     </div>
 
     <div class="terminal-block">
         <div class="terminal-header">
-            <span>PowerShell (Windows)</span>
+            <span>Ubuntu / Debian Shell (root@vps)</span>
         </div>
-        <pre class="code-content"><span class="cmd-prompt">PS C:\\Users\\Admin&gt;</span> scp c:\\Users\\IT-ADMIN\\Desktop\\FLOW\\ICEBADGER\\icebadger_deploy.tar.gz root@<span class="cmd-arg">YOUR_VPS_IP</span>:/opt/</pre>
-    </div>
-
-    <div class="step-list" style="counter-reset: step-counter 2;">
-        <div class="step-item">
-            <strong>Extract on Linux:</strong>
-            Connect via SSH and unpack into <code>/opt/icebadger</code>:
-        </div>
-    </div>
-
-    <div class="terminal-block">
-        <div class="terminal-header">
-            <span>Ubuntu / Debian Shell</span>
-        </div>
-        <pre class="code-content"><span class="cmd-prompt">root@vps:~#</span> mkdir -p /opt/icebadger &amp;&amp; cd /opt/icebadger
-<span class="cmd-prompt">root@vps:/opt/icebadger#</span> tar -xzvf /opt/icebadger_deploy.tar.gz -C .</pre>
+        <pre class="code-content"><span class="cmd-prompt">root@vps:/opt/crimsonpaw#</span> git pull origin main</pre>
     </div>
 
     <!-- PART F -->
@@ -618,22 +603,24 @@ html_content = f"""<!DOCTYPE html>
         <span>Automated 1-Click Server Hardening &amp; Deployment (pre-setup.sh)</span>
     </div>
 
-    <p>ICEBADGER includes an automated production staging script, <code>pre-setup.sh</code>, located in the project root. This script automates complete server hardening, Cloudflare firewall shielding, Nginx reverse proxying, and background process supervision in 30 seconds.</p>
+    <p>CRIMSON PAW includes an automated production staging script, <code>pre-setup.sh</code>, located in the repository root. This script automates complete server hardening, Cloudflare firewall shielding, Nginx reverse proxying, environment auto-generation, and background process supervision in 30 seconds.</p>
 
     <div class="callout callout-tip">
         <div class="callout-title">⚡ What pre-setup.sh Automates Under the Hood:</div>
         1. <strong>System Dependencies:</strong> Automatically installs <code>ufw</code>, <code>nginx</code>, <code>certbot</code>, <code>fail2ban</code>, <code>jq</code>, and Python 3 tools.<br>
-        2. <strong>Cloudflare UFW Firewall Shield:</strong> Dynamically downloads official Cloudflare IPv4 and IPv6 subnets, whitelists ports 80/443 exclusively for Cloudflare, and blocks all raw direct internet probing.<br>
-        3. <strong>Direct-to-IP Scanner Shield (HTTP 444):</strong> Automatically drops connections immediately if any automated scanner accesses your VPS via its raw IP address without your domain name.<br>
-        4. <strong>Real Visitor IP Restoration:</strong> Generates <code>/etc/nginx/conf.d/cloudflare_real_ip.conf</code> ensuring Nginx and the <strong>Stealth Gate</strong> log genuine victim IPs rather than Cloudflare edge IPs.<br>
-        5. <strong>Multi-Domain Dynamic Reverse Proxy:</strong> Automatically proxies any custom domains and subdomains configured in Cloudflare to internal port 5000 with WebSocket support.<br>
-        6. <strong>Production Systemd Service:</strong> Generates <code>/etc/systemd/system/icebadger.service</code> with 4 Gunicorn workers, auto-reboot persistence, and crash recovery.
+        2. <strong>Python Virtual Environment:</strong> Installs clean virtualenv in <code>./venv</code> with all dependencies from <code>requirements.txt</code> + <code>gunicorn</code>.<br>
+        3. <strong>Auto-Generates .env &amp; settings.json:</strong> Generates clean configuration files, ensuring <code>client_admin_locked: false</code> so the administrator account is immediately unlocked and accessible.<br>
+        4. <strong>Cloudflare UFW Firewall Shield:</strong> Dynamically downloads official Cloudflare IPv4 and IPv6 subnets, whitelists ports 80/443 exclusively for Cloudflare, and blocks all raw direct internet probing (port 22 remains open for SSH).<br>
+        5. <strong>Direct-to-IP Scanner Shield (HTTP 444):</strong> Automatically drops connections immediately if any automated scanner accesses your VPS via its raw IP address without your domain name.<br>
+        6. <strong>Real Visitor IP Restoration:</strong> Generates <code>/etc/nginx/conf.d/cloudflare_real_ip.conf</code> ensuring Nginx and the <strong>Stealth Gate</strong> log genuine victim IPs rather than Cloudflare edge IPs.<br>
+        7. <strong>Multi-Domain Dynamic Reverse Proxy:</strong> Automatically proxies any custom domains and subdomains configured in Cloudflare to internal port 5000 with WebSocket support.<br>
+        8. <strong>Production Systemd Service:</strong> Installs <code>crimsonpaw.service</code> with auto-reboot persistence, crash recovery, and <code>journalctl</code> logging.
     </div>
 
     <div class="step-list">
         <div class="step-item">
             <strong>Execute 1-Click Staging on VPS:</strong>
-            Inside <code>/opt/icebadger</code> on your Linux server, execute:
+            Inside your cloned folder on your Linux server, execute:
         </div>
     </div>
 
@@ -641,9 +628,8 @@ html_content = f"""<!DOCTYPE html>
         <div class="terminal-header">
             <span>Ubuntu / Debian Shell (root@vps)</span>
         </div>
-        <pre class="code-content"><span class="cmd-prompt">root@vps:/opt/icebadger#</span> chmod +x pre-setup.sh
-<span class="cmd-prompt">root@vps:/opt/icebadger#</span> ./pre-setup.sh
-<span class="cmd-prompt">root@vps:/opt/icebadger#</span> systemctl enable --now icebadger</pre>
+        <pre class="code-content"><span class="cmd-prompt">root@vps:/opt/crimsonpaw#</span> chmod +x pre-setup.sh
+<span class="cmd-prompt">root@vps:/opt/crimsonpaw#</span> ./pre-setup.sh</pre>
     </div>
 
     <!-- PART G -->
@@ -659,13 +645,19 @@ html_content = f"""<!DOCTYPE html>
             <span>Daemon Health Commands</span>
         </div>
         <pre class="code-content"><span class="cmd-comment"># Check background service status (should display 'active (running)')</span>
-<span class="cmd-prompt">root@vps:~#</span> systemctl status icebadger
+<span class="cmd-prompt">root@vps:~#</span> systemctl status crimsonpaw
 
 <span class="cmd-comment"># Stream real-time application logs (tail -f equivalent)</span>
-<span class="cmd-prompt">root@vps:~#</span> journalctl -u icebadger -f
+<span class="cmd-prompt">root@vps:~#</span> journalctl -u crimsonpaw -f
 
 <span class="cmd-comment"># Restart application after settings or template updates</span>
-<span class="cmd-prompt">root@vps:~#</span> systemctl restart icebadger</pre>
+<span class="cmd-prompt">root@vps:~#</span> systemctl restart crimsonpaw</pre>
+    </div>
+
+    <div class="callout callout-tip">
+        <div class="callout-title">🔓 Admin Access Credentials &amp; Verification:</div>
+        Once <code>pre-setup.sh</code> finishes, access your administrator console at <strong><code>https://yourdomain.com/</code></strong>.<br>
+        Default Administrator Password: <strong><code>Sysadmin</code></strong> (Client Admin is unlocked and ready for use).
     </div>
 
     <!-- PART H -->
@@ -692,7 +684,7 @@ html_content = f"""<!DOCTYPE html>
         </div>
         <pre class="code-content"><span class="cmd-prompt">root@vps:~#</span> crontab -e
 <span class="cmd-comment"># Back up the database every night at 02:00 AM:</span>
-0 2 * * * sqlite3 /opt/icebadger/icebadger.db ".backup '/opt/icebadger_backups/icebadger_$(date +\\%Y\\%m\\%d).db'"</pre>
+0 2 * * * sqlite3 /opt/crimsonpaw/icebadger.db ".backup '/opt/crimsonpaw_backups/crimsonpaw_$(date +\\%Y\\%m\\%d).db'"</pre>
     </div>
 
     <h3>2. One-Line On-Demand Pull to Local Windows PC</h3>
@@ -702,7 +694,7 @@ html_content = f"""<!DOCTYPE html>
         <div class="terminal-header">
             <span>PowerShell (Windows)</span>
         </div>
-        <pre class="code-content"><span class="cmd-prompt">PS C:\\Users\\Admin&gt;</span> scp root@<span class="cmd-arg">YOUR_VPS_IP</span>:/opt/icebadger/icebadger.db <span class="cmd-prompt">"C:\\Users\\IT-ADMIN\\Desktop\\FLOW\\ICEBADGER\\icebadger_production_backup.db"</span></pre>
+        <pre class="code-content"><span class="cmd-prompt">PS C:\\Users\\Admin&gt;</span> scp root@<span class="cmd-arg">YOUR_VPS_IP</span>:/opt/crimsonpaw/icebadger.db <span class="cmd-prompt">"C:\\Users\\IT-ADMIN\\Desktop\\FLOW\\ICEBADGER\\crimsonpaw_production_backup.db"</span></pre>
     </div>
 
     <h3>3. Domain Burn Recovery Procedure (60-Second Pivot)</h3>
@@ -716,7 +708,7 @@ html_content = f"""<!DOCTYPE html>
             Update <code>settings.json</code>: <code>"deploy_host": "https://newdomain.com"</code>.
         </div>
         <div class="step-item">
-            Restart service: <code>systemctl restart icebadger</code>.
+            Restart service: <code>systemctl restart crimsonpaw</code>.
         </div>
         <div class="step-item">
             All active tokens, operator workspaces, and historical captured accounts remain immediately live and accessible.
@@ -740,7 +732,7 @@ html_content = f"""<!DOCTYPE html>
 
     <div class="step-list">
         <div class="step-item">
-            <strong>Standard Disallow Rules:</strong> ICEBADGER automatically serves <code>/robots.txt</code> instructing all compliant search engines to never crawl the host:
+            <strong>Standard Disallow Rules:</strong> CRIMSON PAW automatically serves <code>/robots.txt</code> instructing all compliant search engines to never crawl the host:
         </div>
     </div>
 

