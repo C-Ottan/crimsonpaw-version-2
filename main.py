@@ -13611,8 +13611,13 @@ _login_lockouts = {}   # client_ip -> {'attempts': int, 'locked_until': float}
 _pending_2fa = {}      # client_ip -> {'username': str, 'otp': str, 'expires_at': float, 'attempts': int}
 
 def _get_real_ip():
-    if request.headers.get('X-Forwarded-For'):
-        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    # Prefer Cloudflare single-IP header, then first entry of X-Forwarded-For
+    cf = request.headers.get('CF-Connecting-IP')
+    if cf:
+        return cf.strip()
+    xff = request.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
     return request.remote_addr or '127.0.0.1'
 
 def _check_ip_lockout(ip):
@@ -15731,7 +15736,7 @@ def serve_preland(slug):
     if not dep.get('preland_template_id') or pcfg.get('enabled') is False or pcfg.get('disabled') is True or not dep.get('preland_html_cache'):
         return serve_landing(path_only)
 
-    visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    visitor_ip = _get_real_ip()
     visitor_ua = request.headers.get('User-Agent','')
     _dep.log_hit(dep['id'], visitor_ip, visitor_ua, 'preland', is_bot=0)
 
@@ -15754,7 +15759,7 @@ def serve_landing(slug):
     if not dep:
         return '<h1>Not found</h1>', 404
 
-    visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    visitor_ip = _get_real_ip()
     visitor_ua = request.headers.get('User-Agent', '')
     _dep.log_hit(dep['id'], visitor_ip, visitor_ua, 'landing', is_bot=0)
 
@@ -15859,7 +15864,7 @@ def serve_success(slug):
     merged_cfg = {}
 
     if dep:
-        visitor_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+        visitor_ip = _get_real_ip()
         _dep.log_hit(dep['id'], visitor_ip, request.headers.get('User-Agent', ''), 'success', is_bot=0)
         success_url = dep.get('success_url') or success_url
         
