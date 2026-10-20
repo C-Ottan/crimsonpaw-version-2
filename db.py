@@ -130,6 +130,12 @@ def init_db():
     )''')
 
     try:
+        cursor.execute("ALTER TABLE deployments ADD COLUMN landing_config TEXT DEFAULT '{}'")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE deployments ADD COLUMN landing_mode TEXT DEFAULT 'S'")
+    except sqlite3.OperationalError: pass
+    try:
         cursor.execute("ALTER TABLE deployments ADD COLUMN success_config TEXT DEFAULT '{}'")
     except sqlite3.OperationalError: pass
     try:
