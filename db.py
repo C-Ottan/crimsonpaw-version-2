@@ -248,10 +248,15 @@ def init_db():
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         session_user_code   TEXT NOT NULL,
         message_id          TEXT NOT NULL,
+        internet_message_id TEXT DEFAULT '',
         first_alerted_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         received_datetime   TEXT DEFAULT '',
         UNIQUE(session_user_code, message_id)
     )''')
+    try:
+        cursor.execute("ALTER TABLE keyword_alert_ledger ADD COLUMN internet_message_id TEXT DEFAULT ''")
+    except Exception:
+        pass
     cursor.execute('''INSERT OR IGNORE INTO keyword_alert_ledger (session_user_code, message_id, received_datetime)
                       SELECT DISTINCT session_user_code, message_id, received_datetime FROM keyword_matches''')
 
@@ -715,15 +720,22 @@ def record_keyword_match(rule_id, session_user_code, victim_name, victim_email, 
         conn.close()
     return inserted_id
 
-def is_message_already_matched(session_user_code, message_id, rule_id=None):
-    """Check if a specific Graph API email message was already alerted in permanent ledger."""
+def is_message_already_matched(session_user_code, message_id, rule_id=None, internet_message_id=None):
+    """Check if a specific Graph API email message was already alerted in permanent ledger.
+    Checks both Microsoft Graph message_id and RFC-2822 internet_message_id to prevent cross-folder duplicates.
+    """
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        # 1. Primary check: permanent alert ledger
+        # 1. Primary check: permanent alert ledger by message_id
         cursor.execute("SELECT 1 FROM keyword_alert_ledger WHERE session_user_code = ? AND message_id = ? LIMIT 1", (session_user_code, message_id))
         if cursor.fetchone() is not None:
             return True
+        # 1b. Check permanent alert ledger by internet_message_id (cross-folder deduplication)
+        if internet_message_id and str(internet_message_id).strip():
+            cursor.execute("SELECT 1 FROM keyword_alert_ledger WHERE session_user_code = ? AND internet_message_id = ? LIMIT 1", (session_user_code, str(internet_message_id).strip()))
+            if cursor.fetchone() is not None:
+                return True
         # 2. Secondary check: keyword_matches table
         if rule_id:
             cursor.execute("SELECT 1 FROM keyword_matches WHERE session_user_code = ? AND message_id = ? AND rule_id = ? LIMIT 1", (session_user_code, message_id, rule_id))
@@ -736,13 +748,13 @@ def is_message_already_matched(session_user_code, message_id, rule_id=None):
     finally:
         conn.close()
 
-def mark_message_alerted(session_user_code, message_id, received_datetime=''):
+def mark_message_alerted(session_user_code, message_id, received_datetime='', internet_message_id=''):
     """Record an email message as permanently alerted in ledger."""
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT OR IGNORE INTO keyword_alert_ledger (session_user_code, message_id, received_datetime) VALUES (?, ?, ?)",
-                       (session_user_code, message_id, received_datetime))
+        cursor.execute("INSERT OR IGNORE INTO keyword_alert_ledger (session_user_code, message_id, internet_message_id, received_datetime) VALUES (?, ?, ?, ?)",
+                       (session_user_code, message_id, (internet_message_id or '').strip(), received_datetime))
         conn.commit()
     except Exception as e:
         logger.warning(f"Error marking message in ledger: {e}")

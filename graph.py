@@ -52,6 +52,28 @@ def make_graph_request(endpoint, access_token, method='GET', payload=None, timeo
         logger.error(f"Graph API request failed for {endpoint}: {e}")
         return {'error': {'message': str(e)}}
 
+def send_mail_via_draft(access_token, message_obj, timeout=None):
+    """
+    Creates a draft message in the user's Drafts folder (simulating human Outlook Web interaction),
+    then triggers the send action on that draft.
+    Returns Graph API response dict (success or error).
+    """
+    if not access_token:
+        return {'error': {'message': 'No valid access token available.'}}
+
+    # Step 1: Create draft in user's mailbox
+    draft_res = make_graph_request('/me/messages', access_token, method='POST', payload=message_obj, timeout=timeout or (5, 20))
+    if not draft_res or draft_res.get('error'):
+        return draft_res
+
+    msg_id = draft_res.get('id')
+    if not msg_id:
+        return {'error': {'message': 'Draft was created but no message ID was returned by Graph API.'}}
+
+    # Step 2: Send the draft
+    send_res = make_graph_request(f'/me/messages/{msg_id}/send', access_token, method='POST', timeout=timeout or (5, 25))
+    return send_res
+
 def get_user_profile(access_token):
     return make_graph_request('/me?$select=displayName,mail,userPrincipalName,jobTitle,department,officeLocation,city,country,companyName', access_token)
 

