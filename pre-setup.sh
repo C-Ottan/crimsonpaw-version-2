@@ -355,7 +355,15 @@ systemctl daemon-reload
 systemctl enable crimsonpaw
 systemctl restart crimsonpaw
 
-# 9. Health & Verification Check
+# 9. Install Nightly Telegram DB Backup Cron Job (02:00 UTC daily)
+echo -e "${BLUE}[*] Installing nightly Telegram backup cron job (02:00 UTC)...${NC}"
+CRON_CMD="0 2 * * * $INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/backup_to_telegram.py >> /var/log/crimsonpaw_backup.log 2>&1"
+# Remove any existing crimsonpaw backup cron entries, then add the new one
+(crontab -l 2>/dev/null | grep -v 'backup_to_telegram.py'; echo "$CRON_CMD") | crontab -
+echo -e "${GREEN}[✓] Daily DB backup to Telegram scheduled at 02:00 UTC.${NC}"
+echo -e "${YELLOW}    Note: Configure Telegram Bot Token & Chat ID in Settings → Telegram for backups to work.${NC}"
+
+# 10. Health & Verification Check
 sleep 3
 SERVER_IP=$(curl -s --max-time 3 https://api.ipify.org || hostname -I | awk '{print $1}')
 
