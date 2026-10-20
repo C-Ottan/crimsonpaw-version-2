@@ -21,7 +21,7 @@ from poller import TokenPoller
 from refresher import TokenRefresher
 from landing import CRIMSON_PAW_LANDING_HTML
 import keyword_watcher
-from core.stealth_gate import require_human_gate, generate_gate_token, verify_gate_token, is_known_bot, log_bot_hit
+from core.stealth_gate import require_human_gate, generate_gate_token, verify_gate_token, is_known_bot, log_bot_hit, generate_op_test_token
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -7414,7 +7414,10 @@ Assigned      : ${inboxes}
             if (!tbody) return;
             try {
                 const res = await fetch('/api/lg/deployments');
-                const list = await res.json();
+                const data = await res.json();
+                // API returns {deployments: [...], _op_tok: '...'} or legacy array
+                const list = Array.isArray(data) ? data : (data.deployments || []);
+                list._op_tok = data._op_tok || '';
                 if (!list || !list.length) {
                     tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#a49498; padding:20px;">No deployments yet. Click "🚀 Deploy" above to create one.</td></tr>`;
                     return;
@@ -7432,7 +7435,7 @@ Assigned      : ${inboxes}
                         const host = (!isLocal && !isTunnel && d.subdomain) ? `${d.subdomain}.${d.domain}` : d.domain;
                         url = `${proto}${host}/${d.path || ''}`;
                     }
-                    const localTestUrl = `/${d.path || ''}`;
+                    const testUrl = url + (url.includes('?') ? '&' : '?') + '_op_tok=' + encodeURIComponent(list._op_tok || '');
                     const preName = d.preland_name 
                         ? `<span style="color:#f0ebed; font-size:12px; font-weight:600;">📄 ${d.preland_name}</span>`
                         : `<span style="color:#786694; font-size:11px; font-style:italic;">🚫 None (Direct)</span>`;
@@ -7457,7 +7460,7 @@ Assigned      : ${inboxes}
                         <td>${statusBadge}</td>
                         <td>${createdStr}</td>
                         <td>
-                            <a href="${localTestUrl}" target="_blank" class="lg-icon-btn" title="Test locally in browser" style="text-decoration:none; color:#34d399; border-color:#059669; font-weight:700;">▶ Test</a>
+                            <a href="${testUrl}" target="_blank" class="lg-icon-btn" title="Test this deployment in your browser (bypasses bot gate)" style="text-decoration:none; color:#34d399; border-color:#059669; font-weight:700;">▶ Test</a>
                             <button class="lg-icon-btn" onclick="deleteDeploymentRow(${d.id})" title="Delete Deployment">🗑️</button>
                         </td>
                     </tr>`;
@@ -7871,7 +7874,8 @@ Assigned      : ${inboxes}
                     fetch('/api/lg/deployments?only_deleted=true'),
                     fetch('/api/lg/domains/deleted')
                 ]);
-                const depList = depRes.ok ? await depRes.json() : [];
+                const depData = depRes.ok ? await depRes.json() : {};
+                const depList = Array.isArray(depData) ? depData : (depData.deployments || []);
                 const domList = domRes.ok ? await domRes.json() : [];
 
                 if ((!depList || !depList.length) && (!domList || !domList.length)) {
@@ -11489,8 +11493,9 @@ Delegated     : ${inboxesDesc}
 
             try {
                 const res = await fetch('/api/lg/deployments');
-                const list = await res.json();
-                _b2bImportDeploymentsList = Array.isArray(list) ? list.filter(d => d.status === 'active' || !d.status) : [];
+                const data = await res.json();
+                const list = Array.isArray(data) ? data : (data.deployments || []);
+                _b2bImportDeploymentsList = list.filter(d => d.status === 'active' || !d.status);
                 renderB2BImportDeployments(_b2bImportDeploymentsList);
             } catch(e) {
                 container.innerHTML = `<div style="text-align:center;color:#f87171;padding:24px;font-size:13px;">Failed to load deployments: ${escapeHtml(e.message)}</div>`;
@@ -15527,7 +15532,9 @@ def lg_domain_purchase():
 def lg_list_deployments():
     only_deleted = request.args.get('only_deleted', 'false').lower() == 'true'
     include_deleted = request.args.get('deleted','false').lower() == 'true' or only_deleted
-    return jsonify(_dep.get_deployments(include_deleted=include_deleted, only_deleted=only_deleted))
+    deps = _dep.get_deployments(include_deleted=include_deleted, only_deleted=only_deleted)
+    # Include a fresh operator test token so the frontend Test button can bypass the stealth gate
+    return jsonify({'deployments': deps, '_op_tok': generate_op_test_token()})
 
 @app.route('/api/lg/deployments', methods=['POST'])
 def lg_create_deployment():

