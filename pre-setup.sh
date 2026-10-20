@@ -327,4 +327,3 @@ echo -e "  ● View live logs:     ${CYAN}journalctl -u crimsonpaw -f${NC}"
 echo -e "  ● Restart service:    ${CYAN}systemctl restart crimsonpaw${NC}"
 echo -e "  ● Check service:      ${CYAN}systemctl status crimsonpaw${NC}"
 echo -e "  ● View error logs:    ${CYAN}journalctl -u crimsonpaw -e --no-pager -n 50${NC}\n"
-EOF
