@@ -120,9 +120,19 @@ def main():
         backup_size_mb = os.path.getsize(backup_path) / (1024 * 1024)
         log(f"Backup created: {backup_path} ({backup_size_mb:.2f} MB)")
 
+        # 3b. Compress into .zip
+        import zipfile
+        zip_name = f"crimsonpaw_backup_{timestamp}.zip"
+        zip_path = os.path.join(tmp_dir, zip_name)
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            zf.write(backup_path, backup_name)
+        zip_size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+        ratio = (1 - zip_size_mb / backup_size_mb) * 100 if backup_size_mb > 0 else 0
+        log(f"Compressed: {zip_size_mb:.2f} MB ({ratio:.0f}% smaller)")
+
         # Telegram file limit is 50 MB for bots
-        if backup_size_mb > 49:
-            log(f"WARNING: Backup is {backup_size_mb:.1f} MB (Telegram limit is 50 MB). Attempting anyway...")
+        if zip_size_mb > 49:
+            log(f"WARNING: Archive is {zip_size_mb:.1f} MB (Telegram limit is 50 MB). Attempting anyway...")
 
         # 4. Send to Telegram
         hostname = os.uname().nodename if hasattr(os, 'uname') else "VPS"
@@ -130,12 +140,12 @@ def main():
             f"🔴 <b>CRIMSON PAW – Daily Backup</b>\n"
             f"📅 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n"
             f"🖥️ Host: <code>{hostname}</code>\n"
-            f"💾 Size: <b>{backup_size_mb:.2f} MB</b>\n"
-            f"📊 DB: <code>{os.path.basename(DB_PATH)}</code>"
+            f"💾 DB: <b>{backup_size_mb:.2f} MB</b> → ZIP: <b>{zip_size_mb:.2f} MB</b> ({ratio:.0f}% compressed)\n"
+            f"📊 File: <code>{zip_name}</code>"
         )
 
         log("Sending to Telegram...")
-        resp = send_to_telegram(bot_token, chat_id, backup_path, caption)
+        resp = send_to_telegram(bot_token, chat_id, zip_path, caption)
 
         if resp.status_code == 200 and resp.json().get('ok'):
             log("✅ Backup sent successfully!")
