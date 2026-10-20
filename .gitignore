@@ -12,3 +12,12 @@ settings.json
 *.log
 victims/
 scratch/
+audit_assets/
+
+# Generated Documentation & Audit Reports (Kept locally only)
+CRIMSONPAW_Comprehensive_Audit_Report.html
+CRIMSONPAW_Comprehensive_Audit_Report.pdf
+ICEBADGER_Complete_User_Manual.html
+ICEBADGER_Complete_User_Manual.pdf
+VPS_Cloudflare_Setup_Guide.html
+VPS_Cloudflare_Setup_Guide.pdf
