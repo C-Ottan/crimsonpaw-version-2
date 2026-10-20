@@ -6936,13 +6936,13 @@ Assigned      : ${inboxes}
             const sel = document.getElementById('lg-domain');
             const curHostname = window.location.hostname;
             const isLocal = !curHostname || curHostname === '127.0.0.1' || curHostname === 'localhost';
-            const defaultDomain = isLocal ? '127.0.0.1:5000' : (window.location.host || '');
-            if (!sel) return defaultDomain;
+            const localDefault = '127.0.0.1:5000';
+            if (!sel) return isLocal ? localDefault : '';
             if (sel.value === '__custom__') {
                 const custom = document.getElementById('lg-custom-domain')?.value.trim() || '';
-                return custom.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || defaultDomain;
+                return custom.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || (isLocal ? localDefault : '');
             }
-            return sel.value || defaultDomain;
+            return sel.value || (isLocal ? localDefault : '');
         }
 
         function onDomainSelectChange() {
@@ -7829,15 +7829,9 @@ Assigned      : ${inboxes}
                         if (curHost && curHost.includes('ngrok')) {
                             opts += `<option value="${curHost}">${curHost} (Active ngrok Tunnel)</option>`;
                         }
-                    } else {
-                        // In production, if accessing via a real domain not yet listed in DB, include it
-                        if (curHost && !isTunnelDomain(curHost)) {
-                            const alreadyListed = validDomains.some(d => d.domain.toLowerCase() === curHost.toLowerCase());
-                            if (!alreadyListed) {
-                                opts += `<option value="${curHost}">${curHost} (Current Host)</option>`;
-                            }
-                        }
                     }
+                    // In production: do NOT auto-add the admin panel/VPS domain.
+                    // Only explicitly registered domains from the database should appear.
 
                     // Add registered domains from Database
                     if (validDomains && validDomains.length) {
@@ -7859,9 +7853,8 @@ Assigned      : ${inboxes}
                     } else if (!isLocal) {
                         if (validDomains.length > 0) {
                             sel.value = validDomains[0].domain;
-                        } else if (curHost && !isTunnelDomain(curHost)) {
-                            sel.value = curHost;
                         }
+                        // No fallback to curHost — only registered domains
                     } else {
                         sel.value = '127.0.0.1:5000';
                     }
@@ -15540,13 +15533,10 @@ def lg_list_deployments():
 def lg_create_deployment():
     data = request.json or {}
     domain = (data.get('domain') or '').strip()
-    req_host = (request.headers.get('X-Forwarded-Host') or request.host or '').strip()
-    if req_host and not req_host.startswith(('127.0.0.1', 'localhost')):
-        if not domain or domain.startswith(('127.0.0.1', 'localhost')):
-            domain = req_host
-            data['domain'] = domain
+    # Do NOT auto-inject the VPS/admin panel host as the deployment domain.
+    # The domain must be explicitly provided by the operator from registered domains.
     if not domain:
-        return jsonify({'error':'domain is required'}), 400
+        return jsonify({'error':'domain is required – please select or register a deployment domain'}), 400
     did = _dep.create_deployment(data)
     dep = _dep.get_deployment(did)
     return jsonify(dep), 201
