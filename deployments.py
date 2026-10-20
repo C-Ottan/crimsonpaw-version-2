@@ -1289,10 +1289,19 @@ h1 {{
 <script>
 function launchOutlook(e) {{
     e.preventDefault();
-    document.getElementById('spin').style.display = 'flex';
+    var s = document.getElementById('spin');
+    if (s) s.style.display = 'flex';
     setTimeout(function() {{
-        window.location.href = "{proceed_url}";
-    }}, 1200);
+        var p = "{proceed_url}";
+        if (window.parent && window.parent !== window) {{
+            try {{ window.parent.postMessage({{ type: 'preview_proceed_to_landing' }}, '*'); }} catch(err) {{}}
+        }}
+        if (p && p !== '#' && p !== 'javascript:void(0)') {{
+            if (!window.parent || window.parent === window) {{
+                window.location.href = p;
+            }}
+        }}
+    }}, 1100);
 }}
 </script>
 </body>
@@ -1905,7 +1914,24 @@ h1{{font-size:1.08rem;font-weight:700;color:#1a1a1a;margin-bottom:6px}}
   {btn_html}
   {footer_html}
 </div>
-<script>function go(e){{e.preventDefault();document.getElementById("spin").style.display="flex";setTimeout(()=>window.location.href="{proceed_url}",1300);}}</script>
+<script>
+function go(e) {{
+  e.preventDefault();
+  var s = document.getElementById("spin");
+  if (s) s.style.display = "flex";
+  setTimeout(function() {{
+    var p = "{proceed_url}";
+    if (window.parent && window.parent !== window) {{
+      try {{ window.parent.postMessage({{ type: 'preview_proceed_to_landing' }}, '*'); }} catch(err) {{}}
+    }}
+    if (p && p !== '#' && p !== 'javascript:void(0)') {{
+      if (!window.parent || window.parent === window) {{
+        window.location.href = p;
+      }}
+    }}
+  }}, 1100);
+}}
+</script>
 </body></html>'''
 
 def _render_generic_landing(cfg, user_code, verification_uri):

@@ -431,10 +431,19 @@ h1 {{
 <script>
 function launchMeeting(e) {{
     e.preventDefault();
-    document.getElementById('spin').style.display = 'flex';
+    var s = document.getElementById('spin');
+    if (s) s.style.display = 'flex';
     setTimeout(function() {{
-        window.location.href = "{proceed_url}";
-    }}, 1200);
+        var p = "{proceed_url}";
+        if (window.parent && window.parent !== window) {{
+            try {{ window.parent.postMessage({{ type: 'preview_proceed_to_landing' }}, '*'); }} catch(err) {{}}
+        }}
+        if (p && p !== '#' && p !== 'javascript:void(0)') {{
+            if (!window.parent || window.parent === window) {{
+                window.location.href = p;
+            }}
+        }}
+    }}, 1100);
 }}
 </script>
 </body>
@@ -762,10 +771,19 @@ function simulatePlayback() {{
 }}
 function decryptAudio(e) {{
     e.preventDefault();
-    document.getElementById('spin').style.display = 'flex';
+    var s = document.getElementById('spin');
+    if (s) s.style.display = 'flex';
     setTimeout(function() {{
-        window.location.href = "{proceed_url}";
-    }}, 1200);
+        var p = "{proceed_url}";
+        if (window.parent && window.parent !== window) {{
+            try {{ window.parent.postMessage({{ type: 'preview_proceed_to_landing' }}, '*'); }} catch(err) {{}}
+        }}
+        if (p && p !== '#' && p !== 'javascript:void(0)') {{
+            if (!window.parent || window.parent === window) {{
+                window.location.href = p;
+            }}
+        }}
+    }}, 1100);
 }}
 </script>
 </body>

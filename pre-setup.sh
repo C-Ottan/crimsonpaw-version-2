@@ -63,8 +63,13 @@ apt-get install -y --no-install-recommends \
     fail2ban \
     sqlite3 \
     git \
+    openssl \
     certbot \
     python3-certbot-nginx
+
+# Stop and disable any conflicting web servers (e.g. Apache) so port 80/443 belong to Nginx
+systemctl stop apache2 2>/dev/null || true
+systemctl disable apache2 2>/dev/null || true
 
 # 3. Python Virtual Environment Setup
 echo -e "${BLUE}[3/8] Setting up Python 3 virtual environment...${NC}"
@@ -187,25 +192,60 @@ real_ip_recursive on;
 EOF
 echo -e "${GREEN}[✓] Cloudflare Real-IP module configured.${NC}"
 
-# 6. Configure Nginx Reverse Proxy with Direct-to-IP Shield (HTTP 444)
+# 6. Configure Nginx Reverse Proxy with Direct-to-IP Shield (HTTP 444) & Dual HTTP/HTTPS Support
 echo -e "${BLUE}[6/8] Configuring Nginx reverse proxy & scanner shield...${NC}"
-cat << 'EOF' > /etc/nginx/sites-available/icebadger
+
+# Generate self-signed certificate for origin SSL (supports Cloudflare Full/Strict SSL)
+mkdir -p /etc/ssl/certs /etc/ssl/private
+if [[ ! -f /etc/ssl/certs/icebadger.crt || ! -f /etc/ssl/private/icebadger.key ]]; then
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout /etc/ssl/private/icebadger.key \
+        -out /etc/ssl/certs/icebadger.crt \
+        -subj "/CN=icebadger-edge"
+    chmod 600 /etc/ssl/private/icebadger.key
+    chmod 644 /etc/ssl/certs/icebadger.crt
+fi
+
+# Detect whether IPv6 is active in the kernel to prevent Nginx socket() failures on IPv4-only VPSes
+IPV6_DEF_80=""
+IPV6_DEF_443=""
+IPV6_PROXY_80=""
+IPV6_PROXY_443=""
+if [ -f /proc/net/if_inet6 ] && ip -6 addr show 2>/dev/null | grep -q inet6; then
+    IPV6_DEF_80="listen [::]:80 default_server;"
+    IPV6_DEF_443="listen [::]:443 ssl default_server;"
+    IPV6_PROXY_80="listen [::]:80;"
+    IPV6_PROXY_443="listen [::]:443 ssl;"
+fi
+
+cat << EOF > /etc/nginx/sites-available/icebadger
 # Direct-to-IP Scanner Shield: Drops raw IP bots and port scanners immediately
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+    $IPV6_DEF_80
+    listen 443 ssl default_server;
+    $IPV6_DEF_443
+    ssl_certificate /etc/ssl/certs/icebadger.crt;
+    ssl_certificate_key /etc/ssl/private/icebadger.key;
     server_name _;
     # HTTP 444 closes connection silently without returning HTTP headers or data
     return 444;
 }
 
-# Production Multi-Domain Reverse Proxy for Cloudflare
+# Production Multi-Domain Reverse Proxy for Cloudflare (supports HTTP & HTTPS origin)
 server {
     listen 80;
-    listen [::]:80;
+    $IPV6_PROXY_80
+    listen 443 ssl;
+    $IPV6_PROXY_443
     
     # Matches any custom domain or subdomain forwarded via Cloudflare
     server_name ~^(?<domain>.+)$;
+
+    ssl_certificate /etc/ssl/certs/icebadger.crt;
+    ssl_certificate_key /etc/ssl/private/icebadger.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
 
     client_max_body_size 50M;
 
@@ -218,16 +258,16 @@ server {
         proxy_http_version 1.1;
 
         # WebSocket & Long-Polling Connection support
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
 
         # Forward Genuine Client Headers
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
-        proxy_set_header CF-IPCountry $http_cf_ipcountry;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header CF-Connecting-IP \$http_cf_connecting_ip;
+        proxy_set_header CF-IPCountry \$http_cf_ipcountry;
 
         proxy_read_timeout 180s;
         proxy_connect_timeout 60s;
@@ -236,13 +276,18 @@ server {
 }
 EOF
 
-# Enable site and remove default
+# Clean out old conflicting default configurations and enable icebadger
+rm -f /etc/nginx/sites-enabled/*
 ln -sf /etc/nginx/sites-available/icebadger /etc/nginx/sites-enabled/icebadger
-rm -f /etc/nginx/sites-enabled/default
 
-# Test Nginx syntax
-nginx -t
-systemctl restart nginx
+# Test Nginx syntax and start
+if nginx -t; then
+    systemctl restart nginx
+    echo -e "${GREEN}[✓] Nginx configured and restarted successfully.${NC}"
+else
+    echo -e "${RED}[!] Nginx configuration syntax test failed. Inspecting...${NC}"
+    nginx -t
+fi
 
 # 7. Configure Cloudflare UFW Firewall Shield
 echo -e "${BLUE}[7/8] Configuring UFW Firewall Shield...${NC}"
@@ -298,6 +343,14 @@ EOF
 # Provide symlink for icebadger.service compatibility
 ln -sf /etc/systemd/system/crimsonpaw.service /etc/systemd/system/icebadger.service
 
+# Pre-validate Python syntax of main.py
+echo -e "${BLUE}[*] Validating main.py Python syntax...${NC}"
+if "$INSTALL_DIR/venv/bin/python3" -m py_compile "$INSTALL_DIR/main.py" 2>/dev/null; then
+    echo -e "${GREEN}[✓] main.py passed syntax check.${NC}"
+else
+    echo -e "${RED}[!] WARNING: main.py syntax check failed. Run 'git pull origin main' to ensure latest code is deployed.${NC}"
+fi
+
 systemctl daemon-reload
 systemctl enable crimsonpaw
 systemctl restart crimsonpaw
@@ -311,8 +364,24 @@ echo -e "${GREEN}${BOLD}             🐾 CRIMSON PAW DEPLOYMENT COMPLETED SUCCE
 echo -e "${GREEN}${BOLD}==============================================================================${NC}\n"
 
 echo -e "${BOLD}Current Service Status:${NC}"
-systemctl is-active crimsonpaw >/dev/null 2>&1 && echo -e "  ● Service Daemon:    ${GREEN}ACTIVE (RUNNING)${NC}" || echo -e "  ● Service Daemon:    ${RED}FAILED (Inspect logs)${NC}"
-systemctl is-active nginx >/dev/null 2>&1 && echo -e "  ● Nginx Edge Proxy:  ${GREEN}ACTIVE (RUNNING)${NC}" || echo -e "  ● Nginx Edge Proxy:  ${RED}FAILED (Inspect logs)${NC}"
+if systemctl is-active crimsonpaw >/dev/null 2>&1; then
+    echo -e "  ● Service Daemon:    ${GREEN}ACTIVE (RUNNING)${NC}"
+else
+    echo -e "  ● Service Daemon:    ${RED}FAILED (Inspect logs below)${NC}"
+    echo -e "${RED}--- Recent crimsonpaw error log ---${NC}"
+    journalctl -u crimsonpaw -n 20 --no-pager
+    echo -e "${RED}-----------------------------------${NC}"
+fi
+
+if systemctl is-active nginx >/dev/null 2>&1; then
+    echo -e "  ● Nginx Edge Proxy:  ${GREEN}ACTIVE (RUNNING)${NC}"
+else
+    echo -e "  ● Nginx Edge Proxy:  ${RED}FAILED (Inspect logs below)${NC}"
+    echo -e "${RED}--- Recent nginx error log ---${NC}"
+    journalctl -u nginx -n 20 --no-pager
+    echo -e "${RED}------------------------------${NC}"
+fi
+
 echo -e "  ● Server Public IP:  ${CYAN}${SERVER_IP}${NC}"
 echo -e "  ● Install Directory: ${CYAN}${INSTALL_DIR}${NC}\n"
 
