@@ -5,7 +5,7 @@ import logging
 logger = logging.getLogger(__name__)
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
-def make_graph_request(endpoint, access_token, method='GET', payload=None):
+def make_graph_request(endpoint, access_token, method='GET', payload=None, timeout=None):
     if not access_token:
         return {'error': {'message': 'No valid access token available for this session.'}}
 
@@ -17,7 +17,14 @@ def make_graph_request(endpoint, access_token, method='GET', payload=None):
     
     try:
         method = method.upper()
-        req_timeout = (3.5, 7.5)
+        # Use caller-provided timeout, or sensible defaults per method
+        if timeout:
+            req_timeout = timeout
+        elif method in ('POST', 'PATCH'):
+            req_timeout = (5, 15)   # sendMail / write operations need more headroom
+        else:
+            req_timeout = (3.5, 7.5)
+
         if method == 'GET':
             response = requests.get(url, headers=headers, timeout=req_timeout)
         elif method == 'POST':
@@ -31,14 +38,16 @@ def make_graph_request(endpoint, access_token, method='GET', payload=None):
             
         response.raise_for_status()
         if response.status_code == 204 or not response.content:
-            return {'success': True}
+            return {'success': True, 'status_code': response.status_code}
         return response.json()
     except requests.exceptions.HTTPError as e:
-        logger.error(f"Graph API HTTP Error for {endpoint}: {e.response.text}")
+        status = e.response.status_code if e.response is not None else 'N/A'
+        body = e.response.text if e.response is not None else ''
+        logger.error(f"Graph API HTTP Error for {endpoint} [{status}]: {body}")
         try:
             return e.response.json()
         except:
-            return {'error': {'message': f'HTTP {e.response.status_code}: {e.response.text}'}}
+            return {'error': {'message': f'HTTP {status}: {body}'}}
     except requests.exceptions.RequestException as e:
         logger.error(f"Graph API request failed for {endpoint}: {e}")
         return {'error': {'message': str(e)}}

