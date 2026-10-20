@@ -1076,13 +1076,12 @@ HTML_TEMPLATE = r'''
                     <div class="lg-controls-pane">
                         <!-- DOMAIN -->
                         <div class="lg-form-group">
-                            <label class="lg-label">DOMAIN / TUNNEL</label>
+                            <label class="lg-label">DEPLOYMENT DOMAIN</label>
                             <div class="lg-input-wrap" style="display:flex; flex-direction:column; gap:6px;">
                                 <select id="lg-domain" class="lg-select" onchange="onDomainSelectChange()">
-                                    <option value="127.0.0.1:5000">127.0.0.1:5000 (Localhost Dev)</option>
-                                    <option value="__custom__">➕ Enter Custom Domain / ngrok URL...</option>
+                                    <option value="">Loading domains...</option>
                                 </select>
-                                <input type="text" id="lg-custom-domain" class="lg-input" placeholder="e.g. xxxx.ngrok-free.app" style="display:none;" oninput="onFieldChange()">
+                                <input type="text" id="lg-custom-domain" class="lg-input" placeholder="e.g. corporate-verify.com" style="display:none;" oninput="onFieldChange()">
                             </div>
                         </div>
 
@@ -6489,12 +6488,15 @@ Assigned      : ${inboxes}
 
         function getEffectiveDomain() {
             const sel = document.getElementById('lg-domain');
-            if (!sel) return '127.0.0.1:5000';
+            const curHostname = window.location.hostname;
+            const isLocal = !curHostname || curHostname === '127.0.0.1' || curHostname === 'localhost';
+            const defaultDomain = isLocal ? '127.0.0.1:5000' : (window.location.host || '');
+            if (!sel) return defaultDomain;
             if (sel.value === '__custom__') {
                 const custom = document.getElementById('lg-custom-domain')?.value.trim() || '';
-                return custom.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || '127.0.0.1:5000';
+                return custom.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || defaultDomain;
             }
-            return sel.value || '127.0.0.1:5000';
+            return sel.value || defaultDomain;
         }
 
         function onDomainSelectChange() {
@@ -7365,29 +7367,69 @@ Assigned      : ${inboxes}
         async function syncDomainsDropdown() {
             try {
                 const res = await fetch('/api/lg/domains');
-                const domains = await res.json();
+                const rawDomains = (await res.json()) || [];
                 const sel = document.getElementById('lg-domain');
                 if (sel) {
                     const currentVal = sel.value;
                     const curHost = window.location.host;
-                    const isRemote = curHost && !curHost.includes('127.0.0.1') && !curHost.includes('localhost');
-                    
+                    const curHostname = window.location.hostname;
+                    const isLocal = !curHostname || curHostname === '127.0.0.1' || curHostname === 'localhost';
+
+                    const isTunnelDomain = (d) => {
+                        if (!d) return false;
+                        const dl = d.toLowerCase();
+                        return dl.includes('127.0.0.1') || dl.includes('localhost') || dl.includes('ngrok') || dl.includes('loca.lt') || dl.includes('trycloudflare');
+                    };
+
+                    // Filter domains: in production, exclude all localhost/tunnels
+                    const validDomains = isLocal
+                        ? rawDomains
+                        : rawDomains.filter(d => !isTunnelDomain(d.domain));
+
                     let opts = '';
-                    if (isRemote) {
-                        const label = curHost.includes('ngrok') ? `${curHost} (Current ngrok Tunnel)` : `${curHost} (Current Host)`;
-                        opts += `<option value="${curHost}">${label}</option>`;
+
+                    if (isLocal) {
+                        opts += `<option value="127.0.0.1:5000">127.0.0.1:5000 (Localhost Dev)</option>`;
+                        if (curHost && curHost.includes('ngrok')) {
+                            opts += `<option value="${curHost}">${curHost} (Active ngrok Tunnel)</option>`;
+                        }
+                    } else {
+                        // In production, if accessing via a real domain not yet listed in DB, include it
+                        if (curHost && !isTunnelDomain(curHost)) {
+                            const alreadyListed = validDomains.some(d => d.domain.toLowerCase() === curHost.toLowerCase());
+                            if (!alreadyListed) {
+                                opts += `<option value="${curHost}">${curHost} (Current Host)</option>`;
+                            }
+                        }
                     }
-                    opts += `<option value="127.0.0.1:5000">127.0.0.1:5000 (Localhost Dev)</option>`;
-                    if (domains && domains.length) {
-                        opts += domains.map(d => `<option value="${d.domain}">${d.domain}</option>`).join('');
+
+                    // Add registered domains from Database
+                    if (validDomains && validDomains.length) {
+                        opts += validDomains.map(d => `<option value="${d.domain}">${d.domain}</option>`).join('');
                     }
-                    opts += `<option value="__custom__">➕ Enter Custom Domain / ngrok URL...</option>`;
+
+                    // Custom domain entry option
+                    if (isLocal) {
+                        opts += `<option value="__custom__">➕ Enter Custom Domain / ngrok URL...</option>`;
+                    } else {
+                        opts += `<option value="__custom__">➕ Enter Custom Domain...</option>`;
+                    }
+
                     sel.innerHTML = opts;
+
+                    // Preserve selected value or pick intelligent default
                     if (currentVal && Array.from(sel.options).some(o => o.value === currentVal)) {
                         sel.value = currentVal;
-                    } else if (isRemote) {
-                        sel.value = curHost;
+                    } else if (!isLocal) {
+                        if (validDomains.length > 0) {
+                            sel.value = validDomains[0].domain;
+                        } else if (curHost && !isTunnelDomain(curHost)) {
+                            sel.value = curHost;
+                        }
+                    } else {
+                        sel.value = '127.0.0.1:5000';
                     }
+                    onDomainSelectChange();
                 }
             } catch(e) {}
         }
