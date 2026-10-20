@@ -28,23 +28,40 @@ def log(msg):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
-def get_superadmin_telegram_creds():
-    """Retrieve bot_token and chat_id from the first superadmin with Telegram configured."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def get_telegram_creds():
+    """Retrieve bot_token and chat_id from settings.json (admin) or operators table (fallback)."""
+    # 1. Try settings.json first (admin's Telegram credentials)
+    settings_path = os.path.join(BASE_DIR, "settings.json")
     try:
+        if os.path.exists(settings_path):
+            import json
+            with open(settings_path, 'r') as f:
+                cfg = json.load(f)
+            token = (cfg.get('tg_bot_token') or '').strip()
+            chat  = (cfg.get('tg_chat_id') or '').strip()
+            if token and chat:
+                log("Using Telegram credentials from settings.json")
+                return token, chat
+    except Exception as e:
+        log(f"WARNING: Could not read settings.json: {e}")
+
+    # 2. Fallback: first operator with Telegram configured (any role)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT tg_bot_token, tg_chat_id FROM operators "
-            "WHERE role = 'superadmin' AND tg_bot_token IS NOT NULL AND tg_bot_token != '' "
+            "WHERE tg_bot_token IS NOT NULL AND tg_bot_token != '' "
             "AND tg_chat_id IS NOT NULL AND tg_chat_id != '' "
             "ORDER BY id ASC LIMIT 1"
         ).fetchone()
+        conn.close()
         if row:
+            log("Using Telegram credentials from operators table")
             return row['tg_bot_token'], row['tg_chat_id']
     except Exception as e:
-        log(f"ERROR reading Telegram creds: {e}")
-    finally:
-        conn.close()
+        log(f"ERROR reading Telegram creds from DB: {e}")
+
     return None, None
 
 def safe_copy_db(src_path, dst_path):
@@ -84,7 +101,7 @@ def main():
     log(f"Database: {DB_PATH} ({db_size_mb:.2f} MB)")
 
     # 2. Get Telegram credentials from DB
-    bot_token, chat_id = get_superadmin_telegram_creds()
+    bot_token, chat_id = get_telegram_creds()
     if not bot_token or not chat_id:
         log("FATAL: No superadmin Telegram credentials configured. "
             "Set up Telegram bot in Settings → Telegram first.")
