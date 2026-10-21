@@ -3159,7 +3159,7 @@ HTML_TEMPLATE = r'''
                     </div>
                     <div id="b2b-bcc-badge" style="display:none;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:6px 9px;margin-bottom:8px;font-size:0.7em;color:#10b981;line-height:1.4;">
                         <div style="font-weight:700;display:flex;align-items:center;gap:5px;"><span>✓</span> <span>BCC BROADCAST MODE</span></div>
-                        <div style="color:#d1fae5;margin-top:2px;">• <code>From:</code> Box Email &nbsp;|&nbsp; <code>To:</code> Box Email</div>
+                        <div style="color:#d1fae5;margin-top:2px;">• <code>From:</code> Box Email &nbsp;|&nbsp; <code>To:</code> <span id="b2b-to-disp">Hidden (Undisclosed)</span></div>
                         <div style="color:#a7f3d0;font-size:0.95em;">• Recipients hidden in <code>BCC</code> (<span id="b2b-batch-size-disp">50</span> per message)</div>
                     </div>
                     <textarea id="b2b-recipients" class="b2b-rec-area" placeholder="one@email.com&#10;another@email.com" oninput="updateB2BRecipientCount()"></textarea>
@@ -3232,6 +3232,13 @@ HTML_TEMPLATE = r'''
                             <button type="button" onclick="adjustB2BCounter('b2b-batch-size', -10);updateB2BBatchDisp()">−</button>
                             <input type="number" id="b2b-batch-size" value="50" min="5" max="100" class="b2b-counter-input" onchange="updateB2BBatchDisp()">
                             <button type="button" onclick="adjustB2BCounter('b2b-batch-size', 10);updateB2BBatchDisp()">+</button>
+                        </div>
+                    </div>
+                    <div class="b2b-option-row b2b-option-row-border" id="b2b-to-header-row" style="display:none;">
+                        <span class="b2b-option-label">BCC "TO" FIELD</span>
+                        <div class="b2b-mode-selector" style="margin-bottom:0;">
+                            <button type="button" class="b2b-mode-btn active" id="b2b-to-hidden" onclick="setB2BToHeader('hidden')" title="Undisclosed / Hidden (Recipients only see From)">HIDDEN</button>
+                            <button type="button" class="b2b-mode-btn" id="b2b-to-sender" onclick="setB2BToHeader('sender')" title="Recipients see Box Email in To">SENDER</button>
                         </div>
                     </div>
                     <div class="b2b-option-row b2b-option-row-border">
