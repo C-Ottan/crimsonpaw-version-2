@@ -3221,6 +3221,18 @@ HTML_TEMPLATE = r'''
                             <div class="b2b-tg-opt active" id="b2b-save-on">On</div>
                         </div>
                     </div>
+                    <div class="b2b-option-row b2b-option-row-border">
+                        <span class="b2b-option-label">SEND DELAY</span>
+                        <button type="button" class="b2b-sm-btn" onclick="toggleB2BDelay()" id="b2b-delay-btn" style="min-width:65px;font-weight:700;color:#38bdf8;border-color:rgba(56,189,248,0.4);" title="Interval between individual emails or batches">
+                            ⏱ <span id="b2b-delay-label">OFF</span>
+                        </button>
+                    </div>
+                    <div class="b2b-option-row b2b-option-row-border">
+                        <span class="b2b-option-label">PRIORITY</span>
+                        <button type="button" class="b2b-sm-btn" onclick="cyclePriority()" id="b2b-priority-btn" style="min-width:65px;font-weight:700;color:#f59e0b;border-color:rgba(245,158,11,0.4);" title="Email Priority Header">
+                            ⚡ <span id="b2b-priority-label">NORMAL</span>
+                        </button>
+                    </div>
 
                     <!-- Send Mode & Actions -->
                     <div class="b2b-sidebar-actions">
@@ -11186,8 +11198,8 @@ Delegated     : ${inboxesDesc}
         }
 
         function toggleB2BDelay() {
-            const vals = [0, 500, 1000, 2000, 5000];
-            const lbls = ['OFF','0.5s','1s','2s','5s'];
+            const vals = [0, 1000, 2000, 3000, 5000];
+            const lbls = ['OFF','1s','2s','3s','5s'];
             const idx = (vals.indexOf(_b2bDelayMs) + 1) % vals.length;
             _b2bDelayMs = vals[idx];
             document.getElementById('b2b-delay-label').textContent = lbls[idx];
