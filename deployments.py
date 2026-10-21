@@ -12,10 +12,17 @@ logger = logging.getLogger(__name__)
 # DB helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
+import contextlib
+
+@contextlib.contextmanager
 def _conn():
     c = sqlite3.connect(Config.DB_PATH)
     c.row_factory = sqlite3.Row
-    return c
+    try:
+        with c:
+            yield c
+    finally:
+        c.close()
 
 # ─── Pre-land templates ─────────────────────────────────────────────────────
 def get_preland_templates():

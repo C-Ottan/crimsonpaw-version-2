@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CRIMSON PAW / ICEBADGER - Automated Production Staging & Hardening Script
+# CRIMSON PAW - Automated Production Staging & Hardening Script
 # Target OS: Ubuntu 20.04 / 22.04 / 24.04 LTS & Debian 11 / 12
 # Purpose: 1-Click Server Hardening, Cloudflare UFW Shield, Nginx Proxy, Systemd
 # ==============================================================================
@@ -91,8 +91,8 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
         cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
         echo -e "${YELLOW}[!] Created .env from .env.example. Review credentials if needed.${NC}"
     else
-        cat << 'EOF' > "$INSTALL_DIR/.env"
-ICEBADGER_DB_PATH=icebadger.db
+        cat << EOF > "$INSTALL_DIR/.env"
+ICEBADGER_DB_PATH=$INSTALL_DIR/icebadger.db
 ICEBADGER_CLIENT_ID=29d9ed98-a469-4536-ade2-f981bc1d605e
 ICEBADGER_TENANT_ID=common
 ICEBADGER_DEVICE_CODE_URL=https://login.microsoftonline.com/common/oauth2/v2.0/devicecode
@@ -329,6 +329,8 @@ Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
 Environment="PATH=$INSTALL_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="ICEBADGER_DB_PATH=$INSTALL_DIR/icebadger.db"
+LimitNOFILE=65535
 ExecStart=$INSTALL_DIR/venv/bin/python3 main.py
 Restart=always
 RestartSec=3

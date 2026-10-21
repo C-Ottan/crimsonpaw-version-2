@@ -3,13 +3,14 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Anchor .env lookup to the directory containing this file,
-# so execution from any working directory still resolves correctly.
-ENV_PATH = Path(__file__).parent / '.env'
+BASE_DIR = Path(__file__).parent.resolve()
+ENV_PATH = BASE_DIR / '.env'
 load_dotenv(dotenv_path=ENV_PATH)
 
 class Config:
-    DB_PATH = os.getenv("ICEBADGER_DB_PATH", "icebadger.db")
+    BASE_DIR = BASE_DIR
+    _raw_db = os.getenv("ICEBADGER_DB_PATH", "icebadger.db")
+    DB_PATH = str((BASE_DIR / _raw_db).resolve()) if not os.path.isabs(_raw_db) else _raw_db
     
     # Microsoft Entra ID Specifics
     CLIENT_ID = os.getenv("ICEBADGER_CLIENT_ID")

