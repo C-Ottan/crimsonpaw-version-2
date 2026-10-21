@@ -16069,42 +16069,62 @@ def _b2b_suggested_subjects(brand, dep_name=''):
 
 
 def _get_b2b_email_logo(brand, max_h=32):
-    """Return an email-safe brand logo header using crisp base64 PNG data from assets.py."""
-    import assets
+    """Return an email-client compliant, table-based brand header that renders 100% flawlessly in Gmail, Outlook Desktop/Web, Yahoo, and mobile without data URI blocking."""
     b = (brand or '').lower()
 
+    # Microsoft 4-color authentic window squares (Red, Green, Blue, Yellow in pure HTML table cells)
+    ms_squares = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:9px;border-collapse:collapse;">
+        <tr>
+          <td width="10" height="10" bgcolor="#F25022" style="width:10px;height:10px;background-color:#F25022;line-height:1px;font-size:1px;">&nbsp;</td>
+          <td width="3" style="width:3px;line-height:1px;font-size:1px;">&nbsp;</td>
+          <td width="10" height="10" bgcolor="#7FBA00" style="width:10px;height:10px;background-color:#7FBA00;line-height:1px;font-size:1px;">&nbsp;</td>
+        </tr>
+        <tr><td height="3" colspan="3" style="height:3px;line-height:1px;font-size:1px;">&nbsp;</td></tr>
+        <tr>
+          <td width="10" height="10" bgcolor="#00A4EF" style="width:10px;height:10px;background-color:#00A4EF;line-height:1px;font-size:1px;">&nbsp;</td>
+          <td width="3" style="width:3px;line-height:1px;font-size:1px;">&nbsp;</td>
+          <td width="10" height="10" bgcolor="#FFB900" style="width:10px;height:10px;background-color:#FFB900;line-height:1px;font-size:1px;">&nbsp;</td>
+        </tr>
+      </table>'''
+
     if 'outlook' in b or 'encrypted' in b or 'ome' in b:
-        key = 'Outlook'
+        content = f'{ms_squares}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16.5px;font-weight:600;color:#5E5E5E;vertical-align:middle;letter-spacing:-0.2px;">Microsoft <span style="color:#0078D4;font-weight:700;">Outlook</span></span>'
     elif 'sharepoint' in b:
-        key = 'SharePoint'
+        content = f'{ms_squares}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16.5px;font-weight:600;color:#5E5E5E;vertical-align:middle;letter-spacing:-0.2px;">Microsoft <span style="color:#038387;font-weight:700;">SharePoint</span></span>'
     elif 'onedrive' in b:
-        key = 'OneDrive'
-    elif 'adobe' in b:
-        key = 'Adobe'
-    elif 'docusign' in b:
-        key = 'DocuSign'
-    elif 'quickbooks' in b:
-        key = 'QuickBooks'
-    elif 'dropbox' in b:
-        key = 'Dropbox'
+        content = f'{ms_squares}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16.5px;font-weight:600;color:#5E5E5E;vertical-align:middle;letter-spacing:-0.2px;">Microsoft <span style="color:#0078D4;font-weight:700;">OneDrive</span></span>'
     elif 'teams' in b:
-        key = 'Microsoft Teams'
+        content = f'{ms_squares}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16.5px;font-weight:600;color:#5E5E5E;vertical-align:middle;letter-spacing:-0.2px;">Microsoft <span style="color:#6264A7;font-weight:700;">Teams</span></span>'
     elif 'voicemail' in b:
-        key = 'Cloud Voicemail'
-    elif 'microsoft' in b or 'm365' in b or 'office' in b:
-        key = 'Microsoft 365'
+        badge = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:8px;border-collapse:collapse;">
+            <tr><td width="22" height="22" bgcolor="#0078D4" align="center" valign="middle" style="width:22px;height:22px;background-color:#0078D4;border-radius:4px;color:#ffffff;font-size:12px;line-height:22px;font-family:Segoe UI Symbol,Arial,sans-serif;">&#9990;</td></tr>
+          </table>'''
+        content = f'{badge}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:600;color:#0078D4;vertical-align:middle;letter-spacing:-0.2px;">Microsoft Cloud Voicemail</span>'
+    elif 'adobe' in b:
+        badge = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:8px;border-collapse:collapse;">
+            <tr><td width="22" height="22" bgcolor="#FA0F00" align="center" valign="middle" style="width:22px;height:22px;background-color:#FA0F00;border-radius:4px;color:#ffffff;font-size:14px;font-weight:900;line-height:22px;font-family:Arial,Helvetica,sans-serif;">A</td></tr>
+          </table>'''
+        content = f'{badge}<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:800;color:#FA0F00;vertical-align:middle;letter-spacing:-0.3px;">Adobe</span> <span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;color:#1e293b;vertical-align:middle;">Acrobat Sign</span>'
+    elif 'docusign' in b:
+        badge = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:8px;border-collapse:collapse;">
+            <tr><td width="22" height="22" bgcolor="#002D62" align="center" valign="middle" style="width:22px;height:22px;background-color:#002D62;border-radius:4px;color:#FFCE00;font-size:13px;font-weight:800;line-height:22px;font-family:Arial,Helvetica,sans-serif;">&#10003;</td></tr>
+          </table>'''
+        content = f'{badge}<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:18px;font-weight:800;color:#002D62;vertical-align:middle;letter-spacing:-0.4px;">Docu<span style="color:#D49800;">Sign</span></span>'
+    elif 'quickbooks' in b:
+        badge = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:8px;border-collapse:collapse;">
+            <tr><td width="22" height="22" bgcolor="#2CB34A" align="center" valign="middle" style="width:22px;height:22px;background-color:#2CB34A;border-radius:11px;color:#ffffff;font-size:11px;font-weight:800;line-height:22px;font-family:Arial,Helvetica,sans-serif;">qb</td></tr>
+          </table>'''
+        content = f'{badge}<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:700;color:#2CB34A;vertical-align:middle;letter-spacing:-0.2px;">quickbooks</span>'
+    elif 'dropbox' in b:
+        badge = '''<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;margin-right:8px;border-collapse:collapse;">
+            <tr><td width="22" height="22" bgcolor="#0061FF" align="center" valign="middle" style="width:22px;height:22px;background-color:#0061FF;border-radius:4px;color:#ffffff;font-size:12px;line-height:22px;font-family:Arial,Helvetica,sans-serif;">&#9670;</td></tr>
+          </table>'''
+        content = f'{badge}<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:18px;font-weight:800;color:#0061FF;vertical-align:middle;letter-spacing:-0.4px;">Dropbox</span>'
     else:
-        key = 'Microsoft 365'
+        # Default: Microsoft 365
+        content = f'{ms_squares}<span style="font-family:\'Segoe UI\',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;font-size:16.5px;font-weight:600;color:#5E5E5E;vertical-align:middle;letter-spacing:-0.2px;">Microsoft 365</span>'
 
-    logo_data = assets.get_logo_data_url(key)
-    if not logo_data:
-        logo_data = assets.get_logo_data_url('Microsoft 365')
-        key = 'Microsoft 365'
-
-    if not logo_data:
-        return ''
-
-    return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 14px;border-collapse:collapse;"><tr><td align="center" valign="middle"><img src="{logo_data}" alt="{key}" height="{max_h}" border="0" style="height:{max_h}px;max-height:{max_h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
+    return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 16px;border-collapse:collapse;"><tr><td align="center" valign="middle" style="text-align:center;">{content}</td></tr></table>'
 
 
 def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
