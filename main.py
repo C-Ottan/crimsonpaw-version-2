@@ -3157,6 +3157,11 @@ HTML_TEMPLATE = r'''
                             <button type="button" class="b2b-mode-btn" id="b2b-mode-bcc" onclick="setB2BMode('bcc')" title="BCC Mode: Up to 50 recipients in Blind Carbon Copy">BCC</button>
                         </div>
                     </div>
+                    <div id="b2b-bcc-badge" style="display:none;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:6px;padding:6px 9px;margin-bottom:8px;font-size:0.7em;color:#10b981;line-height:1.4;">
+                        <div style="font-weight:700;display:flex;align-items:center;gap:5px;"><span>✓</span> <span>BCC BROADCAST MODE</span></div>
+                        <div style="color:#d1fae5;margin-top:2px;">• <code>From:</code> Box Email &nbsp;|&nbsp; <code>To:</code> Box Email</div>
+                        <div style="color:#a7f3d0;font-size:0.95em;">• Recipients hidden in <code>BCC</code> (<span id="b2b-batch-size-disp">50</span> per message)</div>
+                    </div>
                     <textarea id="b2b-recipients" class="b2b-rec-area" placeholder="one@email.com&#10;another@email.com" oninput="updateB2BRecipientCount()"></textarea>
                     <div class="b2b-rec-btns">
                         <button class="b2b-sm-btn" onclick="loadB2BRecipientsFile()">LOAD</button>
@@ -3219,6 +3224,14 @@ HTML_TEMPLATE = r'''
                         <div class="b2b-tg" onclick="toggleB2BOpt('save')">
                             <div class="b2b-tg-opt" id="b2b-save-off">Off</div>
                             <div class="b2b-tg-opt active" id="b2b-save-on">On</div>
+                        </div>
+                    </div>
+                    <div class="b2b-option-row b2b-option-row-border" id="b2b-batch-size-row" style="display:none;">
+                        <span class="b2b-option-label">BATCH SIZE</span>
+                        <div class="b2b-counter">
+                            <button type="button" onclick="adjustB2BCounter('b2b-batch-size', -10);updateB2BBatchDisp()">−</button>
+                            <input type="number" id="b2b-batch-size" value="50" min="5" max="100" class="b2b-counter-input" onchange="updateB2BBatchDisp()">
+                            <button type="button" onclick="adjustB2BCounter('b2b-batch-size', 10);updateB2BBatchDisp()">+</button>
                         </div>
                     </div>
                     <div class="b2b-option-row b2b-option-row-border">
@@ -11170,6 +11183,17 @@ Delegated     : ${inboxesDesc}
                 const el = document.getElementById('b2b-mode-' + m);
                 if (el) el.classList.toggle('active', m === mode);
             });
+            const bccBadge = document.getElementById('b2b-bcc-badge');
+            if (bccBadge) bccBadge.style.display = (mode === 'bcc') ? 'block' : 'none';
+            const batchRow = document.getElementById('b2b-batch-size-row');
+            if (batchRow) batchRow.style.display = (mode === 'bcc' || mode === 'cc') ? 'flex' : 'none';
+            updateB2BBatchDisp();
+        }
+
+        function updateB2BBatchDisp() {
+            const bInput = document.getElementById('b2b-batch-size');
+            const bDisp = document.getElementById('b2b-batch-size-disp');
+            if (bInput && bDisp) bDisp.textContent = bInput.value || '50';
         }
 
         function toggleB2BBCC() {
@@ -11937,6 +11961,7 @@ Delegated     : ${inboxesDesc}
             const payload = { user_code:uc, recipients, subjects, links,
                 send_mode: _b2bSendMode,
                 api_method: sendMode,
+                batch_size: parseInt(document.getElementById('b2b-batch-size')?.value) || 50,
                 subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
                 link_rotate_n: parseInt(document.getElementById('b2b-link-rotate').value)||1,
                 body_html, priority: _b2bPriority, delay_ms: _b2bDelayMs, bcc_mode: _b2bSendMode === 'bcc', save_sent: _b2bSaveSent,
