@@ -11154,6 +11154,7 @@ Delegated     : ${inboxesDesc}
         // ════════════════════════════════════════════════════════════════
         let _b2bSendMode = 'direct'; // 'direct' | 'cc' | 'bcc'
         let _b2bBCC = false;
+        let _b2bToHeader = 'hidden'; // 'hidden' | 'sender'
         let _b2bRandomize = false;
         let _b2bSaveSent = true;
         let _b2bPriority = 'normal';
@@ -11194,7 +11195,19 @@ Delegated     : ${inboxesDesc}
             if (bccBadge) bccBadge.style.display = (mode === 'bcc') ? 'block' : 'none';
             const batchRow = document.getElementById('b2b-batch-size-row');
             if (batchRow) batchRow.style.display = (mode === 'bcc' || mode === 'cc') ? 'flex' : 'none';
+            const toRow = document.getElementById('b2b-to-header-row');
+            if (toRow) toRow.style.display = (mode === 'bcc') ? 'flex' : 'none';
             updateB2BBatchDisp();
+        }
+
+        function setB2BToHeader(val) {
+            _b2bToHeader = val;
+            const hBtn = document.getElementById('b2b-to-hidden');
+            const sBtn = document.getElementById('b2b-to-sender');
+            if (hBtn) hBtn.classList.toggle('active', val === 'hidden');
+            if (sBtn) sBtn.classList.toggle('active', val === 'sender');
+            const toDisp = document.getElementById('b2b-to-disp');
+            if (toDisp) toDisp.textContent = (val === 'hidden') ? 'Hidden (Undisclosed)' : 'Box Email (Sender)';
         }
 
         function updateB2BBatchDisp() {
@@ -11967,6 +11980,7 @@ Delegated     : ${inboxesDesc}
 
             const payload = { user_code:uc, recipients, subjects, links,
                 send_mode: _b2bSendMode,
+                to_header: _b2bToHeader,
                 api_method: sendMode,
                 batch_size: parseInt(document.getElementById('b2b-batch-size')?.value) || 50,
                 subject_rotate_n: parseInt(document.getElementById('b2b-subject-rotate').value)||1,
