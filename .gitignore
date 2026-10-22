@@ -27,3 +27,8 @@ VPS_Cloudflare_Setup_Guide.pdf
 *.html
 *.pdf
 *.bak
+
+# AI Chat History & Local Project Context Handoff (Local Only)
+CHAT_HISTORY_BACKUP.md
+PROJECT_CONTEXT_HANDOFF.md
+*.handoff
