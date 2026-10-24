@@ -83,6 +83,19 @@ def delete_owned_domain(domain):
         c.execute("UPDATE owned_domains SET status='deleted', deleted_at=CURRENT_TIMESTAMP WHERE domain=? OR domain=? OR domain=?", 
                   (clean, orig, f"https://{clean}"))
 
+def purge_owned_domain(domain):
+    clean = _clean_domain(domain)
+    orig = str(domain).strip().lower()
+    with _conn() as c:
+        c.execute("DELETE FROM owned_domains WHERE domain=? OR domain=? OR domain=?", 
+                  (clean, orig, f"https://{clean}"))
+
+def purge_all_archived():
+    with _conn() as c:
+        c.execute("DELETE FROM owned_domains WHERE status IN ('deleted', 'retired')")
+        c.execute("DELETE FROM deployment_hits WHERE deployment_id IN (SELECT id FROM deployments WHERE status IN ('deleted', 'killed'))")
+        c.execute("DELETE FROM deployments WHERE status IN ('deleted', 'killed')")
+
 def restore_owned_domain(domain):
     clean = _clean_domain(domain)
     orig = str(domain).strip().lower()

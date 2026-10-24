@@ -3956,28 +3956,44 @@ HTML_TEMPLATE = r'''
 
     <!-- ── Deleted Domains Modal ── -->
     <div id="deletedDomainsModal" class="modal-overlay">
-        <div class="dm-modal" style="max-width:700px;">
+        <div class="dm-modal" style="max-width:1050px; width:95%; max-height:90vh;">
             <div class="dm-header">
                 <div class="dm-title">
-                    <span>🗑️</span> Deleted Domains & Retirements
+                    <span>🗑️</span> Deleted Domains & Retirements Archive
+                    <span id="dm-archive-count-badge" style="background:#261115; border:1px solid #5a1c22; color:#f87171; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:700; margin-left:8px;">0 items</span>
                 </div>
                 <button class="close-btn" style="color:#a49498;" onclick="closeDeletedDomainsModal()">&times;</button>
             </div>
-            <div class="dm-body">
-                <div style="font-size:0.78rem; color:#a49498;">Review archived or deleted domains and deployments.</div>
-                <table class="dm-results-table">
-                    <thead>
-                        <tr>
-                            <th>Domain / Deployment</th>
-                            <th>Status</th>
-                            <th>Date</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dm-deleted-tbody">
-                        <tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">No deleted domains in archive.</td></tr>
-                    </tbody>
-                </table>
+            <div class="dm-body" style="padding:18px 24px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
+                    <div style="font-size:0.82rem; color:#a49498;">
+                        Manage permanently retired domains and terminated deployments. Items here return <b>HTTP 404</b>.
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="dm-btn" style="background:#b91c1c; border-color:#ef4444; padding:6px 14px; font-size:0.78rem;" onclick="purgeSelectedArchived()" title="Permanently delete all selected items from database">
+                            <span>🗑️</span> Delete Selected
+                        </button>
+                        <button type="button" class="dm-btn dm-btn-secondary" style="border-color:#7f1d1d; color:#fca5a5; padding:6px 14px; font-size:0.78rem;" onclick="purgeAllArchived()" title="Permanently empty the entire archive">
+                            <span>🔥</span> Empty Archive
+                        </button>
+                    </div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table class="dm-results-table">
+                        <thead>
+                            <tr>
+                                <th style="width:32px;"><input type="checkbox" id="dm-del-check-all" onchange="toggleAllDeletedArchiveChecks(this)"></th>
+                                <th>Domain / Deployment Link</th>
+                                <th style="width:140px;">Status</th>
+                                <th style="width:110px;">Date</th>
+                                <th style="width:250px; text-align:right;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dm-deleted-tbody">
+                            <tr><td colspan="5" style="text-align:center; color:#a49498; padding:20px;">No deleted domains or deployments in archive.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -8004,9 +8020,106 @@ Assigned      : ${inboxes}
             } catch(e) {}
         }
 
+        function toggleAllDeletedArchiveChecks(master) {
+            document.querySelectorAll('.dm-del-chk').forEach(c => c.checked = master.checked);
+        }
+
+        async function purgeArchivedItem(type, id) {
+            const label = type === 'domain' ? `domain "${id}"` : `deployment #${id}`;
+            const ok = await appConfirm({
+                title: 'Permanently Delete From Archive',
+                message: `Are you sure you want to permanently delete ${label} from the database? This cannot be undone.`,
+                confirmText: 'Permanently Delete',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+
+            try {
+                let url = (type === 'domain')
+                    ? `/api/lg/domains/${encodeURIComponent(id)}?hard=true`
+                    : `/api/lg/deployments/${id}?hard=true`;
+                const res = await fetch(url, { method: 'DELETE' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success !== false) {
+                    showToast(`🗑️ Permanently removed ${label} from database`);
+                    loadDeletedDeploymentsTable();
+                } else {
+                    showToast('⚠️ Delete failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Delete error: ' + e);
+            }
+        }
+
+        async function purgeSelectedArchived() {
+            const checkedBoxes = Array.from(document.querySelectorAll('.dm-del-chk:checked'));
+            if (!checkedBoxes.length) {
+                showToast('⚠️ No items selected. Check the boxes of the items you want to permanently delete.');
+                return;
+            }
+            const deployment_ids = checkedBoxes.filter(c => c.dataset.type === 'deployment').map(c => parseInt(c.dataset.id, 10));
+            const domain_names = checkedBoxes.filter(c => c.dataset.type === 'domain').map(c => c.dataset.id);
+            const total = deployment_ids.length + domain_names.length;
+
+            const ok = await appConfirm({
+                title: 'Permanently Delete Selected',
+                message: `Are you sure you want to permanently delete ${total} selected item(s) from the database? This cannot be undone.`,
+                confirmText: 'Permanently Delete Selected',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/lg/archive/batch-purge', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ deployment_ids, domain_names })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (data.success) {
+                    showToast(`🗑️ Permanently deleted ${total} item(s) from archive`);
+                    loadDeletedDeploymentsTable();
+                } else {
+                    showToast('⚠️ Purge failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Purge error: ' + e);
+            }
+        }
+
+        async function purgeAllArchived() {
+            const ok = await appConfirm({
+                title: 'Empty Entire Archive',
+                message: 'Are you sure you want to permanently delete ALL archived domains and deployments? This will completely empty the archive.',
+                confirmText: 'Empty Archive Now',
+                icon: '🔥',
+                danger: true
+            });
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/lg/archive/purge-all', { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success) {
+                    showToast('🔥 Entire archive has been emptied');
+                    loadDeletedDeploymentsTable();
+                } else {
+                    showToast('⚠️ Empty archive failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Empty archive error: ' + e);
+            }
+        }
+
         async function loadDeletedDeploymentsTable() {
             const tbody = document.getElementById('dm-deleted-tbody');
             if (!tbody) return;
+            const countBadge = document.getElementById('dm-archive-count-badge');
+            const masterChk = document.getElementById('dm-del-check-all');
+            if (masterChk) masterChk.checked = false;
+
             try {
                 const [depRes, domRes] = await Promise.all([
                     fetch('/api/lg/deployments?only_deleted=true'),
@@ -8015,9 +8128,11 @@ Assigned      : ${inboxes}
                 const depData = depRes.ok ? await depRes.json() : {};
                 const depList = Array.isArray(depData) ? depData : (depData.deployments || []);
                 const domList = domRes.ok ? await domRes.json() : [];
+                const totalCount = (depList ? depList.length : 0) + (domList ? domList.length : 0);
+                if (countBadge) countBadge.innerText = `${totalCount} item${totalCount === 1 ? '' : 's'}`;
 
                 if ((!depList || !depList.length) && (!domList || !domList.length)) {
-                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">No deleted domains or deployments in archive.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#a49498; padding:20px;">No deleted domains or deployments in archive.</td></tr>`;
                     return;
                 }
 
@@ -8027,6 +8142,7 @@ Assigned      : ${inboxes}
                     const dateStr = dom.deleted_at ? dom.deleted_at.substring(0, 10) : (dom.purchased_at ? dom.purchased_at.substring(0, 10) : 'Archived');
                     const domUrl = 'https://' + dom.domain;
                     rowsHtml += `<tr>
+                        <td><input type="checkbox" class="dm-del-chk" data-type="domain" data-id="${dom.domain}"></td>
                         <td>
                             <strong style="color:#ffffff;">🌐 ${dom.domain}</strong>
                             <div style="font-size:11px; color:#a49498;">Registrar: ${dom.registrar || 'Custom'}</div>
@@ -8034,9 +8150,10 @@ Assigned      : ${inboxes}
                         </td>
                         <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">RETIRED DOMAIN</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
-                        <td>
+                        <td style="text-align:right;">
                             <a href="${domUrl}" target="_blank" class="lg-icon-btn" title="Verify domain returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
-                            <button type="button" class="lg-icon-btn" onclick="restoreDomainItem('${dom.domain}')" title="Restore Domain" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
+                            <button type="button" class="lg-icon-btn" onclick="restoreDomainItem('${dom.domain}')" title="Restore Domain" style="color:#34d399; border-color:#059669; font-weight:700; margin-right:4px;">♻️ Restore</button>
+                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('domain', '${dom.domain}')" title="Permanently delete domain from database" style="color:#f87171; border-color:#dc2626;">🗑️</button>
                         </td>
                     </tr>`;
                 });
@@ -8047,22 +8164,24 @@ Assigned      : ${inboxes}
                     const dateStr = d.created_at ? d.created_at.substring(0, 10) : 'Archived';
                     const badgeText = d.status === 'killed' ? 'KILLED LINK' : 'DELETED LINK';
                     rowsHtml += `<tr>
+                        <td><input type="checkbox" class="dm-del-chk" data-type="deployment" data-id="${d.id}"></td>
                         <td>
                             <strong style="color:#ffffff;">🚀 ${d.name || url}</strong>
                             <div style="font-size:11px; margin-top:3px;"><a href="${url}" target="_blank" style="color:#ff6b72; text-decoration:underline;" title="Test deleted link (returns 404)">${url}</a></div>
                         </td>
                         <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">${badgeText}</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
-                        <td>
+                        <td style="text-align:right;">
                             <a href="${url}" target="_blank" class="lg-icon-btn" title="Verify link returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
-                            <button type="button" class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Restore Deployment" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
+                            <button type="button" class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Restore Deployment" style="color:#34d399; border-color:#059669; font-weight:700; margin-right:4px;">♻️ Restore</button>
+                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('deployment', ${d.id})" title="Permanently delete deployment from database" style="color:#f87171; border-color:#dc2626;">🗑️</button>
                         </td>
                     </tr>`;
                 });
 
                 tbody.innerHTML = rowsHtml;
             } catch(e) {
-                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171;">Failed to load archive: ${e}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#f87171;">Failed to load archive: ${e}</td></tr>`;
             }
         }
 
@@ -16004,7 +16123,35 @@ def lg_add_domain():
 
 @app.route('/api/lg/domains/<path:domain>', methods=['DELETE'])
 def lg_delete_domain(domain):
-    _dep.delete_owned_domain(domain)
+    hard = request.args.get('hard', 'false').lower() == 'true' or request.args.get('permanent', 'false').lower() == 'true'
+    if hard:
+        _dep.purge_owned_domain(domain)
+    else:
+        _dep.delete_owned_domain(domain)
+    return jsonify({'success': True})
+
+@app.route('/api/lg/archive/batch-purge', methods=['POST'])
+def lg_archive_batch_purge():
+    """Permanently delete selected domains and deployments from archive."""
+    data = request.json or {}
+    dep_ids = data.get('deployment_ids', [])
+    domain_names = data.get('domain_names', [])
+    for did in dep_ids:
+        try:
+            _dep.hard_delete_deployment(int(did))
+        except Exception as e:
+            logger.warning(f"Error purging deployment {did}: {e}")
+    for dname in domain_names:
+        try:
+            _dep.purge_owned_domain(dname)
+        except Exception as e:
+            logger.warning(f"Error purging domain {dname}: {e}")
+    return jsonify({'success': True, 'purged_deployments': len(dep_ids), 'purged_domains': len(domain_names)})
+
+@app.route('/api/lg/archive/purge-all', methods=['POST'])
+def lg_archive_purge_all():
+    """Permanently clear out all deleted domains and deployments from archive."""
+    _dep.purge_all_archived()
     return jsonify({'success': True})
 
 @app.route('/api/lg/domains/deleted', methods=['GET'])
