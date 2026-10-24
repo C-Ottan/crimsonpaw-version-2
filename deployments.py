@@ -111,7 +111,7 @@ def get_deployments(include_deleted=False, only_deleted=False):
            {where}
            ORDER BY d.created_at DESC'''
     if only_deleted:
-        where = "WHERE d.status = 'deleted'"
+        where = "WHERE d.status IN ('deleted', 'killed')"
     elif include_deleted:
         where = ''
     else:
@@ -259,6 +259,10 @@ def update_deployment(did, data):
     values.append(did)
     with _conn() as c:
         c.execute(f'UPDATE deployments SET {",".join(fields)} WHERE id=?', values)
+
+def kill_deployment(did):
+    with _conn() as c:
+        c.execute("UPDATE deployments SET status='killed' WHERE id=?", (did,))
 
 def soft_delete_deployment(did):
     with _conn() as c:

