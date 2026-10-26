@@ -3,27 +3,90 @@
 # Fully authentic replica of the crystal red-team pentest suite design
 
 CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ active_theme or 'crimson' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CRIMSON PAW — Crystal-Powered Pentest Suite</title>
-    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <title>{{ platform_name or 'CRIMSON PAW' }} — Crystal-Powered Pentest Suite</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
+        :root, [data-theme="crimson"] { 
+            --bg-primary: #0a0709; --bg-sidebar: #100b0e; --bg-panel: #161014; 
+            --border-color: #2e1216; --border-hover: #4e1a22;
+            --text-primary: #f0ebed; --text-secondary: #a49498; 
+            --accent-color: #e50914; --accent-hover: #ff2a35;
+            --accent-glow: rgba(229, 9, 20, 0.35); --accent-glow-strong: rgba(229, 9, 20, 0.65);
+            --accent-gradient: linear-gradient(135deg, #e50914, #b00710);
+            --accent-gradient-hover: linear-gradient(135deg, #ff1f2a, #cc0813);
+            --badge-bg: #261115; --badge-border: #5a1c22; --badge-color: #ff8b94;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="blue"] {
+            --bg-primary: #050a14; --bg-sidebar: #091020; --bg-panel: #0d172e;
+            --border-color: #16264c; --border-hover: #23407d;
+            --text-primary: #e6f0ff; --text-secondary: #8da2c0;
+            --accent-color: #0084ff; --accent-hover: #339cff;
+            --accent-glow: rgba(0, 132, 255, 0.35); --accent-glow-strong: rgba(0, 132, 255, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0084ff, #0056b3);
+            --accent-gradient-hover: linear-gradient(135deg, #339cff, #006ee6);
+            --badge-bg: #0d2244; --badge-border: #1a427d; --badge-color: #80bfff;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="green"] {
+            --bg-primary: #051208; --bg-sidebar: #091c0e; --bg-panel: #0e2b16;
+            --border-color: #154522; --border-hover: #1e6633;
+            --text-primary: #e6ffed; --text-secondary: #8dc09a;
+            --accent-color: #00e676; --accent-hover: #33eb91;
+            --accent-glow: rgba(0, 230, 118, 0.35); --accent-glow-strong: rgba(0, 230, 118, 0.65);
+            --accent-gradient: linear-gradient(135deg, #00c853, #009624);
+            --accent-gradient-hover: linear-gradient(135deg, #00e676, #00b248);
+            --badge-bg: #0b3318; --badge-border: #14592a; --badge-color: #69f0ae;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="purple"] {
+            --bg-primary: #0a0514; --bg-sidebar: #120924; --bg-panel: #1b0e36;
+            --border-color: #311860; --border-hover: #4a2491;
+            --text-primary: #f3e8ff; --text-secondary: #aa95c4;
+            --accent-color: #a855f7; --accent-hover: #be7bf9;
+            --accent-glow: rgba(168, 85, 247, 0.35); --accent-glow-strong: rgba(168, 85, 247, 0.65);
+            --accent-gradient: linear-gradient(135deg, #9333ea, #6b21a8);
+            --accent-gradient-hover: linear-gradient(135deg, #a855f7, #7e22ce);
+            --badge-bg: #29144d; --badge-border: #4d238c; --badge-color: #d8b4fe;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="amber"] {
+            --bg-primary: #120c04; --bg-sidebar: #1c1307; --bg-panel: #291b0b;
+            --border-color: #4a3114; --border-hover: #734c1f;
+            --text-primary: #fff8e6; --text-secondary: #c4ad8d;
+            --accent-color: #f59e0b; --accent-hover: #fbbf24;
+            --accent-glow: rgba(245, 158, 11, 0.35); --accent-glow-strong: rgba(245, 158, 11, 0.65);
+            --accent-gradient: linear-gradient(135deg, #d97706, #b45309);
+            --accent-gradient-hover: linear-gradient(135deg, #f59e0b, #d97706);
+            --badge-bg: #3d260f; --badge-border: #6b431a; --badge-color: #fcd34d;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="titanium"] {
+            --bg-primary: #0a0c10; --bg-sidebar: #11141a; --bg-panel: #191e26;
+            --border-color: #28303d; --border-hover: #3d495c;
+            --text-primary: #f1f5f9; --text-secondary: #94a3b8;
+            --accent-color: #38bdf8; --accent-hover: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.35); --accent-glow-strong: rgba(56, 189, 248, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0284c7, #0369a1);
+            --accent-gradient-hover: linear-gradient(135deg, #38bdf8, #0284c7);
+            --badge-bg: #132338; --badge-border: #23426b; --badge-color: #7dd3fc;
+            --danger: #e50914; --success: #2ea043;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #0b070a;
+            background-color: var(--bg-primary);
             background-image: 
-                radial-gradient(circle at 50% 15%, rgba(229, 9, 20, 0.16) 0%, transparent 60%),
-                radial-gradient(circle at 85% 60%, rgba(180, 7, 16, 0.10) 0%, transparent 50%),
-                linear-gradient(135deg, rgba(229, 9, 20, 0.04) 25%, transparent 25%),
-                linear-gradient(225deg, rgba(229, 9, 20, 0.04) 25%, transparent 25%),
-                linear-gradient(45deg, rgba(229, 9, 20, 0.04) 25%, transparent 25%),
-                linear-gradient(315deg, rgba(229, 9, 20, 0.04) 25%, #0b070a 25%);
+                radial-gradient(circle at 50% 15%, var(--accent-glow) 0%, transparent 60%),
+                radial-gradient(circle at 85% 60%, var(--accent-glow-strong) 0%, transparent 50%);
             background-position: center, center, 40px 0, 40px 0, 0 0, 0 0;
             background-size: 100% 100%, 100% 100%, 80px 80px, 80px 80px, 80px 80px, 80px 80px;
             color: #f0eaed;
@@ -41,9 +104,9 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             align-items: center;
             justify-content: space-between;
             padding: 0 48px;
-            background: rgba(11, 7, 10, 0.75);
+            background: var(--bg-sidebar);
             backdrop-filter: blur(14px);
-            border-bottom: 1px solid rgba(229, 9, 20, 0.15);
+            border-bottom: 1px solid var(--border-color);
             position: sticky;
             top: 0;
             z-index: 100;
@@ -59,8 +122,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             height: 42px;
             border-radius: 10px;
             object-fit: cover;
-            border: 1px solid rgba(229, 9, 20, 0.35);
-            box-shadow: 0 0 14px rgba(229, 9, 20, 0.4);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 0 14px var(--accent-glow);
         }
         .nav-brand-text {
             display: flex;
@@ -95,17 +158,17 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             cursor: pointer;
         }
         .nav-link:hover {
-            color: #ff3b45;
+            color: var(--accent-color);
         }
         .nav-btn-signin {
-            background: linear-gradient(135deg, #e50914, #b80711);
+            background: var(--accent-gradient);
             color: #ffffff;
             padding: 8px 24px;
             border-radius: 9999px;
             font-size: 13px;
             font-weight: 700;
             text-decoration: none;
-            box-shadow: 0 0 18px rgba(229, 9, 20, 0.5);
+            box-shadow: 0 0 18px var(--accent-glow);
             transition: all 0.2s;
             display: inline-flex;
             align-items: center;
@@ -113,8 +176,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             border: 1px solid rgba(255, 255, 255, 0.15);
         }
         .nav-btn-signin:hover {
-            background: linear-gradient(135deg, #ff1f2a, #d40813);
-            box-shadow: 0 0 24px rgba(229, 9, 20, 0.7);
+            background: var(--accent-gradient-hover);
+            box-shadow: 0 0 24px var(--accent-glow-strong);
             transform: translateY(-1px);
         }
 
@@ -137,8 +200,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
 
         /* Left Hero Card */
         .hero-card {
-            background: rgba(18, 12, 16, 0.84);
-            border: 1px solid rgba(229, 9, 20, 0.26);
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
             border-radius: 28px;
             padding: 44px 48px;
             box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -153,7 +216,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             left: -120px;
             width: 260px;
             height: 260px;
-            background: radial-gradient(circle, rgba(229, 9, 20, 0.18) 0%, transparent 70%);
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
             pointer-events: none;
         }
         .hero-tag {
@@ -172,8 +235,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             width: 6px;
             height: 6px;
             border-radius: 50%;
-            background: #e50914;
-            box-shadow: 0 0 8px #e50914;
+            background: var(--accent-color);
+            box-shadow: 0 0 8px var(--accent-color);
         }
         .hero-title {
             font-size: 2.75rem;
@@ -196,7 +259,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             margin-bottom: 32px;
         }
         .hero-cta-btn {
-            background: linear-gradient(135deg, #e50914, #b00710);
+            background: var(--accent-gradient);
             color: #ffffff;
             padding: 13px 34px;
             border-radius: 9999px;
@@ -206,7 +269,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             text-transform: uppercase;
             border: 1px solid rgba(255, 255, 255, 0.2);
             cursor: pointer;
-            box-shadow: 0 6px 26px rgba(229, 9, 20, 0.5);
+            box-shadow: 0 6px 26px var(--accent-glow);
             transition: all 0.2s ease;
             display: inline-flex;
             align-items: center;
@@ -214,8 +277,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             text-decoration: none;
         }
         .hero-cta-btn:hover {
-            background: linear-gradient(135deg, #ff1f2a, #cc0813);
-            box-shadow: 0 8px 32px rgba(229, 9, 20, 0.7);
+            background: var(--accent-gradient-hover);
+            box-shadow: 0 8px 32px var(--accent-glow-strong);
             transform: translateY(-2px);
         }
 
@@ -231,7 +294,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             max-width: 360px;
             height: 380px;
             background: rgba(16, 10, 14, 0.85);
-            border: 1px solid rgba(229, 9, 20, 0.28);
+            border: 1px solid var(--border-color);
             border-radius: 28px;
             display: flex;
             align-items: center;
@@ -244,20 +307,20 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
         }
         .logo-card:hover {
             transform: translateY(-4px);
-            border-color: rgba(229, 9, 20, 0.5);
+            border-color: var(--accent-color);
         }
         .logo-card::after {
             content: '';
             position: absolute;
             inset: 0;
-            background: radial-gradient(circle at 50% 50%, rgba(229, 9, 20, 0.2) 0%, transparent 70%);
+            background: radial-gradient(circle at 50% 50%, var(--accent-glow) 0%, transparent 70%);
             pointer-events: none;
         }
         .logo-card-img {
             width: 84%;
             height: 84%;
             object-fit: contain;
-            filter: drop-shadow(0 0 30px rgba(229, 9, 20, 0.45));
+            filter: drop-shadow(0 0 30px var(--accent-glow));
             position: relative;
             z-index: 2;
         }
@@ -267,7 +330,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             width: 100%;
             max-width: 360px;
             background: rgba(18, 12, 16, 0.85);
-            border: 1px solid rgba(229, 9, 20, 0.24);
+            border: 1px solid var(--border-color);
             border-radius: 18px;
             padding: 16px 20px;
             display: flex;
@@ -280,13 +343,13 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             width: 34px;
             height: 34px;
             border-radius: 9px;
-            background: rgba(229, 9, 20, 0.16);
-            border: 1px solid rgba(229, 9, 20, 0.35);
+            background: var(--badge-bg);
+            border: 1px solid var(--badge-border);
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            color: #ff3b45;
+            color: var(--accent-color);
             font-size: 15px;
         }
         .disclaimer-content {
@@ -321,13 +384,13 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
         }
         .modal-backdrop.open { display: flex; }
         .pricing-modal {
-            background: #140d11;
-            border: 1px solid rgba(229, 9, 20, 0.35);
+            background: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
             border-radius: 24px;
             max-width: 960px;
             width: 100%;
             padding: 36px 40px;
-            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8), 0 0 40px rgba(229, 9, 20, 0.2);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8), 0 0 40px var(--accent-glow);
             position: relative;
         }
         .modal-close {
@@ -362,8 +425,8 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             gap: 20px;
         }
         .price-card {
-            background: #1a1015;
-            border: 1px solid #3d1419;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
             border-radius: 18px;
             padding: 24px 22px;
             display: flex;
@@ -373,19 +436,19 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             transition: border-color 0.2s, transform 0.2s;
         }
         .price-card:hover {
-            border-color: #e50914;
+            border-color: var(--accent-color);
             transform: translateY(-3px);
         }
         .price-card.featured {
-            border-color: #e50914;
-            background: linear-gradient(180deg, #241117 0%, #160e12 100%);
-            box-shadow: 0 0 25px rgba(229, 9, 20, 0.25);
+            border-color: var(--accent-color);
+            background: var(--bg-panel);
+            box-shadow: 0 0 25px var(--accent-glow);
         }
         .price-badge {
             position: absolute;
             top: -10px;
             right: 18px;
-            background: #e50914;
+            background: var(--accent-gradient);
             color: #fff;
             font-size: 9px;
             font-weight: 900;
@@ -398,11 +461,11 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
         .plan-price { font-size: 1.9rem; font-weight: 900; color: #ffffff; }
         .plan-price span { font-size: 0.8rem; font-weight: 500; color: #a49498; }
         .plan-features { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem; color: #d0c5ca; }
-        .plan-features li::before { content: "✓ "; color: #e50914; font-weight: 800; }
+        .plan-features li::before { content: "✓ "; color: var(--accent-color); font-weight: 800; }
         .plan-btn {
             margin-top: auto;
-            background: #281419;
-            border: 1px solid #5a1c24;
+            background: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
             color: #ffffff;
             padding: 10px;
             border-radius: 8px;
@@ -414,9 +477,9 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             transition: all 0.15s;
         }
         .plan-btn:hover, .price-card.featured .plan-btn {
-            background: #e50914;
-            border-color: #e50914;
-            box-shadow: 0 0 14px rgba(229, 9, 20, 0.45);
+            background: var(--accent-gradient);
+            border-color: var(--accent-color);
+            box-shadow: 0 0 14px var(--accent-glow);
         }
 
         /* ── Responsive ── */
@@ -432,10 +495,10 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
 
     <header>
         <a href="/" class="nav-brand">
-            <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="nav-brand-logo">
+            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="nav-brand-logo">
             <div class="nav-brand-text">
-                <span class="nav-brand-title">CRIMSON PAW</span>
-                <span class="nav-brand-sub">CRYSTAL-POWERED PENTEST SUITE - LEGAL USE ONLY</span>
+                <span class="nav-brand-title">{{ platform_name or 'CRIMSON PAW' }}</span>
+                <span class="nav-brand-sub">ENTERPRISE RED TEAM PENTEST SUITE</span>
             </div>
         </a>
         <nav class="nav-links">

@@ -314,6 +314,22 @@ def init_db():
         UNIQUE(operator_id, session_user_code)
     )''')
 
+    cursor.execute('''CREATE TABLE IF NOT EXISTS operator_audit_logs (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        operator_id         INTEGER,
+        operator_username   TEXT NOT NULL,
+        action_type         TEXT NOT NULL,
+        target_mailbox      TEXT,
+        details             TEXT,
+        ip_address          TEXT,
+        device_hash         TEXT,
+        device_info         TEXT,
+        created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_op ON operator_audit_logs(operator_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON operator_audit_logs(action_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON operator_audit_logs(created_at DESC)")
+
     # Seed default Red Team keyword rules if table is empty
     cursor.execute("SELECT COUNT(*) FROM keyword_rules")
     if cursor.fetchone()[0] == 0:
@@ -1104,5 +1120,113 @@ def record_operator_sharing_violation(operator_id):
         cursor.execute("UPDATE operators SET sharing_violations_count = COALESCE(sharing_violations_count, 0) + 1 WHERE id = ?", (operator_id,))
         conn.commit()
         logger.warning(f"[OP-SECURITY] Sharing violation recorded for operator ID #{operator_id}")
+    finally:
+        conn.close()
+
+def record_operator_audit(operator_id, operator_username, action_type, target_mailbox=None, details=None, ip_address=None, device_hash=None, device_info=None):
+    """Records an administrative surveillance and audit event for an operator action."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO operator_audit_logs 
+            (operator_id, operator_username, action_type, target_mailbox, details, ip_address, device_hash, device_info)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (operator_id, operator_username, action_type, target_mailbox, details, ip_address, device_hash, device_info))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"[AUDIT] Failed to record operator audit log: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_operator_audit_logs(operator_id=None, action_type=None, search=None, limit=100, offset=0):
+    """Fetches paginated audit logs with optional filters."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        query = "SELECT * FROM operator_audit_logs WHERE 1=1"
+        params = []
+        if operator_id:
+            query += " AND operator_id = ?"
+            params.append(operator_id)
+        if action_type and action_type != 'all':
+            query += " AND action_type = ?"
+            params.append(action_type)
+        if search:
+            query += " AND (target_mailbox LIKE ? OR details LIKE ? OR operator_username LIKE ? OR ip_address LIKE ?)"
+            s = f"%{search}%"
+            params.extend([s, s, s, s])
+
+        # Count total matching
+        count_query = query.replace("SELECT *", "SELECT COUNT(*)", 1)
+        cursor.execute(count_query, params)
+        total = cursor.fetchone()[0]
+
+        # Order and paginate
+        query += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        cursor.execute(query, params)
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        return {'total': total, 'logs': rows}
+    except Exception as e:
+        logger.error(f"[AUDIT] Failed to fetch audit logs: {e}")
+        return {'total': 0, 'logs': []}
+    finally:
+        conn.close()
+
+def get_operator_audit_stats():
+    """Computes summary surveillance statistics for the dashboard."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        # Total events
+        cursor.execute("SELECT COUNT(*) FROM operator_audit_logs")
+        total_events = cursor.fetchone()[0]
+
+        # Active operators today
+        cursor.execute("SELECT COUNT(DISTINCT operator_id) FROM operator_audit_logs WHERE date(created_at) = date('now')")
+        active_today = cursor.fetchone()[0]
+
+        # Top target accounts
+        cursor.execute("""
+            SELECT target_mailbox, COUNT(*) as cnt 
+            FROM operator_audit_logs 
+            WHERE target_mailbox IS NOT NULL AND target_mailbox != ''
+            GROUP BY target_mailbox ORDER BY cnt DESC LIMIT 5
+        """)
+        top_targets = [dict(r) for r in cursor.fetchall()]
+
+        # Top action types
+        cursor.execute("SELECT action_type, COUNT(*) as cnt FROM operator_audit_logs GROUP BY action_type ORDER BY cnt DESC")
+        top_actions = [dict(r) for r in cursor.fetchall()]
+
+        return {
+            'total_events': total_events,
+            'active_today': active_today,
+            'top_targets': top_targets,
+            'top_actions': top_actions
+        }
+    except Exception as e:
+        logger.error(f"[AUDIT] Failed to get stats: {e}")
+        return {'total_events': 0, 'active_today': 0, 'top_targets': [], 'top_actions': []}
+    finally:
+        conn.close()
+
+def clear_operator_audit_logs():
+    """Master Admin action: Clears all operator audit logs."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM operator_audit_logs")
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"[AUDIT] Failed to clear logs: {e}")
+        return False
     finally:
         conn.close()

