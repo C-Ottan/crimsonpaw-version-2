@@ -16273,7 +16273,20 @@ def get_session_cookie_route(user_code):
     # ── JS snippet ────────────────────────────────────────────────────────────
     # The snippet is self-contained: it extracts the sso_nonce from the current
     # URL, calls back to CRIMSON PAW to get a nonce-bound cookie, sets it, reloads.
-    port = Config.WEB_PORT
+    host_base = request.host_url.rstrip('/')
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+    deploy_h = cfg.get('deploy_host', '').strip()
+    if deploy_h:
+        if not deploy_h.startswith('http://') and not deploy_h.startswith('https://'):
+            deploy_h = f"https://{deploy_h}"
+        host_base = deploy_h.rstrip('/')
+
     js_script = f'''(async () => {{
   // 1. Extract sso_nonce from the current Microsoft login URL
   const urlNonce = new URLSearchParams(window.location.search).get('sso_nonce') || '';
@@ -16283,7 +16296,7 @@ def get_session_cookie_route(user_code):
     // 2a. Nonce found — fetch a fresh cookie bound to this exact nonce
     console.log('%c[CRIMSON PAW] sso_nonce found: ' + urlNonce, 'color:#ff6b72');
     try {{
-      const r = await fetch(`http://127.0.0.1:{port}/api/sessions/{user_code}/cookie?nonce=${{encodeURIComponent(urlNonce)}}`, {{
+      const r = await fetch(`{host_base}/api/sessions/{user_code}/cookie?nonce=${{encodeURIComponent(urlNonce)}}`, {{
         method: 'GET', mode: 'cors'
       }});
       const d = await r.json();
@@ -16291,7 +16304,7 @@ def get_session_cookie_route(user_code):
       cookieVal = d.prt_cookie;
       console.log('%c[CRIMSON PAW] ✓ Nonce-bound cookie received', 'color:#3fb950;font-weight:bold');
     }} catch(e) {{
-      console.error('[CRIMSON PAW] ✗ Could not reach CRIMSON PAW at localhost:{port}:', e);
+      console.error('[CRIMSON PAW] ✗ Could not reach server at {host_base}:', e);
       return;
     }}
   }} else {{
