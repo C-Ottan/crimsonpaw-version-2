@@ -730,6 +730,7 @@ HTML_TEMPLATE = r'''
         .ai-key-hint { font-size:.72em; color:#6e5c61; margin-left:auto; }
         .ai-spinner { width:16px; height:16px; border:2px solid rgba(255,255,255,.3); border-top-color:white; border-radius:50%; animation:spin .6s linear infinite; }
         @keyframes spin { to{transform:rotate(360deg)} }
+        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
         .ai-no-key-banner { background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; font-size:.8em; color:var(--accent-color); }
         .ai-no-key-banner a { color:var(--accent-color); }
 
@@ -2844,27 +2845,41 @@ HTML_TEMPLATE = r'''
 
         <!-- ═══════════════ OPERATOR AUDIT TRAIL PAGE ═══════════════ -->
         <div id="page-audit" class="page" style="height:100%; overflow:hidden; width:100%;">
-            <div class="page-body" style="flex:1; padding:32px 48px; width:100%; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:20px;">
-                <!-- Header -->
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div class="page-body" style="flex:1; padding:28px 36px; width:100%; box-sizing:border-box; overflow-y:auto; display:flex; flex-direction:column; gap:20px;">
+                <!-- Header with Live Cyber Radar -->
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px; background:linear-gradient(135deg, var(--bg-sidebar) 0%, var(--bg-panel) 100%); border:1px solid var(--border-color); border-radius:12px; padding:22px 26px; box-shadow:0 4px 20px rgba(0,0,0,0.3);">
                     <div>
-                        <div style="font-size:11px; font-weight:800; letter-spacing:0.12em; color:var(--text-secondary); text-transform:uppercase; margin-bottom:4px;">
-                            SURVEILLANCE &amp; OBSERVABILITY
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                            <span style="font-size:11px; font-weight:800; letter-spacing:0.12em; color:var(--text-secondary); text-transform:uppercase;">
+                                SOC OBSERVABILITY &amp; SURVEILLANCE
+                            </span>
+                            <div style="display:inline-flex; align-items:center; gap:6px; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.35); padding:3px 10px; border-radius:20px;">
+                                <span style="position:relative; display:flex; width:7px; height:7px;">
+                                    <span style="animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite; position:absolute; display:inline-flex; height:100%; width:100%; border-radius:50%; background:#22c55e; opacity:0.8;"></span>
+                                    <span style="position:relative; display:inline-flex; border-radius:50%; height:7px; width:7px; background:#22c55e;"></span>
+                                </span>
+                                <span style="font-size:10px; font-weight:800; color:#22c55e; letter-spacing:0.06em; text-transform:uppercase;">RADAR ACTIVE</span>
+                            </div>
                         </div>
-                        <h1 style="display:flex; align-items:center; gap:10px; margin:0; font-size:1.6rem; font-weight:800; color:var(--text-primary);">
-                            <span>📋</span> Operator Audit Trail
+                        <h1 style="display:flex; align-items:center; gap:10px; margin:0; font-size:1.65rem; font-weight:800; color:var(--text-primary); letter-spacing:-0.02em;">
+                            <span>🛰️</span> Operator Surveillance Stream
                         </h1>
-                        <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">
-                            Continuous background telemetry tracking all delegated operator actions, target mailboxes accessed, queries, and dispatches.
+                        <div style="display:flex; align-items:center; gap:12px; margin-top:8px; font-size:12px; color:var(--text-secondary); flex-wrap:wrap;">
+                            <span>Continuous telemetry capturing delegated operator actions across victim tenants.</span>
+                            <span style="opacity:0.4;">|</span>
+                            <span>Audit Retention: <b style="color:var(--text-primary);">90 Days Immutable</b></span>
+                            <span style="opacity:0.4;">|</span>
+                            <span>Inspection Target: <b style="color:var(--accent-color);">All Delegated Sessions</b></span>
                         </div>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
-                        <button class="btn" onclick="loadAuditTrail()" style="background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-primary); display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:6px; cursor:pointer;">
-                            <span>🔄</span> Refresh Telemetry
+                        <button id="btn-refresh-audit" class="btn" onclick="handleRefreshTelemetry(this)" style="background:var(--bg-primary); border:1px solid var(--border-color); color:var(--text-primary); display:flex; align-items:center; gap:8px; padding:10px 18px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12.5px; transition:all .2s; box-shadow:0 2px 8px rgba(0,0,0,0.3);">
+                            <span id="audit-refresh-icon" style="display:inline-block; font-size:14px;">🔄</span>
+                            <span id="audit-refresh-label">Refresh Telemetry</span>
                         </button>
                         {% if is_master_admin %}
-                        <button class="btn" onclick="confirmPurgeAuditLogs()" style="background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; gap:6px; padding:8px 14px; border-radius:6px; cursor:pointer;">
-                            <span>🗑️</span> Purge Audit Trail
+                        <button class="btn" onclick="confirmPurgeAuditLogs()" style="background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; gap:6px; padding:10px 16px; border-radius:8px; cursor:pointer; font-weight:700; font-size:12.5px; transition:all .2s;">
+                            <span>🗑️</span> Purge Trail
                         </button>
                         {% endif %}
                     </div>
@@ -2872,32 +2887,32 @@ HTML_TEMPLATE = r'''
 
                 <!-- KPI Stat Cards Row -->
                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px;">
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3);">📋</div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">TOTAL EVENTS</div>
-                            <div id="audit-kpi-total" style="font-size:22px; font-weight:800; color:var(--text-primary); margin-top:2px;">0</div>
+                    <div class="card" style="padding:18px 22px; display:flex; align-items:center; gap:16px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform .15s, border-color .15s;">
+                        <div style="width:44px; height:44px; border-radius:10px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3); flex-shrink:0;">📊</div>
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-size:10.5px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.06em; font-weight:800;">TOTAL SURVEILLANCE EVENTS</div>
+                            <div id="audit-kpi-total" style="font-size:24px; font-weight:900; color:var(--text-primary); margin-top:2px;">0</div>
                         </div>
                     </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">👥</div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE OPERATORS TODAY</div>
-                            <div id="audit-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+                    <div class="card" style="padding:18px 22px; display:flex; align-items:center; gap:16px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform .15s, border-color .15s;">
+                        <div style="width:44px; height:44px; border-radius:10px; background:rgba(34,197,94,0.12); color:#22c55e; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(34,197,94,0.3); flex-shrink:0;">👥</div>
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-size:10.5px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.06em; font-weight:800;">ACTIVE OPERATORS TODAY</div>
+                            <div id="audit-kpi-active" style="font-size:24px; font-weight:900; color:#22c55e; margin-top:2px;">0</div>
                         </div>
                     </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(235,87,87,0.12); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">📥</div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">MOST ACCESSED TARGET</div>
-                            <div id="audit-kpi-top-target" style="font-size:13px; font-weight:700; color:var(--text-primary); margin-top:2px; word-break:break-all;">None</div>
+                    <div class="card" style="padding:18px 22px; display:flex; align-items:center; gap:16px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform .15s, border-color .15s;">
+                        <div style="width:44px; height:44px; border-radius:10px; background:rgba(235,87,87,0.12); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border); flex-shrink:0;">🎯</div>
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-size:10.5px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.06em; font-weight:800;">MOST ACCESSED TARGET</div>
+                            <div id="audit-kpi-top-target" style="font-size:13.5px; font-weight:800; color:var(--text-primary); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="None">None</div>
                         </div>
                     </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(187,134,252,0.12); color:#bb86fc; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(187,134,252,0.3);">🛡️</div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">SURVEILLANCE STATUS</div>
-                            <div style="font-size:13px; font-weight:800; color:#3fb950; margin-top:2px;">● ACTIVE &amp; RECORDING</div>
+                    <div class="card" style="padding:18px 22px; display:flex; align-items:center; gap:16px; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,0.25); transition:transform .15s, border-color .15s;">
+                        <div style="width:44px; height:44px; border-radius:10px; background:rgba(187,134,252,0.12); color:#bb86fc; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(187,134,252,0.3); flex-shrink:0;">🛡️</div>
+                        <div style="min-width:0; flex:1;">
+                            <div style="font-size:10.5px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.06em; font-weight:800;">HOOK ENFORCEMENT</div>
+                            <div style="font-size:13.5px; font-weight:800; color:#22c55e; margin-top:2px;">● ZERO ESCAPE LOCK</div>
                         </div>
                     </div>
                 </div>
@@ -9629,7 +9644,23 @@ Delegated     : ${inboxesDesc}
         };
         let _auditDebounceTimer = null;
 
-        async function loadAuditTrail() {
+        async function handleRefreshTelemetry(btn) {
+            const icon = document.getElementById('audit-refresh-icon');
+            const lbl = document.getElementById('audit-refresh-label');
+            if (btn) btn.disabled = true;
+            if (icon) icon.style.animation = 'spin .75s linear infinite';
+            if (lbl) lbl.innerText = 'Synchronizing...';
+            try {
+                await loadAuditTrail(true);
+                showToast(`✓ Surveillance telemetry synchronized (${_auditState.total} total events)`);
+            } finally {
+                if (icon) icon.style.animation = '';
+                if (btn) btn.disabled = false;
+                if (lbl) lbl.innerText = 'Refresh Telemetry';
+            }
+        }
+
+        async function loadAuditTrail(isManual = false) {
             const container = document.getElementById('audit-table-container');
             if (!container) return;
 
@@ -9662,7 +9693,7 @@ Delegated     : ${inboxesDesc}
                 if (kpiTop) {
                     const topT = stats.top_targets && stats.top_targets.length ? stats.top_targets[0] : null;
                     kpiTop.innerText = topT ? `${topT.target_mailbox} (${topT.cnt})` : 'None';
-                    kpiTop.title = topT ? topT.target_mailbox : '';
+                    kpiTop.title = topT ? topT.target_mailbox : 'None';
                 }
 
                 // Update Operator dropdown if not populated
@@ -9693,10 +9724,22 @@ Delegated     : ${inboxesDesc}
 
             if (!logs || logs.length === 0) {
                 container.innerHTML = `
-                    <div style="padding:48px 24px; text-align:center; color:var(--text-secondary);">
-                        <div style="font-size:32px; margin-bottom:10px;">📋</div>
-                        <div style="font-size:14px; font-weight:600; color:var(--text-primary); margin-bottom:4px;">No Audit Events Found</div>
-                        <div style="font-size:12px;">No operator surveillance activity matches the selected filters.</div>
+                    <div style="padding:56px 24px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                        <div style="position:relative; width:80px; height:80px; margin-bottom:18px; display:flex; align-items:center; justify-content:center;">
+                            <div style="position:absolute; inset:0; border-radius:50%; border:2px dashed rgba(34,197,94,0.35); animation:spin 12s linear infinite;"></div>
+                            <div style="position:absolute; inset:10px; border-radius:50%; border:1px solid rgba(34,197,94,0.2);"></div>
+                            <div style="width:40px; height:40px; border-radius:50%; background:rgba(34,197,94,0.15); display:flex; align-items:center; justify-content:center; font-size:20px;">🛡️</div>
+                        </div>
+                        <div style="font-size:15px; font-weight:800; color:#ffffff; margin-bottom:6px; letter-spacing:0.02em;">SURVEILLANCE RADAR LISTENING</div>
+                        <div style="font-size:12.5px; color:var(--text-secondary); max-width:440px; line-height:1.6; margin-bottom:16px;">
+                            No operator telemetry events recorded yet. All delegated operator sessions, mailbox reads, search queries, and message interactions are intercepted in real-time.
+                        </div>
+                        <div style="display:flex; gap:12px; font-size:11.5px; color:var(--text-secondary); flex-wrap:wrap; justify-content:center;">
+                            <span style="background:var(--bg-sidebar); border:1px solid var(--border-color); padding:4px 10px; border-radius:6px;">👁️ Mailbox Reads</span>
+                            <span style="background:var(--bg-sidebar); border:1px solid var(--border-color); padding:4px 10px; border-radius:6px;">🔍 Search Queries</span>
+                            <span style="background:var(--bg-sidebar); border:1px solid var(--border-color); padding:4px 10px; border-radius:6px;">📤 Email Dispatches</span>
+                            <span style="background:var(--bg-sidebar); border:1px solid var(--border-color); padding:4px 10px; border-radius:6px;">🗑️ Message Deletions</span>
+                        </div>
                     </div>`;
                 return;
             }
@@ -9715,13 +9758,14 @@ Delegated     : ${inboxesDesc}
             let html = `
                 <table style="width:100%; border-collapse:collapse; font-size:12px; text-align:left;">
                     <thead>
-                        <tr style="border-bottom:1px solid var(--border-color); background:rgba(255,255,255,0.02); color:var(--text-secondary); text-transform:uppercase; font-size:11px; letter-spacing:0.05em;">
-                            <th style="padding:12px 16px; font-weight:700;">Timestamp</th>
-                            <th style="padding:12px 16px; font-weight:700;">Operator</th>
-                            <th style="padding:12px 16px; font-weight:700;">Action</th>
-                            <th style="padding:12px 16px; font-weight:700;">Target Mailbox</th>
-                            <th style="padding:12px 16px; font-weight:700;">Activity Details</th>
-                            <th style="padding:12px 16px; font-weight:700;">Workstation &amp; IP</th>
+                        <tr style="border-bottom:1px solid var(--border-color); background:rgba(0,0,0,0.2); color:var(--text-secondary); text-transform:uppercase; font-size:11px; letter-spacing:0.06em;">
+                            <th style="padding:14px 18px; font-weight:800;">Timestamp</th>
+                            <th style="padding:14px 18px; font-weight:800;">Operator</th>
+                            <th style="padding:14px 18px; font-weight:800;">Action Type</th>
+                            <th style="padding:14px 18px; font-weight:800;">Target Mailbox</th>
+                            <th style="padding:14px 18px; font-weight:800;">Activity Telemetry</th>
+                            <th style="padding:14px 18px; font-weight:800;">Workstation &amp; IP</th>
+                            <th style="padding:14px 18px; font-weight:800; text-align:right;">Inspector</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -9730,36 +9774,51 @@ Delegated     : ${inboxesDesc}
             logs.forEach(log => {
                 const conf = actionColors[log.action_type] || { bg: 'rgba(255,255,255,0.05)', border: 'var(--border-color)', text: 'var(--text-primary)', icon: '📝' };
                 const timeStr = log.created_at || 'Just now';
-                const targetAcct = log.target_mailbox ? `<span style="font-family:monospace; color:var(--accent-color); font-weight:600;">${log.target_mailbox}</span>` : `<span style="color:var(--text-secondary); font-style:italic;">—</span>`;
-                const devHash = log.device_hash ? `<span title="${log.device_hash}" style="font-family:monospace; font-size:10.5px; color:#58a6ff;">[${log.device_hash.substring(0,8)}]</span>` : '';
+                const targetAcct = log.target_mailbox ? `<span style="font-family:monospace; color:var(--accent-color); font-weight:700;">${escapeHtml(log.target_mailbox)}</span>` : `<span style="color:var(--text-secondary); font-style:italic;">—</span>`;
+                const devHash = log.device_hash ? `<span title="${escapeHtml(log.device_hash)}" style="font-family:monospace; font-size:10.5px; color:#58a6ff; background:rgba(88,166,255,0.1); padding:1px 6px; border-radius:3px;">[${log.device_hash.substring(0,8)}]</span>` : '';
                 const ipStr = log.ip_address || 'Unknown';
+                const rowId = `audit-detail-${log.id}`;
+                const rawJson = escapeHtml(JSON.stringify(log, null, 2));
 
                 html += `
                     <tr style="border-bottom:1px solid rgba(255,255,255,0.04); transition:background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
-                        <td style="padding:12px 16px; white-space:nowrap; color:var(--text-secondary); font-family:monospace;">
+                        <td style="padding:14px 18px; white-space:nowrap; color:var(--text-secondary); font-family:monospace;">
                             ${timeStr}
                         </td>
-                        <td style="padding:12px 16px; white-space:nowrap;">
+                        <td style="padding:14px 18px; white-space:nowrap;">
                             <span style="font-weight:700; color:var(--text-primary); display:inline-flex; align-items:center; gap:6px;">
-                                <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#3fb950;"></span>
-                                ${log.operator_username}
+                                <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:#22c55e; box-shadow:0 0 6px rgba(34,197,94,0.6);"></span>
+                                ${escapeHtml(log.operator_username)}
                             </span>
                             <span style="font-size:10px; color:var(--text-secondary); margin-left:4px;">#${log.operator_id}</span>
                         </td>
-                        <td style="padding:12px 16px; white-space:nowrap;">
-                            <span style="display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:4px; font-size:10.5px; font-weight:700; background:${conf.bg}; border:1px solid ${conf.border}; color:${conf.text};">
+                        <td style="padding:14px 18px; white-space:nowrap;">
+                            <span style="display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:6px; font-size:11px; font-weight:800; background:${conf.bg}; border:1px solid ${conf.border}; color:${conf.text}; box-shadow:0 0 8px ${conf.bg};">
                                 <span>${conf.icon}</span> ${log.action_type}
                             </span>
                         </td>
-                        <td style="padding:12px 16px; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                        <td style="padding:14px 18px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                             ${targetAcct}
                         </td>
-                        <td style="padding:12px 16px; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary);" title="${log.details || ''}">
-                            ${log.details || '—'}
+                        <td style="padding:14px 18px; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary);" title="${escapeHtml(log.details || '')}">
+                            ${escapeHtml(log.details || '—')}
                         </td>
-                        <td style="padding:12px 16px; white-space:nowrap; font-size:11px; color:var(--text-secondary);">
-                            <span style="font-family:monospace; color:var(--text-primary);">${ipStr}</span>
+                        <td style="padding:14px 18px; white-space:nowrap; font-size:11.5px; color:var(--text-secondary);">
+                            <span style="font-family:monospace; color:var(--text-primary); font-weight:600;">${escapeHtml(ipStr)}</span>
                             ${devHash ? ` ${devHash}` : ''}
+                        </td>
+                        <td style="padding:14px 18px; text-align:right; white-space:nowrap;">
+                            <button onclick="toggleAuditRowDetail('${rowId}')" style="background:var(--bg-sidebar); border:1px solid var(--border-color); color:var(--text-secondary); padding:4px 10px; border-radius:5px; font-size:11px; cursor:pointer; font-weight:700; transition:all .15s;">
+                                🔍 Payload
+                            </button>
+                        </td>
+                    </tr>
+                    <tr id="${rowId}" style="display:none; background:rgba(0,0,0,0.3); border-bottom:1px solid var(--border-color);">
+                        <td colspan="7" style="padding:14px 22px;">
+                            <div style="font-size:10.5px; font-weight:800; color:var(--text-secondary); text-transform:uppercase; margin-bottom:6px; letter-spacing:0.08em;">
+                                ⚡ FORENSIC EVENT PAYLOAD (IMMUTABLE LOG #${log.id})
+                            </div>
+                            <pre style="background:var(--bg-primary); border:1px solid var(--border-color); border-radius:6px; padding:12px; font-family:'Courier New',monospace; font-size:11px; color:#93c5fd; line-height:1.5; overflow-x:auto; margin:0;">${rawJson}</pre>
                         </td>
                     </tr>
                 `;
@@ -9767,6 +9826,12 @@ Delegated     : ${inboxesDesc}
 
             html += `</tbody></table>`;
             container.innerHTML = html;
+        }
+
+        function toggleAuditRowDetail(id) {
+            const row = document.getElementById(id);
+            if (!row) return;
+            row.style.display = (row.style.display === 'none' || !row.style.display) ? 'table-row' : 'none';
         }
 
         function updateAuditPagination() {
