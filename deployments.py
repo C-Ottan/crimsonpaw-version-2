@@ -275,7 +275,12 @@ def update_deployment(did, data):
 
 def kill_deployment(did):
     with _conn() as c:
-        c.execute("UPDATE deployments SET status='killed' WHERE id=?", (did,))
+        c.execute("UPDATE deployments SET status='killed' WHERE id=?", (int(did),))
+
+def set_deployment_status(did, status):
+    """Update status of a deployment (active, paused, killed, deleted)."""
+    with _conn() as c:
+        c.execute("UPDATE deployments SET status=? WHERE id=?", (status, int(did)))
 
 def soft_delete_deployment(did):
     with _conn() as c:

