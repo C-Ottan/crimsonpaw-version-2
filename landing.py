@@ -559,7 +559,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
                         <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     {% if marketplace_contact %}
-                    <a href="https://t.me/{{ marketplace_contact }}?text=Hi%2C%20I%20want%20the%202%20Weeks%20plan%20(%24250)%20%E2%80%94%201%20deployment%20domain." target="_blank" class="plan-btn">Subscribe via Telegram</a>
+                    <a href="{{ sub_url_weeks }}" target="_blank" class="plan-btn">Subscribe via Telegram</a>
                     {% else %}
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                     {% endif %}
@@ -576,7 +576,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
                         <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     {% if marketplace_contact %}
-                    <a href="https://t.me/{{ marketplace_contact }}?text=Hi%2C%20I%20want%20the%201%20Month%20plan%20(%24350)%20%E2%80%94%202%20deployment%20domains." target="_blank" class="plan-btn">Subscribe via Telegram</a>
+                    <a href="{{ sub_url_month }}" target="_blank" class="plan-btn">Subscribe via Telegram</a>
                     {% else %}
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                     {% endif %}
@@ -592,7 +592,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
                         <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     {% if marketplace_contact %}
-                    <a href="https://t.me/{{ marketplace_contact }}?text=Hi%2C%20I%20want%20the%202%20Months%20plan%20(%24650)%20%E2%80%94%204%20deployment%20domains." target="_blank" class="plan-btn">Subscribe via Telegram</a>
+                    <a href="{{ sub_url_two_month }}" target="_blank" class="plan-btn">Subscribe via Telegram</a>
                     {% else %}
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                     {% endif %}

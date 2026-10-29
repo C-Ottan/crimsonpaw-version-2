@@ -116,14 +116,20 @@ def transfer_domain_to_client(domain, client_id):
 
 def request_marketplace_domain(domain, client_id):
     """Subscriber clicks Buy: flags the listing as pending for that buyer so the
-    master sees the request; the actual transfer happens on master assignment."""
+    master sees the request; the actual transfer happens on master assignment.
+    Returns (ok, listed_price)."""
     clean = _clean_domain(domain)
     with _conn() as c:
         cur = c.execute("""UPDATE owned_domains SET pending_client_id=?
                            WHERE domain=? AND for_sale=1 AND status != 'deleted' AND pending_client_id IS NULL""",
                         (client_id, clean))
+        price = None
+        if cur.rowcount > 0:
+            row = c.execute("SELECT price FROM owned_domains WHERE domain=? AND pending_client_id=?",
+                            (clean, client_id)).fetchone()
+            price = row[0] if row else None
         c.commit()
-        return cur.rowcount > 0
+        return cur.rowcount > 0, price
 
 def get_marketplace_telegram_contact():
     """Master's Telegram handle where marketplace payments are completed."""

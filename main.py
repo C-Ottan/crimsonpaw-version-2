@@ -18168,7 +18168,33 @@ def index():
     platform_name = cfg.get('platform_name', 'CRIMSON PAW')
     custom_logo_url = cfg.get('custom_logo_url', '')
     marketplace_contact = (cfg.get('marketplace_telegram_contact', '') or '').strip().lstrip('@')
-    return render_template_string(CRIMSON_PAW_LANDING_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme, marketplace_contact=marketplace_contact)
+    # Formatted subscription-order deep-links: order details + buyer identity block.
+    tg_base = f"https://t.me/{marketplace_contact}" if marketplace_contact else ''
+    def _tg_order_url(plan, duration, price, domains):
+        if not tg_base:
+            return ''
+        from urllib.parse import quote as _q
+        msg = (
+            "🛒 SUBSCRIPTION ORDER — CRIMSON PAW\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 Plan: {plan}\n"
+            f"⏱ Duration: {duration}\n"
+            f"💰 Price: {price}\n"
+            f"🌐 Includes: {domains} Deployment Domain{'s' if domains != 1 else ''}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "👤 My username: \n"
+            "💬 Best way to reach me: \n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Sending to confirm my order & get payment details."
+        )
+        return f"{tg_base}?text={_q(msg)}"
+    return render_template_string(
+        CRIMSON_PAW_LANDING_HTML,
+        platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme,
+        marketplace_contact=marketplace_contact,
+        sub_url_weeks=_tg_order_url('2 Weeks', '14 Days', '$250', 1),
+        sub_url_month=_tg_order_url('1 Month', '30 Days', '$350', 2),
+        sub_url_two_month=_tg_order_url('2 Months', '60 Days', '$650', 4))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -20246,16 +20272,33 @@ def lg_request_marketplace_domain(domain):
     and returns the Telegram deep-link where payment is completed."""
     if not session.get('is_client_admin'):
         return jsonify({'error': 'Subscriber access required.'}), 403
-    import urllib.parse
     client_id = session.get('client_id')
-    ok = _dep.request_marketplace_domain(domain, client_id)
+    ok, listed_price = _dep.request_marketplace_domain(domain, client_id)
     if not ok:
         return jsonify({'error': 'Domain not available in the marketplace or already requested.'}), 404
     contact = _dep.get_marketplace_telegram_contact().lstrip('@')
     buyer = session.get('admin_user') or 'subscriber'
     tg_url = ''
     if contact:
-        msg = f"Marketplace purchase request: {domain} — buyer: {buyer} (client #{client_id})"
+        import urllib.parse
+        from datetime import datetime as _dt
+        if listed_price is None or listed_price == '':
+            price_str = 'As listed — confirm with admin'
+        else:
+            try:
+                price_str = f"${float(listed_price):,.2f}"
+            except (TypeError, ValueError):
+                price_str = f"${listed_price}"
+        msg = (
+            "🛒 MARKETPLACE ORDER — CRIMSON PAW\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 Domain: {domain}\n"
+            f"💰 Listed Price: {price_str}\n"
+            f"👤 Buyer: {buyer} (client #{client_id})\n"
+            f"📅 Requested: {_dt.now().strftime('%Y-%m-%d %H:%M UTC')}\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ Confirm availability & send payment to complete the transfer."
+        )
         tg_url = f"https://t.me/{contact}?text={urllib.parse.quote(msg)}"
     return jsonify({'success': True, 'domain': domain, 'telegram_url': tg_url})
 
