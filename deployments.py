@@ -299,6 +299,26 @@ def _build_url(domain, subdomain='', path=''):
     slug = f'/{path.strip("/")}' if path else ''
     return f'{proto}{host}{slug}'
 
+def count_active_deployments(owner_id):
+    """Active + paused links count against a tenant's plan quota."""
+    with _conn() as c:
+        row = c.execute("SELECT COUNT(*) AS n FROM deployments WHERE owner_id=? AND status IN ('active','paused')",
+                        (owner_id,)).fetchone()
+        return row['n']
+
+def count_client_domains(client_id):
+    """Domains currently owned by a tenant (plan quota basis)."""
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) FROM owned_domains WHERE owner_id=? AND status != 'deleted'",
+                         (client_id,)).fetchone()[0]
+
+def get_domain_pending_client(domain):
+    """Buyer identity if this listing is pending purchase by a subscriber (marketplace flow)."""
+    clean = _clean_domain(domain)
+    with _conn() as c:
+        row = c.execute("SELECT pending_client_id FROM owned_domains WHERE domain=?", (clean,)).fetchone()
+        return row[0] if row else None
+
 def create_deployment(data):
     full_url = _build_url(data.get('domain',''), data.get('subdomain',''), data.get('path',''))
     with _conn() as c:
