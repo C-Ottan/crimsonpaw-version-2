@@ -2788,13 +2788,9 @@ HTML_TEMPLATE = r'''
                         <div>
                             <label class="token-label" style="margin-bottom:4px; display:block;">SUBSCRIPTION DURATION</label>
                             <select id="sub-duration-input" class="lg-input" style="width:100%;">
-                                <option value="7">7 Days (Trial)</option>
                                 <option value="14">14 Days (2 Weeks)</option>
                                 <option value="30" selected>30 Days (1 Month)</option>
                                 <option value="60">60 Days (2 Months)</option>
-                                <option value="90">90 Days (3 Months)</option>
-                                <option value="365">365 Days (1 Year)</option>
-                                <option value="0">Lifetime (No Expiry)</option>
                             </select>
                         </div>
                         <div>

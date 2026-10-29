@@ -544,44 +544,44 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
         <div class="pricing-modal">
             <button class="modal-close" onclick="closeModal('pricing-modal')">&times;</button>
             <div class="pricing-header">
-                <h2>OPERATIONAL TIERS</h2>
-                <p>Select an authorized tier to configure your dedicated deployment infrastructure.</p>
+                <h2>SUBSCRIPTION PLANS</h2>
+                <p>Every plan includes a fully isolated client dashboard, dedicated deployment domains, and full platform access.</p>
             </div>
             <div class="pricing-grid">
                 <div class="price-card">
-                    <div class="plan-name">OPERATOR</div>
-                    <div class="plan-price">$149 <span>/ month</span></div>
+                    <div class="plan-name">2 WEEKS</div>
+                    <div class="plan-price">$250 <span>/ 2 weeks</span></div>
                     <ul class="plan-features">
-                        <li>5 Active Deployments</li>
-                        <li>Standard S/B/A/R Modes</li>
-                        <li>Token Harvesting Telemetry</li>
-                        <li>Automatic Office 365 Device Auth</li>
-                        <li>Community Knowledge Base</li>
+                        <li>1 Deployment Domain Included</li>
+                        <li>Isolated Client Dashboard</li>
+                        <li>Link Studio — Deploy & Capture</li>
+                        <li>Real-Time Telegram Capture Alerts</li>
+                        <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                 </div>
                 <div class="price-card featured">
                     <div class="price-badge">RECOMMENDED</div>
-                    <div class="plan-name">RED TEAM PRO</div>
-                    <div class="plan-price">$349 <span>/ month</span></div>
+                    <div class="plan-name">1 MONTH</div>
+                    <div class="plan-price">$350 <span>/ month</span></div>
                     <ul class="plan-features">
-                        <li>25 Active Deployments</li>
-                        <li>Live Registrar Domain Binding</li>
-                        <li>AI Phishing Content Synthesizer</li>
-                        <li>Full Graph API Exfiltration Suite</li>
-                        <li>Multi-tenant Session Refresher</li>
+                        <li>2 Deployment Domains Included</li>
+                        <li>Isolated Client Dashboard</li>
+                        <li>Link Studio — Deploy & Capture</li>
+                        <li>Real-Time Telegram Capture Alerts</li>
+                        <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                 </div>
                 <div class="price-card">
-                    <div class="plan-name">ENTERPRISE SCOPE</div>
-                    <div class="plan-price">$799 <span>/ month</span></div>
+                    <div class="plan-name">2 MONTHS</div>
+                    <div class="plan-price">$650 <span>/ 2 months</span></div>
                     <ul class="plan-features">
-                        <li>Unlimited Deployments</li>
-                        <li>Dedicated B2B SMTP Nodes</li>
-                        <li>Automated Subdomain Rotation</li>
-                        <li>Custom C2 Payload Webhooks</li>
-                        <li>24/7 Security Operations Access</li>
+                        <li>4 Deployment Domains Included</li>
+                        <li>Isolated Client Dashboard</li>
+                        <li>Link Studio — Deploy & Capture</li>
+                        <li>Real-Time Telegram Capture Alerts</li>
+                        <li>Mailbox, Keyword Alerts & B2B Sender</li>
                     </ul>
                     <a href="/dashboard" class="plan-btn">Launch Deployment</a>
                 </div>
