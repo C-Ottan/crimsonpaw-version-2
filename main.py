@@ -18167,7 +18167,8 @@ def index():
     active_theme = cfg.get('theme', 'crimson')
     platform_name = cfg.get('platform_name', 'CRIMSON PAW')
     custom_logo_url = cfg.get('custom_logo_url', '')
-    return render_template_string(CRIMSON_PAW_LANDING_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
+    marketplace_contact = (cfg.get('marketplace_telegram_contact', '') or '').strip().lstrip('@')
+    return render_template_string(CRIMSON_PAW_LANDING_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme, marketplace_contact=marketplace_contact)
 
 
 # ═══════════════════════════════════════════════════════════════════
