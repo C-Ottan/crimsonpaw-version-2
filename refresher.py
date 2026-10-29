@@ -33,6 +33,7 @@ class TokenRefresher(threading.Thread):
         super().__init__(daemon=True)
         self._running = True
         self.check_interval = check_interval
+        self._prt_failures = {}  # user_code -> consecutive PRT refresh failures
 
     def run(self):
         logger.info(f"Token Refresher thread started (Auto-refresh threshold: 10m remaining).")
@@ -51,15 +52,33 @@ class TokenRefresher(threading.Thread):
                             # PRT-only refresh — no fallback to oauth broker grant
                             success, new_at, new_exp = executor.refresh_via_prt(uc)
                             if success:
+                                self._prt_failures.pop(uc, None)
                                 logger.info(
                                     f"✓ Silently auto-refreshed (PRT) token for {uc} "
                                     f"(Next expiry in {new_exp - now_ts}s)"
                                 )
                             else:
-                                logger.warning(
-                                    f"⚠ PRT refresh failed for {uc} — token will expire soon. "
-                                    f"Re-run the post-compromise chain or re-capture the session."
-                                )
+                                fails = self._prt_failures.get(uc, 0) + 1
+                                self._prt_failures[uc] = fails
+                                if fails >= 3:
+                                    # 3 consecutive refresh failures (~90s): the credentials
+                                    # were almost certainly rotated/revoked externally (password
+                                    # change, admin reset, MFA policy). Flip the session to
+                                    # REVOKED so every dashboard reflects reality automatically.
+                                    try:
+                                        db.update_session_status(uc, 'REVOKED')
+                                        logger.warning(
+                                            f"🔒 {uc}: PRT refresh failed {fails}x consecutively — "
+                                            f"session auto-marked REVOKED (credentials likely rotated)."
+                                        )
+                                    except Exception as e:
+                                        logger.error(f"Failed to auto-revoke {uc}: {e}")
+                                    self._prt_failures.pop(uc, None)
+                                else:
+                                    logger.warning(
+                                        f"⚠ PRT refresh failed for {uc} ({fails}/3) — token will expire soon. "
+                                        f"Re-run the post-compromise chain or re-capture the session."
+                                    )
             except Exception as e:
                 logger.error(f"Error in token refresher thread: {e}")
 

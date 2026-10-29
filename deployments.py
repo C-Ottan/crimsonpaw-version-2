@@ -25,9 +25,12 @@ def _conn():
         c.close()
 
 # ─── Pre-land templates ─────────────────────────────────────────────────────
-def get_preland_templates():
+def get_preland_templates(owner_id=None):
     with _conn() as c:
-        rows = c.execute('SELECT * FROM preland_templates ORDER BY category, name').fetchall()
+        if owner_id is not None:
+            rows = c.execute('SELECT * FROM preland_templates WHERE owner_id = ? ORDER BY category, name', (owner_id,)).fetchall()
+        else:
+            rows = c.execute('SELECT * FROM preland_templates WHERE owner_id IS NULL ORDER BY category, name').fetchall()
     return [dict(r) for r in rows]
 
 def get_preland_template(tid):
@@ -48,14 +51,40 @@ def upsert_preland_template(tid, name, category, description, icon, default_conf
     return tid
 
 # ─── Owned domains ──────────────────────────────────────────────────────────
-def get_owned_domains():
+def get_owned_domains(owner_id=None):
+    """Tenant-partitioned domain listing. owner_id=None returns the MASTER's own
+    usable domains (marketplace inventory excluded); a client_id returns that
+    tenant's private domains."""
     with _conn() as c:
-        rows = c.execute("SELECT * FROM owned_domains WHERE status != 'deleted' ORDER BY domain").fetchall()
+        if owner_id is None:
+            rows = c.execute("""SELECT * FROM owned_domains
+                                WHERE status != 'deleted' AND owner_id IS NULL
+                                  AND (for_sale IS NULL OR for_sale = 0)
+                                ORDER BY domain""").fetchall()
+        else:
+            rows = c.execute("SELECT * FROM owned_domains WHERE status != 'deleted' AND owner_id = ? ORDER BY domain",
+                             (owner_id,)).fetchall()
     return [dict(r) for r in rows]
 
-def get_deleted_domains():
+def get_marketplace_domains():
+    """Marketplace inventory with pending-buyer identity for master review."""
     with _conn() as c:
-        rows = c.execute("SELECT * FROM owned_domains WHERE status = 'deleted' ORDER BY deleted_at DESC").fetchall()
+        rows = c.execute("""SELECT od.*, o.username AS pending_buyer
+                            FROM owned_domains od
+                            LEFT JOIN operators o ON o.id = od.pending_client_id
+                            WHERE od.status != 'deleted' AND od.for_sale = 1
+                            ORDER BY od.domain""").fetchall()
+    return [dict(r) for r in rows]
+
+def get_deleted_domains(owner_id='__all__'):
+    """Archived (soft-deleted) domains. owner_id scopes the view per tenant;
+    '__all__' (legacy default) returns everything for master administration."""
+    with _conn() as c:
+        if owner_id == '__all__':
+            rows = c.execute("SELECT * FROM owned_domains WHERE status = 'deleted' ORDER BY deleted_at DESC").fetchall()
+        else:
+            rows = c.execute("SELECT * FROM owned_domains WHERE status = 'deleted' AND owner_id IS ? ORDER BY deleted_at DESC",
+                             (owner_id,)).fetchall()
     return [dict(r) for r in rows]
 
 def _clean_domain(domain):
@@ -66,48 +95,119 @@ def _clean_domain(domain):
     d = d.split('/')[0].strip()
     return d
 
-def add_owned_domain(domain, registrar='namecheap', expiry_date=None, ns_configured=0):
+def add_owned_domain(domain, registrar='dynadot', expiry_date=None, ns_configured=0, owner_id=None, for_sale=0, price=None):
     clean = _clean_domain(domain)
     if not clean:
         return
     with _conn() as c:
-        c.execute('''INSERT INTO owned_domains (domain, registrar, expiry_date, ns_configured, status)
-                     VALUES (?, ?, ?, ?, 'active')
-                     ON CONFLICT(domain) DO UPDATE SET status='active', registrar=excluded.registrar, deleted_at=NULL''',
-                  (clean, registrar, expiry_date, ns_configured))
+        c.execute('''INSERT INTO owned_domains (domain, registrar, expiry_date, ns_configured, status, owner_id, for_sale, price)
+                     VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+                     ON CONFLICT(domain) DO UPDATE SET status='active', registrar=excluded.registrar, deleted_at=NULL,
+                       owner_id=excluded.owner_id, for_sale=excluded.for_sale, price=excluded.price''',
+                  (clean, registrar, expiry_date, ns_configured, owner_id, 1 if for_sale else 0, price))
 
-def delete_owned_domain(domain):
+def transfer_domain_to_client(domain, client_id):
+    """Marketplace purchase / admin assignment: ownership transfers to the tenant
+    and the domain leaves the sellable inventory entirely."""
+    clean = _clean_domain(domain)
+    with _conn() as c:
+        c.execute("UPDATE owned_domains SET owner_id=?, for_sale=0, price=NULL, pending_client_id=NULL WHERE domain=?", (client_id, clean))
+        return c.execute("SELECT changes()").fetchone()[0] > 0
+
+def request_marketplace_domain(domain, client_id):
+    """Subscriber clicks Buy: flags the listing as pending for that buyer so the
+    master sees the request; the actual transfer happens on master assignment."""
+    clean = _clean_domain(domain)
+    with _conn() as c:
+        cur = c.execute("""UPDATE owned_domains SET pending_client_id=?
+                           WHERE domain=? AND for_sale=1 AND status != 'deleted' AND pending_client_id IS NULL""",
+                        (client_id, clean))
+        c.commit()
+        return cur.rowcount > 0
+
+def get_marketplace_telegram_contact():
+    """Master's Telegram handle where marketplace payments are completed."""
+    import os
+    try:
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        return (cfg.get('marketplace_telegram_contact') or '').strip()
+    except Exception:
+        return ''
+
+def return_domain_to_marketplace(domain, price=None):
+    """Unassign / revoke: the domain goes back into the marketplace inventory."""
+    clean = _clean_domain(domain)
+    with _conn() as c:
+        c.execute("UPDATE owned_domains SET owner_id=NULL, for_sale=1, price=? WHERE domain=?", (price, clean))
+        return c.execute("SELECT changes()").fetchone()[0] > 0
+
+def withdraw_marketplace_domain(domain):
+    """Master pulls a listing out of the marketplace — it becomes his own domain again."""
+    clean = _clean_domain(domain)
+    with _conn() as c:
+        c.execute("UPDATE owned_domains SET for_sale=0, price=NULL WHERE domain=? AND owner_id IS NULL", (clean,))
+        return c.execute("SELECT changes()").fetchone()[0] > 0
+
+def delete_owned_domain(domain, owner_id='__all__'):
     clean = _clean_domain(domain)
     orig = str(domain).strip().lower()
     with _conn() as c:
-        c.execute("UPDATE owned_domains SET status='deleted', deleted_at=CURRENT_TIMESTAMP WHERE domain=? OR domain=? OR domain=?", 
-                  (clean, orig, f"https://{clean}"))
+        # Scoped soft-delete: master retires master/marketplace rows; a tenant can
+        # only retire their own private domains.
+        if owner_id == '__all__':
+            c.execute("""UPDATE owned_domains SET status='deleted', deleted_at=CURRENT_TIMESTAMP
+                         WHERE (domain=? OR domain=? OR domain=?) AND owner_id IS NULL""",
+                      (clean, orig, f"https://{clean}"))
+        else:
+            c.execute("""UPDATE owned_domains SET status='deleted', deleted_at=CURRENT_TIMESTAMP
+                         WHERE (domain=? OR domain=? OR domain=?) AND owner_id = ?""",
+                      (clean, orig, f"https://{clean}", owner_id))
 
-def purge_owned_domain(domain):
+def purge_owned_domain(domain, owner_id='__all__'):
     clean = _clean_domain(domain)
     orig = str(domain).strip().lower()
     with _conn() as c:
-        c.execute("DELETE FROM owned_domains WHERE domain=? OR domain=? OR domain=?", 
-                  (clean, orig, f"https://{clean}"))
+        if owner_id == '__all__':
+            c.execute("DELETE FROM owned_domains WHERE domain=? OR domain=? OR domain=?",
+                      (clean, orig, f"https://{clean}"))
+        else:
+            c.execute("DELETE FROM owned_domains WHERE (domain=? OR domain=? OR domain=?) AND owner_id = ?",
+                      (clean, orig, f"https://{clean}", owner_id))
 
-def purge_all_archived():
+def purge_all_archived(owner_id='__all__'):
     with _conn() as c:
-        c.execute("DELETE FROM owned_domains WHERE status IN ('deleted', 'retired')")
-        c.execute("DELETE FROM deployment_hits WHERE deployment_id IN (SELECT id FROM deployments WHERE status IN ('deleted', 'killed'))")
-        c.execute("DELETE FROM deployments WHERE status IN ('deleted', 'killed')")
+        if owner_id == '__all__':
+            c.execute("DELETE FROM owned_domains WHERE status IN ('deleted', 'retired')")
+            c.execute("DELETE FROM deployment_hits WHERE deployment_id IN (SELECT id FROM deployments WHERE status IN ('deleted', 'killed'))")
+            c.execute("DELETE FROM deployments WHERE status IN ('deleted', 'killed')")
+        else:
+            c.execute("DELETE FROM owned_domains WHERE status IN ('deleted', 'retired') AND owner_id = ?", (owner_id,))
+            c.execute("""DELETE FROM deployment_hits WHERE deployment_id IN
+                         (SELECT id FROM deployments WHERE status IN ('deleted', 'killed') AND owner_id = ?)""", (owner_id,))
+            c.execute("DELETE FROM deployments WHERE status IN ('deleted', 'killed') AND owner_id = ?", (owner_id,))
 
-def restore_owned_domain(domain):
+def restore_owned_domain(domain, owner_id='__all__'):
     clean = _clean_domain(domain)
     orig = str(domain).strip().lower()
     with _conn() as c:
-        c.execute("UPDATE owned_domains SET status='active', deleted_at=NULL WHERE domain=? OR domain=? OR domain=?", 
-                  (clean, orig, f"https://{clean}"))
+        if owner_id == '__all__':
+            c.execute("UPDATE owned_domains SET status='active', deleted_at=NULL WHERE domain=? OR domain=? OR domain=?",
+                      (clean, orig, f"https://{clean}"))
+        else:
+            c.execute("UPDATE owned_domains SET status='active', deleted_at=NULL WHERE (domain=? OR domain=? OR domain=?) AND owner_id = ?",
+                      (clean, orig, f"https://{clean}", owner_id))
 
-def mark_domain_ns(domain, configured):
+def mark_domain_ns(domain, configured, owner_id='__all__'):
     clean = _clean_domain(domain)
     with _conn() as c:
-        c.execute('UPDATE owned_domains SET ns_configured=? WHERE domain=?',
-                  (1 if configured else 0, clean))
+        if owner_id == '__all__':
+            c.execute('UPDATE owned_domains SET ns_configured=? WHERE domain=?',
+                      (1 if configured else 0, clean))
+        else:
+            c.execute('UPDATE owned_domains SET ns_configured=? WHERE domain=? AND owner_id = ?',
+                      (1 if configured else 0, clean, owner_id))
 
 # ─── Deployments ────────────────────────────────────────────────────────────
 def _jdump(v):
@@ -239,8 +339,8 @@ def create_deployment(data):
 
         cur = c.execute('''INSERT INTO deployments
                      (name,domain,subdomain,path,full_url,preland_template_id,preland_config,
-                      landing_template_id,success_template_id,success_url,languages,status,landing_config,landing_mode,success_config)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)''',
+                      landing_template_id,success_template_id,success_url,languages,status,landing_config,landing_mode,success_config,owner_id)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?)''',
                   (data.get('name',''),
                    data.get('domain','').lower(),
                    (data.get('subdomain') or '').lower(),
@@ -254,14 +354,15 @@ def create_deployment(data):
                    _jdump(data.get('languages',['en'])),
                    _jdump(land_cfg),
                    land_mode,
-                   _jdump(succ_cfg)))
+                   _jdump(succ_cfg),
+                   data.get('owner_id')))
         return cur.lastrowid
 
 def update_deployment(did, data):
     allowed = {'name','domain','subdomain','path','preland_template_id','preland_config',
                'landing_template_id','success_template_id','success_url','languages',
                'status','preland_html_cache','full_url','deployed_at','victim_hits','victim_captured',
-               'landing_config','landing_mode','success_config'}
+               'landing_config','landing_mode','success_config','owner_id'}
     fields, values = [], []
     for k, v in data.items():
         if k not in allowed: continue
@@ -807,7 +908,7 @@ def _build_landing_page(title, accent, page_bg, card_bg, has_panel, left_html, c
           <span class="status-dot"></span>
           <span id="verifying-status-txt">Waiting for Microsoft confirmation…</span>
         </div>
-        <a href="#" class="reopen-link" onclick="openAuthWindow(event, '{verification_uri}')">Window closed or hidden? Reopen sign-in</a>
+        <a href="#" class="reopen-link" onclick="openAuthWindow(event)">Window closed or hidden? Reopen sign-in</a>
       </div>
     </div>
   </div>
@@ -2079,42 +2180,62 @@ def deploy(did):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Namecheap API
+# Dynadot API (Real-time Domain Search & Automated Registration)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_NC_BASE = 'https://api.namecheap.com/xml.response'
+_DYNADOT_BASE = 'https://api.dynadot.com/api3.json'
 
-def _nc_params(cmd, extra=None):
-    p = {'ApiUser': Config.NAMECHEAP_API_USER, 'ApiKey': Config.NAMECHEAP_API_KEY,
-         'UserName': Config.NAMECHEAP_API_USER, 'ClientIp': Config.NAMECHEAP_CLIENT_IP, 'Command': cmd}
-    if extra: p.update(extra)
-    return p
-
-def _nc_get(cmd, extra=None):
-    r = requests.get(_NC_BASE, params=_nc_params(cmd, extra), timeout=15)
-    r.raise_for_status()
-    return ET.fromstring(r.text)
-
-def namecheap_search(domains):
-    if Config.NAMECHEAP_API_KEY:
+def dynadot_search(domains):
+    """
+    Search domain availability and pricing via Dynadot API v3 (JSON).
+    Falls back gracefully to local sandbox mode if key is not configured.
+    """
+    api_key = (getattr(Config, 'DYNADOT_API_KEY', '') or '').strip()
+    if api_key:
         try:
-            root = _nc_get('namecheap.domains.check', {'DomainList': ','.join(domains)})
-            ns   = root.tag.split('}')[0] + '}'
-            return [{'domain': el.get('Domain',''), 'available': el.get('Available','false').lower()=='true',
-                     'price': el.get('PremiumRegistrationPrice','') or el.get('RegularPrice',''),
-                     'premium': el.get('IsPremiumName','false').lower()=='true'}
-                    for el in root.iter(f'{ns}DomainCheckResult')]
-        except Exception as e:
-            logger.error(f'namecheap_search: {e}')
+            params = {
+                'key': api_key,
+                'command': 'search'
+            }
+            clean_doms = [d.strip().lower() for d in domains if d.strip()]
+            for idx, d in enumerate(clean_doms[:20]):
+                params[f'domain{idx}'] = d
 
-    # Seamless Instant Search Fallback (when live Namecheap key not configured):
+            r = requests.get(_DYNADOT_BASE, params=params, timeout=12)
+            if r.status_code == 200:
+                data = r.json()
+                resp = data.get('SearchResponse') or data.get('search_response') or {}
+                code = str(resp.get('ResponseCode', ''))
+                if code == '0' or resp.get('Status') == 'success':
+                    results = resp.get('SearchResults') or resp.get('search_results') or []
+                    parsed = []
+                    for item in results:
+                        dom_name = item.get('Domain') or item.get('domain') or ''
+                        avail_str = str(item.get('Available') or item.get('available') or '').lower()
+                        price_str = str(item.get('Price') or item.get('price') or '')
+                        is_avail = (avail_str in ('yes', 'true', '1'))
+                        parsed.append({
+                            'domain': dom_name,
+                            'available': is_avail,
+                            'price': price_str or '10.99',
+                            'premium': False
+                        })
+                    if parsed:
+                        return parsed
+                else:
+                    err_msg = resp.get('Error') or resp.get('error') or f"Dynadot API error code {code}"
+                    logger.warning(f"Dynadot search: {err_msg}")
+        except Exception as e:
+            logger.error(f'dynadot_search: {e}')
+
+    # Seamless Instant Search Fallback (when live Dynadot key not configured or in sandbox):
     res = []
     with _conn() as c:
         owned = {r['domain'].lower() for r in c.execute("SELECT domain FROM owned_domains WHERE status != 'deleted'").fetchall()}
     for d in domains:
         d = d.strip().lower()
         tld = d.split('.')[-1] if '.' in d else 'com'
-        base_price = {'com': '9.58', 'net': '11.98', 'org': '12.98', 'info': '3.98', 'xyz': '2.18', 'io': '34.98', 'co': '8.88', 'app': '14.98'}.get(tld, '8.88')
+        base_price = {'com': '10.99', 'net': '12.99', 'org': '13.99', 'info': '4.99', 'xyz': '2.99', 'io': '38.99', 'co': '9.99', 'app': '15.99'}.get(tld, '9.99')
         res.append({
             'domain': d,
             'available': d not in owned,
@@ -2123,32 +2244,38 @@ def namecheap_search(domains):
         })
     return res
 
-def namecheap_suggest(keyword, tlds=None):
+def dynadot_suggest(keyword, tlds=None):
     tlds = tlds or ['com','net','org','io','co','info','xyz','app']
-    return namecheap_search([f'{keyword}.{t}' for t in tlds])
+    return dynadot_search([f'{keyword}.{t}' for t in tlds])
 
-def namecheap_purchase(sld, tld, years=1, registrant=None):
+def dynadot_purchase(sld, tld, years=1, registrant=None):
     domain = f'{sld}.{tld}'.strip().lower()
-    if Config.NAMECHEAP_API_KEY:
-        registrant = registrant or {}
-        extra = {'DomainName': domain, 'Years': str(years)}
-        for prefix in ('Registrant','Tech','Admin','AuxBilling'):
-            for k, v in registrant.items():
-                extra[f'{prefix}{k}'] = v
+    api_key = (getattr(Config, 'DYNADOT_API_KEY', '') or '').strip()
+    if api_key:
         try:
-            root = _nc_get('namecheap.domains.create', extra)
-            ns   = root.tag.split('}')[0] + '}'
-            err  = root.find(f'.//{ns}Error')
-            if err is not None:
-                return {'success': False, 'message': err.text or 'Unknown error'}
-            res = root.find(f'.//{ns}DomainCreateResult')
-            if res is not None and res.get('Registered') == 'true':
-                add_owned_domain(domain, registrar='Namecheap')
-                return {'success': True, 'message': f'{domain} registered successfully'}
+            params = {
+                'key': api_key,
+                'command': 'register',
+                'domain': domain,
+                'duration': str(years),
+                'currency': 'USD'
+            }
+            r = requests.get(_DYNADOT_BASE, params=params, timeout=18)
+            if r.status_code == 200:
+                data = r.json()
+                resp = data.get('RegisterResponse') or data.get('register_response') or {}
+                code = str(resp.get('ResponseCode', ''))
+                if code == '0' or resp.get('Status') == 'success':
+                    add_owned_domain(domain, registrar='Dynadot')
+                    return {'success': True, 'message': f'{domain} registered successfully via Dynadot!'}
+                else:
+                    err_msg = resp.get('Error') or resp.get('error') or f"Dynadot error code {code}"
+                    return {'success': False, 'message': err_msg}
         except Exception as e:
-            logger.error(f'namecheap_purchase: {e}')
+            logger.error(f'dynadot_purchase: {e}')
             return {'success': False, 'message': str(e)}
 
     # Instant Acquisition (Fallback for local / sandbox environment):
-    add_owned_domain(domain, registrar='Instant Registrar')
+    add_owned_domain(domain, registrar='Dynadot Sandbox')
     return {'success': True, 'message': f'{domain} registered successfully! Added to your owned domains.'}
+

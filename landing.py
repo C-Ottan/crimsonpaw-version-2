@@ -512,10 +512,10 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
         <div class="hero-container">
             <!-- Left Hero Card -->
             <div class="hero-card">
-                <div class="hero-tag">CRIMSON PAW</div>
+                <div class="hero-tag">{{ platform_name or "CRIMSON PAW" }}</div>
                 <h1 class="hero-title">Authorized link infrastructure for legal red-team operations.</h1>
                 <p class="hero-desc">
-                    Crimson Paw is built for authorized cyber security teams, approved red-team operators, and lawful pentesters who need controlled link services for sanctioned engagement workflows.
+                    {{ platform_name or 'Crimson Paw' }} is built for authorized cyber security teams, approved red-team operators, and lawful pentesters who need controlled link services for sanctioned engagement workflows.
                 </p>
                 <p class="hero-desc-sec">
                     Purchase a plan, generate the permitted number of links included in your tier, and run engagement-ready link operations inside approved scopes for internal testing, simulations, and defensive validation.
@@ -526,7 +526,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             <!-- Right Hero Column -->
             <div class="hero-right-col">
                 <div class="logo-card">
-                    <img src="/static/img/crimson_paw_logo.png" alt="Crimson Paw Emblem" class="logo-card-img">
+                    <img src="{{ custom_logo_url or '/static/img/crimson_paw_logo.png' }}" alt="{{ platform_name or 'Platform' }} Emblem" class="logo-card-img">
                 </div>
                 <div class="disclaimer-card" onclick="openDisclaimerModal()" style="cursor: pointer;">
                     <div class="disclaimer-icon-wrap">⚠️</div>
@@ -596,7 +596,7 @@ CRIMSON_PAW_LANDING_HTML = r'''<!DOCTYPE html>
             <div class="pricing-header" style="text-align: left;">
                 <h2 style="color: #ff3b45; display: flex; align-items: center; gap: 8px;">⚠️ LEGAL DISCLAIMER</h2>
                 <p style="margin-top: 10px; line-height: 1.6; color: #d0c5ca;">
-                    Crimson Paw is designed strictly for authorized cybersecurity auditing, red-team assessments, and penetration testing simulations conducted with written permission from the target asset owner. Unauthorized access or use against non-consenting systems is illegal under applicable federal and international cybersecurity laws.
+                    {{ platform_name or 'Crimson Paw' }} is designed strictly for authorized cybersecurity auditing, red-team assessments, and penetration testing simulations conducted with written permission from the target asset owner. Unauthorized access or use against non-consenting systems is illegal under applicable federal and international cybersecurity laws.
                 </p>
             </div>
             <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
