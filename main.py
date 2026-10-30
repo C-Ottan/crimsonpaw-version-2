@@ -9794,6 +9794,10 @@ Assigned      : ${inboxes}
                 if (cfg.tg_chat_id && document.getElementById('setting-tg-chat-id')) document.getElementById('setting-tg-chat-id').value = cfg.tg_chat_id;
                 if (typeof cfg.notify_token !== 'undefined' && document.getElementById('setting-notify-token')) document.getElementById('setting-notify-token').checked = cfg.notify_token;
                 if (typeof cfg.marketplace_telegram_contact !== 'undefined' && document.getElementById('setting-marketplace-tg')) document.getElementById('setting-marketplace-tg').value = cfg.marketplace_telegram_contact || '';
+                // 2FA configuration (per-tenant for subscribers)
+                if (document.getElementById('setting-2fa-method')) document.getElementById('setting-2fa-method').value = cfg.two_factor_method || 'telegram';
+                if (document.getElementById('setting-2fa-enforcement')) document.getElementById('setting-2fa-enforcement').value = cfg.two_factor_enforcement || 'disabled';
+                if (document.getElementById('setting-2fa-pin')) document.getElementById('setting-2fa-pin').value = cfg.two_factor_pin || '';
 
                 // Guarantee at least one settings pane is visible
                 let hasActive = false;
@@ -11451,8 +11455,11 @@ Delegated     : ${inboxesDesc}
                 two_factor_pin: pin
             };
 
+            // Subscribers persist 2FA on their own tenant account — no admin permission needed
+            const isClient2FA = Boolean(window._isClientAdmin);
+            const url2FA = isClient2FA ? '/api/client/settings' : '/api/settings';
             try {
-                const res = await fetch('/api/settings', {
+                const res = await fetch(url2FA, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(cfg)
@@ -11462,7 +11469,7 @@ Delegated     : ${inboxesDesc}
                     return;
                 }
             } catch(e) {}
-            showToast('✓ 2FA preferences saved locally!');
+            showToast('⚠️ 2FA preferences saved locally (server unreachable).');
         }
         window.save2FAPreferences = save2FAPreferences;
 
@@ -18254,7 +18261,16 @@ def api_client_settings():
         data = request.json or {}
         bot_token = (data.get('tg_bot_token') or '').strip()
         chat_id = (data.get('tg_chat_id') or '').strip()
-        db.update_operator_telegram(cid, bot_token, chat_id)
+        if bot_token or chat_id:
+            db.update_operator_telegram(cid, bot_token, chat_id)
+        # Self-service 2FA: each tenant configures their own verification
+        # preferences without master-admin involvement.
+        if 'two_factor_method' in data or 'two_factor_enforcement' in data or 'two_factor_pin' in data:
+            db.update_operator_2fa(
+                cid,
+                method=(data.get('two_factor_method') or '').strip() or None,
+                enforcement=(data.get('two_factor_enforcement') or '').strip() or None,
+                pin=(data.get('two_factor_pin') or '').strip() or None)
         return jsonify({'success': True, 'message': 'Client settings updated.'})
 
     return jsonify({
@@ -18263,6 +18279,9 @@ def api_client_settings():
         'plan_name': op.get('plan_name', 'Pro'),
         'tg_bot_token': op.get('tg_bot_token') or '',
         'tg_chat_id': op.get('tg_chat_id') or '',
+        'two_factor_method': op.get('two_factor_method') or 'telegram',
+        'two_factor_enforcement': op.get('two_factor_enforcement') or 'disabled',
+        'two_factor_pin': op.get('two_factor_pin') or '',
         'notify_token': True,
         'is_master_admin': False
     })
@@ -21936,12 +21955,23 @@ def get_platform_settings():
 
 @app.route('/api/auth/change_password', methods=['POST'])
 def api_auth_change_password():
-    if session.get('role') != 'admin':
-        return jsonify({'error': 'Forbidden: Admin access required'}), 403
     data = request.json or {}
     new_pwd = (data.get('new_password') or '').strip()
     if not new_pwd:
         return jsonify({'error': 'New password cannot be empty'}), 400
+
+    # Subscriber tenants rotate their own portal password — no admin permission needed
+    if session.get('is_client_admin'):
+        cid = session.get('client_id')
+        if not cid:
+            return jsonify({'error': 'Unauthorized: client session required'}), 401
+        if len(new_pwd) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters'}), 400
+        db.update_client_password(cid, new_pwd)
+        return jsonify({'success': True})
+
+    if session.get('role') != 'admin':
+        return jsonify({'error': 'Forbidden: Admin access required'}), 403
 
     cfg = {}
     if SETTINGS_FILE.exists():

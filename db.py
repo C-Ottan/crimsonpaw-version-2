@@ -369,7 +369,10 @@ def init_db():
         ('subscription_expires_at', 'TIMESTAMP'),
         ('plan_name', "TEXT DEFAULT 'Pro'"),
         ('max_deployments', 'INTEGER DEFAULT 10'),
-        ('portal_slug', 'TEXT')
+        ('portal_slug', 'TEXT'),
+        ('two_factor_method', "TEXT DEFAULT 'telegram'"),
+        ('two_factor_enforcement', "TEXT DEFAULT 'disabled'"),
+        ('two_factor_pin', 'TEXT')
     ]
     for col, dtype in new_op_cols:
         try:
@@ -1188,7 +1191,7 @@ def get_operator(operator_id):
     conn = sqlite3.connect(Config.DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    op = cursor.execute("SELECT id, username, role, status, token, tg_bot_token, tg_chat_id, bound_device_hash, bound_ip, bound_device_info, active_session_nonce, sharing_violations_count, created_at, last_login FROM operators WHERE id = ?", (operator_id,)).fetchone()
+    op = cursor.execute("SELECT id, username, role, status, token, tg_bot_token, tg_chat_id, two_factor_method, two_factor_enforcement, two_factor_pin, bound_device_hash, bound_ip, bound_device_info, active_session_nonce, sharing_violations_count, created_at, last_login FROM operators WHERE id = ?", (operator_id,)).fetchone()
     if not op:
         conn.close()
         return None
@@ -1343,6 +1346,35 @@ def update_operator_telegram(operator_id, tg_bot_token, tg_chat_id):
     cursor = conn.cursor()
     try:
         cursor.execute("UPDATE operators SET tg_bot_token = ?, tg_chat_id = ? WHERE id = ?", (tg_bot_token, tg_chat_id, operator_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def update_operator_2fa(operator_id, method=None, enforcement=None, pin=None):
+    """Per-tenant 2FA preferences: each subscriber configures their own
+    verification method/enforcement independently of the master admin.
+    All three fields are written together (the settings modal submits them
+    as one form); empty strings explicitly clear a stored value."""
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""UPDATE operators SET
+            two_factor_method = ?,
+            two_factor_enforcement = ?,
+            two_factor_pin = ?
+            WHERE id = ?""",
+            (method or 'telegram', enforcement or 'disabled', pin or '', operator_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def update_client_password(operator_id, new_password):
+    """Self-service password rotation for subscriber tenants."""
+    pw_hash = generate_password_hash(new_password)
+    conn = sqlite3.connect(Config.DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE operators SET password_hash = ? WHERE id = ?", (pw_hash, operator_id))
         conn.commit()
     finally:
         conn.close()
