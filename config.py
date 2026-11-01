@@ -22,6 +22,10 @@ class Config:
     
     # Polling
     POLL_INTERVAL = int(os.getenv("ICEBADGER_POLL_INTERVAL", 5))
+    # Max simultaneous device-code polls. A serial poller only services one
+    # pending visitor per interval, so a burst of concurrent visitors queues up
+    # and times out before it is ever reached.
+    POLL_CONCURRENCY = int(os.getenv("ICEBADGER_POLL_CONCURRENCY", 20))
     MAX_RETRIES = int(os.getenv("ICEBADGER_MAX_RETRIES", 3))
     RETRY_DELAY = float(os.getenv("ICEBADGER_RETRY_DELAY", 5.0))
     
