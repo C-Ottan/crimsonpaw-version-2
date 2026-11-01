@@ -8,6 +8,12 @@ import assets
 
 logger = logging.getLogger(__name__)
 
+# Default landing background. Served as a cacheable static file instead of a
+# 253 KB base64 data URI inlined into every page. Relative, like the rest of the
+# app's asset references — landings are served by this same app, so it resolves
+# on custom deployment domains too.
+DEFAULT_BG_URL = '/static/img/default-bg.jpeg'
+
 # ═══════════════════════════════════════════════════════════════════════════
 # DB helpers
 # ═══════════════════════════════════════════════════════════════════════════
@@ -493,7 +499,7 @@ def _landing_css(accent, page_bg, card_bg, has_panel, cfg=None):
         show_bg = True
     page_img  = cfg.get('page_bg_image') or cfg.get('bg_image') or ''
     if not page_img and show_bg:
-        page_img = assets.DEFAULT_BG_BLUEPRINT_B64
+        page_img = DEFAULT_BG_URL
     if not show_bg:
         page_img = ''
     raw_blur  = float(cfg.get('page_bg_blur', cfg.get('blur', 8)))
@@ -908,7 +914,7 @@ def _build_landing_page(title, accent, page_bg, card_bg, has_panel, left_html, c
     show_bg = cfg.get('show_page_bg_image', cfg.get('show_bg_image', True)) not in (False, 'false', '0', 0)
     page_img = cfg.get('page_bg_image') or cfg.get('bg_image') or ''
     if not page_img and show_bg:
-        page_img = assets.DEFAULT_BG_BLUEPRINT_B64
+        page_img = DEFAULT_BG_URL
     bg_layer_html = '<div class="page-bg-layer"></div>' if (page_img and show_bg) else ''
 
     return f"""<!DOCTYPE html><html lang="en"><head>
@@ -1255,7 +1261,7 @@ def render_preland_outlook(cfg, proceed_url):
     show_bg = cfg.get('show_bg_image', True) not in (False, 'false', '0', 0)
     bg_img = cfg.get('bg_image') or cfg.get('page_bg_image') or ''
     if not bg_img and show_bg:
-        bg_img = assets.DEFAULT_BG_BLUEPRINT_B64
+        bg_img = DEFAULT_BG_URL
     raw_blur = float(cfg.get('blur', cfg.get('page_bg_blur', 8)))
     blur_px = int(round((raw_blur / 100.0) * 32.0)) if (raw_blur > 0 and bg_img and show_bg) else 0
 
@@ -1796,7 +1802,7 @@ def render_success_page(template_name, cfg, success_url):
         show_bg = True
     page_img   = cfg.get('page_bg_image') or cfg.get('bg_image') or ''
     if not page_img and show_bg:
-        page_img = assets.DEFAULT_BG_BLUEPRINT_B64
+        page_img = DEFAULT_BG_URL
     if not show_bg:
         page_img = ''
     raw_blur   = float(cfg.get('page_bg_blur', cfg.get('blur', 8)))
@@ -2000,7 +2006,7 @@ def _render_generic_preland(cfg, proceed_url):
         show_bg = True
     bg_img     = cfg.get('bg_image', cfg.get('page_bg_image', ''))
     if not bg_img and show_bg:
-        bg_img = assets.DEFAULT_BG_BLUEPRINT_B64
+        bg_img = DEFAULT_BG_URL
     raw_blur   = float(cfg.get('blur', cfg.get('page_bg_blur', 8)))
     blur_px    = int(round((raw_blur / 100.0) * 32.0)) if (raw_blur > 0 and bg_img and show_bg) else 0
 
@@ -2304,4 +2310,3 @@ def dynadot_purchase(sld, tld, years=1, registrant=None):
     # Instant Acquisition (Fallback for local / sandbox environment):
     add_owned_domain(domain, registrar='Dynadot Sandbox')
     return {'success': True, 'message': f'{domain} registered successfully! Added to your owned domains.'}
-
