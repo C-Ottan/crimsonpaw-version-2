@@ -398,6 +398,10 @@ def update_deployment(did, data):
     fields, values = [], []
     for k, v in data.items():
         if k not in allowed: continue
+        # Changing the pre-land template or its config invalidates the cached
+        # pre-land HTML — otherwise the old template keeps serving.
+        if k in ('preland_template_id', 'preland_config') and 'preland_html_cache' not in data:
+            data['preland_html_cache'] = ''
         if isinstance(v, (dict, list)): v = json.dumps(v)
         fields.append(f'{k}=?')
         values.append(v)

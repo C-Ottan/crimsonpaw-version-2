@@ -6854,6 +6854,15 @@ Assigned      : ${inboxes}
             }
         };
 
+        // Aliases: preland_templates names -> preset keys. Without these the
+        // dropdown names ("Adobe Sign", "Dropbox Share", ...) miss the preset
+        // lookup and silently fall back to the Microsoft 365 preset — wrong
+        // colours and wrong copy on every affected pre-land.
+        LG_PRESETS['Adobe Sign']         = LG_PRESETS['Adobe'];
+        LG_PRESETS['Dropbox Share']      = LG_PRESETS['Dropbox'];
+        LG_PRESETS['SharePoint Request'] = LG_PRESETS['SharePoint'];
+        LG_PRESETS['OneDrive Share']     = LG_PRESETS['OneDrive'];
+
         let _studioDraftSaveTimer = null;
         function debouncedSaveStudioDraft() {
             clearTimeout(_studioDraftSaveTimer);
