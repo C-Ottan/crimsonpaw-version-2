@@ -1909,11 +1909,14 @@ def unassign_domain_from_client(client_id, domain):
         conn.close()
 
 def get_client_assigned_domains(client_id):
-    """Returns list of domains assigned to a specific client subscriber."""
+    """Domains owned by a client subscriber. Admin assignment and BYOD both
+    write owned_domains.owner_id — the legacy client_domain_assignments table
+    is no longer written to, so reading it here made every assigned domain
+    fail the Link Studio check with "not allocated to your account"."""
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT domain FROM client_domain_assignments WHERE client_id = ? ORDER BY domain ASC", (client_id,))
+        cursor.execute("SELECT domain FROM owned_domains WHERE owner_id = ? AND status != 'deleted' ORDER BY domain ASC", (client_id,))
         return [r[0] for r in cursor.fetchall()]
     except Exception as e:
         logger.error(f"[SUBSCRIBER] Error fetching client domains: {e}")
