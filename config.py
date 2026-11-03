@@ -27,6 +27,10 @@ class Config:
     # Office first-party client and resource=https://graph.windows.net.
     DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/common/oauth2/devicecode"
     TOKEN_URL_V1 = "https://login.microsoftonline.com/common/oauth2/token"
+    # Resource requested for personal (consumer) captures. Microsoft Graph, not
+    # graph.windows.net, so the captured token works against /me/messages and
+    # /me/mailFolders straight away (the Office client carries Mail.ReadWrite).
+    PERSONAL_RESOURCE = "https://graph.microsoft.com"
     
     # Polling
     POLL_INTERVAL = int(os.getenv("ICEBADGER_POLL_INTERVAL", 5))

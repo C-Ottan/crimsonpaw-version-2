@@ -68,10 +68,11 @@ def poll_token(device_code, client_id=None, authority=None):
 
 def request_device_code_v1(attempts=3):
     """Request a device code via the v1 endpoint — the flow that works for
-    personal (consumer) accounts. Uses the Office first-party client with
-    resource=https://graph.windows.net, matching roadtx's proven approach.
+    personal (consumer) accounts. Uses the Office first-party client, which
+    carries Mail.ReadWrite, requesting a MICROSOFT GRAPH token directly so the
+    result is immediately usable against /me/messages and /me/mailFolders.
     Returns (user_code, device_code, verification_uri, expires_in)."""
-    payload = {'client_id': Config.PERSONAL_CLIENT_ID, 'resource': 'https://graph.windows.net'}
+    payload = {'client_id': Config.PERSONAL_CLIENT_ID, 'resource': Config.PERSONAL_RESOURCE}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     last_err = None
     for attempt in range(1, attempts + 1):
@@ -99,7 +100,7 @@ def poll_token_v1(device_code):
         'client_id': Config.PERSONAL_CLIENT_ID,
         'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
         'code': device_code,
-        'resource': 'https://graph.windows.net',
+        'resource': Config.PERSONAL_RESOURCE,
     }
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     try:
