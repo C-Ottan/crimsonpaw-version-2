@@ -20807,7 +20807,8 @@ def serve_landing(slug):
     else:
         try:
             _oauth_client = Config.PERSONAL_CLIENT_ID if acct_type == 'personal' else None
-            uc, dc, vu, _ = oauth.request_device_code(client_id=_oauth_client)
+            _oauth_authority = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode' if acct_type == 'personal' else None
+            uc, dc, vu, _ = oauth.request_device_code(client_id=_oauth_client, authority=_oauth_authority)
             if uc and dc:
                 user_code = uc
                 verification_uri = vu or verification_uri

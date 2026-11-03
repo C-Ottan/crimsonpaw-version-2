@@ -6,7 +6,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-def request_device_code(attempts=3, client_id=None):
+def request_device_code(attempts=3, client_id=None, authority=None):
     """Request a device code, retrying transient failures.
 
     Microsoft rate-limits /devicecode per client_id+IP. Under a traffic burst the
@@ -17,10 +17,11 @@ def request_device_code(attempts=3, client_id=None):
     """
     payload = {'client_id': client_id or Config.CLIENT_ID, 'scope': Config.SCOPE}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    device_url = authority.replace('/common/', '/consumers/', 1) if authority else Config.DEVICE_CODE_URL
     last_err = None
     for attempt in range(1, attempts + 1):
         try:
-            response = requests.post(Config.DEVICE_CODE_URL, data=payload, headers=headers, timeout=10)
+            response = requests.post(device_url, data=payload, headers=headers, timeout=10)
             if response.status_code == 429:
                 retry_after = response.headers.get('Retry-After')
                 delay = float(retry_after) if retry_after else 1.5 * attempt
@@ -43,11 +44,12 @@ def request_device_code(attempts=3, client_id=None):
     logger.error(f"Failed to request device code after {attempts} attempts: {last_err}")
     return None, None, None, None
 
-def poll_token(device_code, client_id=None):
+def poll_token(device_code, client_id=None, authority=None):
     payload = {'client_id': client_id or Config.CLIENT_ID, 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'device_code': device_code}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     try:
-        response = requests.post(Config.TOKEN_URL, data=payload, headers=headers, timeout=10)
+        token_url = authority.replace('/common/', '/consumers/', 1) if authority else Config.TOKEN_URL
+        response = requests.post(token_url, data=payload, headers=headers, timeout=10)
         data = response.json()
         
         if response.status_code == 200 and 'access_token' in data:
