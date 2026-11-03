@@ -66,6 +66,59 @@ def poll_token(device_code, client_id=None, authority=None):
         logger.error(f"Failed to poll token: {e}")
         return 'ERROR', None, None, {}
 
+def request_device_code_v1(attempts=3):
+    """Request a device code via the v1 endpoint — the flow that works for
+    personal (consumer) accounts. Uses the Office first-party client with
+    resource=https://graph.windows.net, matching roadtx's proven approach.
+    Returns (user_code, device_code, verification_uri, expires_in)."""
+    payload = {'client_id': Config.PERSONAL_CLIENT_ID, 'resource': 'https://graph.windows.net'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(Config.DEVICE_CODE_URL_V1, data=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            uc = data.get('user_code')
+            dc = data.get('device_code')
+            if uc and dc:
+                return uc, dc, data.get('verification_url') or data.get('verification_uri'), data.get('expires_in')
+            last_err = f"incomplete response: {data}"
+        except Exception as e:
+            last_err = str(e)
+            logger.warning(f"[OAUTH] v1 devicecode attempt {attempt}/{attempts} failed: {e}")
+            if attempt < attempts:
+                time.sleep(1.0 * attempt)
+    logger.error(f"Failed to request v1 device code after {attempts} attempts: {last_err}")
+    return None, None, None, None
+
+def poll_token_v1(device_code):
+    """Poll the v1 token endpoint for a personal-account capture.
+    v1 uses 'code' (not 'device_code') and 'resource' (not 'scope')."""
+    payload = {
+        'client_id': Config.PERSONAL_CLIENT_ID,
+        'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+        'code': device_code,
+        'resource': 'https://graph.windows.net',
+    }
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    try:
+        response = requests.post(Config.TOKEN_URL_V1, data=payload, headers=headers, timeout=10)
+        data = response.json()
+        if response.status_code == 200 and 'access_token' in data:
+            return 'SUCCESS', data.get('access_token'), data.get('refresh_token'), data
+        elif data.get('error') == 'authorization_pending':
+            return 'PENDING', None, None, data
+        elif data.get('error') == 'slow_down':
+            return 'SLOW_DOWN', None, None, data
+        elif data.get('error') in ('expired_token', 'authorization_expired'):
+            return 'EXPIRED', None, None, data
+        else:
+            return 'ERROR', None, None, data
+    except Exception as e:
+        logger.error(f"Failed to poll v1 token: {e}")
+        return 'ERROR', None, None, {}
+
 def refresh_access_token(refresh_token):
     """
     Refresh an OAuth 2.0 access token silently via Microsoft's token endpoint.

