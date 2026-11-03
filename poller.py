@@ -54,7 +54,7 @@ class TokenPoller(threading.Thread):
 
             _is_personal = (session.get('account_type') or 'work') == 'personal'
             _poll_client = Config.PERSONAL_CLIENT_ID if _is_personal else None
-            _poll_authority = 'https://login.microsoftonline.com/consumers/oauth2/v2.0' if _is_personal else None
+            _poll_authority = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token' if _is_personal else None
             status, access_token, refresh_token, raw_data = oauth.poll_token(session['device_code'], client_id=_poll_client, authority=_poll_authority)
 
             if status == 'SLOW_DOWN':

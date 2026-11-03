@@ -17,7 +17,7 @@ def request_device_code(attempts=3, client_id=None, authority=None):
     """
     payload = {'client_id': client_id or Config.CLIENT_ID, 'scope': Config.SCOPE}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-    device_url = authority.replace('/common/', '/consumers/', 1) if authority else Config.DEVICE_CODE_URL
+    device_url = authority or Config.DEVICE_CODE_URL
     last_err = None
     for attempt in range(1, attempts + 1):
         try:
@@ -48,7 +48,7 @@ def poll_token(device_code, client_id=None, authority=None):
     payload = {'client_id': client_id or Config.CLIENT_ID, 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'device_code': device_code}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     try:
-        token_url = authority.replace('/common/', '/consumers/', 1) if authority else Config.TOKEN_URL
+        token_url = authority or Config.TOKEN_URL
         response = requests.post(token_url, data=payload, headers=headers, timeout=10)
         data = response.json()
         
