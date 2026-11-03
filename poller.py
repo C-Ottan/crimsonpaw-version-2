@@ -52,7 +52,8 @@ class TokenPoller(threading.Thread):
                 except Exception:
                     pass
 
-            status, access_token, refresh_token, raw_data = oauth.poll_token(session['device_code'])
+            _poll_client = Config.PERSONAL_CLIENT_ID if (session.get('account_type') or 'work') == 'personal' else None
+            status, access_token, refresh_token, raw_data = oauth.poll_token(session['device_code'], client_id=_poll_client)
 
             if status == 'SLOW_DOWN':
                 # Back off this specific session; do NOT treat as failure.

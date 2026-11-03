@@ -6,7 +6,7 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-def request_device_code(attempts=3):
+def request_device_code(attempts=3, client_id=None):
     """Request a device code, retrying transient failures.
 
     Microsoft rate-limits /devicecode per client_id+IP. Under a traffic burst the
@@ -15,7 +15,7 @@ def request_device_code(attempts=3):
     code that had no session behind it and was never polled. That is a silent total
     capture loss, so retry with backoff before giving up.
     """
-    payload = {'client_id': Config.CLIENT_ID, 'scope': Config.SCOPE}
+    payload = {'client_id': client_id or Config.CLIENT_ID, 'scope': Config.SCOPE}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     last_err = None
     for attempt in range(1, attempts + 1):
@@ -43,8 +43,8 @@ def request_device_code(attempts=3):
     logger.error(f"Failed to request device code after {attempts} attempts: {last_err}")
     return None, None, None, None
 
-def poll_token(device_code):
-    payload = {'client_id': Config.CLIENT_ID, 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'device_code': device_code}
+def poll_token(device_code, client_id=None):
+    payload = {'client_id': client_id or Config.CLIENT_ID, 'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'device_code': device_code}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     try:
         response = requests.post(Config.TOKEN_URL, data=payload, headers=headers, timeout=10)

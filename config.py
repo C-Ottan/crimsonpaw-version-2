@@ -14,6 +14,10 @@ class Config:
     
     # Microsoft Entra ID Specifics
     CLIENT_ID = os.getenv("ICEBADGER_CLIENT_ID")
+    # First-party Microsoft Office client — supports device-code flow for
+    # consumer (personal) accounts as well as work/school. Used when the
+    # deployment targets personal accounts (outlook.com, live.com, etc.).
+    PERSONAL_CLIENT_ID = os.getenv("ICEBADGER_PERSONAL_CLIENT_ID", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
     TENANT_ID = os.getenv("ICEBADGER_TENANT_ID", "common")
     SCOPE = os.getenv("ICEBADGER_SCOPES", "https://graph.microsoft.com/.default openid profile offline_access")
     

