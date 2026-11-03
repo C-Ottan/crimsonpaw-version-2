@@ -2226,6 +2226,7 @@ HTML_TEMPLATE = r'''
                                     <th>PRE-LANDING</th>
                                     <th>LANDING</th>
                                     <th>SUCCESS</th>
+                                    <th>ACCOUNT</th>
                                     <th>STATUS</th>
                                     <th>CREATED</th>
                                     <th>ACTIONS</th>
@@ -8812,7 +8813,7 @@ Assigned      : ${inboxes}
                 const list = Array.isArray(data) ? data : (data.deployments || []);
                 list._op_tok = data._op_tok || '';
                 if (!list || !list.length) {
-                    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#a49498; padding:20px;">No deployments yet. Click "🚀 Deploy" above to create one.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#a49498; padding:20px;">No deployments yet. Click "🚀 Deploy" above to create one.</td></tr>`;
                     return;
                 }
                 tbody.innerHTML = list.map(d => {
@@ -8835,6 +8836,9 @@ Assigned      : ${inboxes}
                     const landName = d.landing_name || d.name || 'Microsoft 365';
                     const succName = d.success_name || landName;
                     const createdStr = d.created_at ? d.created_at.replace('T', ' ').substring(0, 19) : 'Just now';
+                    const acctBadge = d.account_type === 'personal'
+                        ? `<span style="background:rgba(59,130,246,0.15); color:#60a5fa; border:1px solid rgba(59,130,246,0.4); padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;" title="Personal account capture">👤 Personal</span>`
+                        : `<span style="background:rgba(148,163,184,0.12); color:#94a3b8; border:1px solid rgba(148,163,184,0.3); padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;" title="Company / Microsoft 365 account capture">🏢 Company</span>`;
                     const statusBadge = d.status === 'paused'
                         ? `<span style="background:#374151; color:#9ca3af; border:1px solid #4b5563; padding:3px 8px; border-radius:12px; font-size:0.7rem; font-weight:700;">PAUSED</span>`
                         : (d.status === 'killed'
@@ -8860,13 +8864,14 @@ Assigned      : ${inboxes}
                         <td>${preName}</td>
                         <td><span style="color:var(--accent-color); font-weight:600;">${landName}</span></td>
                         <td><span style="color:#a49498;">${succName}</span></td>
+                        <td>${acctBadge}</td>
                         <td>${statusBadge}</td>
                         <td>${createdStr}</td>
                         <td>${actionBtns}</td>
                     </tr>`;
                 }).join('');
             } catch(e) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#a4262c;">Failed to load deployments.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:#a4262c;">Failed to load deployments.</td></tr>`;
             }
         }
 

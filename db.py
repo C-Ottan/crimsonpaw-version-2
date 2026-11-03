@@ -892,6 +892,21 @@ def get_graph_access_token(session):
     expiry    = session.get('access_token_expiry') or 0
     now_ts    = int(time.time())
 
+    # ── Personal (consumer) accounts ─────────────────────────────
+    # The v1 capture token is scoped to graph.windows.net — MS Graph
+    # rejects it. The FOCI-pivoted teams_token (msgraph audience) is the
+    # correct credential for Mail/Profile access. There is no PRT for
+    # consumer accounts, so we return the teams_token directly.
+    if (session.get('account_type') or 'work') == 'personal':
+        if session.get('teams_token'):
+            try:
+                token_data = json.loads(session['teams_token'])
+                if isinstance(token_data, dict) and 'access_token' in token_data:
+                    return token_data['access_token']
+            except Exception:
+                pass
+        return session.get('access_token')
+
     # Check failure cooldown (10 minutes) to avoid repeated roadtx subprocess blocking
     in_cooldown = user_code and (now_ts < _failed_refresh_cooldown.get(user_code, 0))
 
