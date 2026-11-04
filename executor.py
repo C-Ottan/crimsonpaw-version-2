@@ -6,6 +6,8 @@ import datetime
 import subprocess
 import logging
 import threading
+import shutil
+import sys
 import db
 
 logger = logging.getLogger(__name__)
@@ -52,7 +54,13 @@ def run_roadtx(args, victim_path, log_stdout=True):
     material (e.g. the raw PRT from `roadtx prt`).
     """
     os.makedirs(victim_path, exist_ok=True)
-    cmd = ['roadtx'] + args
+    # Resolve the binary explicitly: the systemd unit's PATH does not include
+    # the venv bin dir, so a bare 'roadtx' raises FileNotFoundError and every
+    # PRT refresh fails. Prefer the venv copy next to the running interpreter.
+    _rtx = os.path.join(os.path.dirname(sys.executable), 'roadtx')
+    if not os.path.exists(_rtx):
+        _rtx = shutil.which('roadtx') or 'roadtx'
+    cmd = [_rtx] + args
     logger.info(f"Running: {' '.join(cmd)}")
 
     try:
