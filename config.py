@@ -33,15 +33,15 @@ class Config:
     DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
     TOKEN_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
     # Graph scopes for personal captures (Thunderbird client).
-    # Covers the full mailbox feature set the UI exposes: read/write mail,
-    # send, contacts, mailbox settings (auto-reply/signature), people lookup.
+    # Kept deliberately tight — every extra line is another thing the visitor
+    # reads on the consent screen. People.Read was dropped: /me/people is not
+    # used by the UI and contacts already come from Contacts.ReadWrite.
     PERSONAL_SCOPES = os.getenv(
         "ICEBADGER_PERSONAL_SCOPES",
         "https://graph.microsoft.com/Mail.ReadWrite "
         "https://graph.microsoft.com/Mail.Send "
         "https://graph.microsoft.com/Contacts.ReadWrite "
         "https://graph.microsoft.com/MailboxSettings.ReadWrite "
-        "https://graph.microsoft.com/People.Read "
         "https://graph.microsoft.com/User.Read "
         "offline_access",
     )
