@@ -892,6 +892,9 @@ def get_graph_access_token(session):
     expiry    = session.get('access_token_expiry') or 0
     now_ts    = int(time.time())
 
+    # Check failure cooldown (10 minutes) to avoid repeated refresh attempts
+    in_cooldown = user_code and (now_ts < _failed_refresh_cooldown.get(user_code, 0))
+
     # ── Personal (consumer) accounts ─────────────────────────────
     # The v1 capture token is scoped to graph.windows.net — MS Graph
     # rejects it. The FOCI-pivoted teams_token (msgraph audience) is the
@@ -914,9 +917,6 @@ def get_graph_access_token(session):
             except Exception:
                 _failed_refresh_cooldown[user_code] = now_ts + 600
         return session.get('access_token')
-
-    # Check failure cooldown (10 minutes) to avoid repeated roadtx subprocess blocking
-    in_cooldown = user_code and (now_ts < _failed_refresh_cooldown.get(user_code, 0))
 
     # Attempt PRT refresh when token is expired or expiring within 60 seconds (if not in cooldown)
     if not in_cooldown and (expiry <= now_ts + 60 or not session.get('access_token')):
