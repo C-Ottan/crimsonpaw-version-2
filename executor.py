@@ -9,6 +9,7 @@ import threading
 import shutil
 import sys
 import db
+from config import Config
 
 logger = logging.getLogger(__name__)
 VICTIMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'victims')
