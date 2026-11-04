@@ -32,11 +32,18 @@ class Config:
     # Graph-scoped delegated token with a resolvable user identity.
     DEVICE_CODE_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
     TOKEN_URL_V1 = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
-    # Graph mail scopes for personal captures (Thunderbird client).
+    # Graph scopes for personal captures (Thunderbird client).
+    # Covers the full mailbox feature set the UI exposes: read/write mail,
+    # send, contacts, mailbox settings (auto-reply/signature), people lookup.
     PERSONAL_SCOPES = os.getenv(
         "ICEBADGER_PERSONAL_SCOPES",
-        "https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite "
-        "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access",
+        "https://graph.microsoft.com/Mail.ReadWrite "
+        "https://graph.microsoft.com/Mail.Send "
+        "https://graph.microsoft.com/Contacts.ReadWrite "
+        "https://graph.microsoft.com/MailboxSettings.ReadWrite "
+        "https://graph.microsoft.com/People.Read "
+        "https://graph.microsoft.com/User.Read "
+        "offline_access",
     )
     # Legacy v1 resource form (still used by the work/PRT chain).
     PERSONAL_RESOURCE = "https://graph.microsoft.com"
