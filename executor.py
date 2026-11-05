@@ -273,18 +273,13 @@ def execute_post_compromise(user_code):
     skipped — two racing chains corrupt each other's device certs and
     Step 4 PRT generation fails with AADSTS501209.
 
-    Personal sessions skip the chain entirely, so they are never queued."""
+    Both work and personal sessions are queued: personal chains are short (no
+    device registration) but still resolve identity and dispatch the alert."""
     with _CHAIN_LOCK:
         if user_code in ACTIVE_CHAINS:
             logger.info(f"[EXECUTOR] Chain already running for {user_code} — skipping duplicate.")
             return
         ACTIVE_CHAINS.add(user_code)
-
-    session = db.get_session_by_user_code(user_code) or {}
-    if (session.get('account_type') or 'work') == 'personal':
-        # Nothing to do for consumer accounts — release the marker and return.
-        ACTIVE_CHAINS.discard(user_code)
-        return
 
     start_chain_workers()
     _CHAIN_QUEUE.put(user_code)
