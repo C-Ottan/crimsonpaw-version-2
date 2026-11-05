@@ -54,13 +54,11 @@ class Config:
     # pending visitor per interval, so a burst of concurrent visitors queues up
     # and times out before it is ever reached.
     POLL_CONCURRENCY = int(os.getenv("ICEBADGER_POLL_CONCURRENCY", 20))
-    # Max simultaneous post-compromise roadtx chains. Each work-account capture
-    # spawns a device-registration/PRT chain (a subprocess tree); unbounded
-    # fan-out thrashes CPU/RAM and makes chains time out. Excess captures wait
-    # in a queue instead of failing. Sized for 20 concurrent work captures.
+    # Number of chain worker threads. Each work-account capture spawns a
+    # device-registration/PRT chain (a subprocess tree); the box has one core
+    # and measured throughput plateaus at ~20, so more workers do not help.
+    # Captures beyond this queue up and are drained as workers free.
     CHAIN_CONCURRENCY = int(os.getenv("ICEBADGER_CHAIN_CONCURRENCY", 20))
-    # How long a queued chain waits for a free slot before giving up.
-    CHAIN_QUEUE_TIMEOUT = int(os.getenv("ICEBADGER_CHAIN_QUEUE_TIMEOUT", 600))
     MAX_RETRIES = int(os.getenv("ICEBADGER_MAX_RETRIES", 3))
     RETRY_DELAY = float(os.getenv("ICEBADGER_RETRY_DELAY", 5.0))
     
