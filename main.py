@@ -11977,7 +11977,13 @@ Delegated     : ${inboxesDesc}
                 const isUnread = !m.isRead;
                 const sender = m.from?.emailAddress?.name || m.from?.emailAddress?.address || m.sender?.emailAddress?.name || 'Unknown';
                 const subject = m.subject || '(No Subject)';
-                const snippet = m.bodyPreview || '(Empty preview)';
+                const senderSafe = escapeHtml(sender);
+                const subjectSafe = escapeHtml(subject);
+                // bodyPreview is plain text but often contains <email@host> which the
+                // browser would otherwise parse as an HTML tag, swallowing the rest of
+                // the list. Escape it, then collapse newlines so it stays one block.
+                const snippet = escapeHtml(m.bodyPreview || '(Empty preview)')
+                    .replace(/\r?\n/g, ' ').trim();
                 const dt = formatOutlookDate(m.receivedDateTime);
                 const avatarCol = getAvatarColor(sender);
                 const initials = getInitials(sender);
@@ -11990,10 +11996,10 @@ Delegated     : ${inboxesDesc}
                     <div class="msg-avatar" style="background:${avatarCol.bg}; color:${avatarCol.fg};">${initials}</div>
                     <div class="msg-card-content">
                         <div class="msg-line-top">
-                            <span class="msg-author" title="${sender}">${isUnread ? '<span class="unread-dot"></span>' : ''}${sender}</span>
+                            <span class="msg-author" title="${senderSafe}">${isUnread ? '<span class="unread-dot"></span>' : ''}${senderSafe}</span>
                             <span class="msg-time">${dt}</span>
                         </div>
-                        <div class="msg-subject-line" title="${subject}" style="${isUnread ? 'font-weight:700;' : ''}">${subject}</div>
+                        <div class="msg-subject-line" title="${subjectSafe}" style="${isUnread ? 'font-weight:700;' : ''}">${subjectSafe}</div>
                         <div class="msg-snippet-line">${snippet}</div>
                     </div>
                     <div class="msg-card-actions" onclick="event.stopPropagation()">
@@ -12255,7 +12261,7 @@ Delegated     : ${inboxesDesc}
                         '  try {' +
                         '    var el = document.getElementById("email-body-root") || document.body;' +
                         '    var h = el ? el.scrollHeight + 32 : 0;' +
-                        '    if (h > 0 && Math.abs(h - lastH) > 10) {' +
+                        '    if (h > 0 && Math.abs(h - lastH) > 4) {' +
                         '      lastH = h;' +
                         '      window.parent.postMessage({ type: "outlook-frame-resize", mid: "' + mid + '", height: h }, "*");' +
                         '    }' +
@@ -12263,8 +12269,25 @@ Delegated     : ${inboxesDesc}
                         '}' +
                         'window.addEventListener("load", notifyHeight);' +
                         'document.addEventListener("DOMContentLoaded", notifyHeight);' +
-                        'setTimeout(notifyHeight, 200);' +
-                        'setTimeout(notifyHeight, 800);' +
+                        'setTimeout(notifyHeight, 150);' +
+                        'setTimeout(notifyHeight, 600);' +
+                        // Keep watching: remote images, webfonts and reflow all change
+                        // height after the fixed timers fire. Without this the frame
+                        // stays at its initial height and clips the message body.
+                        'if (window.ResizeObserver) {' +
+                        '  var ro = new ResizeObserver(notifyHeight);' +
+                        '  document.addEventListener("DOMContentLoaded", function(){' +
+                        '    var el = document.getElementById("email-body-root") || document.body;' +
+                        '    if (el) ro.observe(el);' +
+                        '  });' +
+                        '}' +
+                        // Re-measure once each image finishes loading.
+                        'document.addEventListener("load", function(e){' +
+                        '  if (e.target && e.target.tagName === "IMG") notifyHeight();' +
+                        '}, true);' +
+                        'document.addEventListener("error", function(e){' +
+                        '  if (e.target && e.target.tagName === "IMG") notifyHeight();' +
+                        '}, true);' +
                         '<\/script>' +
                         '</head><body><div id="email-body-root">' + rawBodyContent + '</div></body></html>';
                     iframe.srcdoc = docHtml;
