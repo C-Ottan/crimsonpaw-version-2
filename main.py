@@ -3585,6 +3585,7 @@ HTML_TEMPLATE = r'''
 
                 {% if not is_client_admin and user_role != 'operator' %}
                 <!-- TAB 4: Theme & Appearance (Master Host Only) -->
+                {% endif %}
                 <!-- TAB: Backup & Restore (per-tenant, independent) -->
                 <div id="settings-pane-backup" style="display: none; width: 100%; box-sizing: border-box;">
                     <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
@@ -3617,6 +3618,7 @@ HTML_TEMPLATE = r'''
                     </div>
                 </div>
 
+                {% if not is_client_admin and user_role != 'operator' %}
                 <div id="settings-pane-theme" style="display: none; width: 100%; box-sizing: border-box;">
                     <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--accent-color); text-transform: uppercase; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
                         <span>🛡️</span> MASTER HOST EXCLUSIVE CONTROLS
