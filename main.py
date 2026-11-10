@@ -22813,7 +22813,7 @@ def api_backup_restore():
     import backup
     owner = _backup_owner()
     try:
-        name = (request.form.get('name') or '').strip()
+        name = (request.form.get('name') or (request.json or {}).get('name') or '').strip()
         if name:
             path = os.path.join(backup.BACKUP_DIR, os.path.basename(name))
             if not os.path.exists(path):
