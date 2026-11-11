@@ -12454,6 +12454,33 @@ Delegated     : ${inboxesDesc}
                 rawBodyContent = rawBodyContent.replace(/src="\/\//gi, 'src="https://');
                 rawBodyContent = rawBodyContent.replace(/src='\/\//gi, "src='https://");
 
+                // Many senders ship a COMPLETE html document (<html><head><style>…).
+                // Nesting that inside our wrapper <div> is invalid and silently drops
+                // every rule in <head> — the message renders as unstyled text with
+                // clipped fixed-width tables. Split it: head styles go into the
+                // wrapper head, the body contents become the body.
+                let bodyHeadExtra = '';
+                let bodyAttrs = '';
+                if (/<html[\s>]/i.test(rawBodyContent) || /<body[\s>]/i.test(rawBodyContent)) {
+                    const headMatch = rawBodyContent.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+                    if (headMatch) {
+                        bodyHeadExtra = headMatch[1]
+                            .replace(/<meta[^>]*>/gi, '')
+                            .replace(/<title[^>]*>[\s\S]*?<\/title>/gi, '');
+                    }
+                    const bodyOpen = rawBodyContent.match(/<body([^>]*)>/i);
+                    if (bodyOpen) bodyAttrs = bodyOpen[1] || '';
+                    const bodyMatch = rawBodyContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+                    if (bodyMatch) {
+                        rawBodyContent = bodyMatch[1];
+                    } else {
+                        // No closing </body> — take everything after the open tag.
+                        rawBodyContent = rawBodyContent
+                            .replace(/[\s\S]*?<body[^>]*>/i, '')
+                            .replace(/<\/html>[\s\S]*$/i, '');
+                    }
+                }
+
                 const isDelFolder = (currentOutlookFolderName || '').toLowerCase().includes('delete') || (currentOutlookFolderName || '').toLowerCase().includes('trash');
                 const deletedBannerHtml = isDelFolder
                     ? `<div class="reader-deleted-banner">
@@ -12527,10 +12554,18 @@ Delegated     : ${inboxesDesc}
                         'body { padding: 18px 24px; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 14.5px; line-height: 1.6; color: #201f1e; word-break: break-word; overflow-y: hidden; }' +
                         '#email-body-root { overflow: hidden; }' +
                         'img { max-width: 100% !important; height: auto !important; }' +
+                        // Fixed-width marketing layouts (600/700px tables) overflow the
+                        // reader pane and get clipped. Contain them without collapsing
+                        // the percentage-width wrapper tables most senders rely on.
                         'table { max-width: 100% !important; }' +
+                        'td, th { word-break: break-word; }' +
+                        'div, table, tbody, tr, td { box-sizing: border-box; }' +
+                        '#email-body-root { max-width: 100%; overflow-x: auto; }' +
                         'pre { white-space: pre-wrap !important; word-break: break-word !important; font-family: Consolas, monospace; font-size: 12px; }' +
                         'a { color: #0078d4; }' +
                         '</style>' +
+                        // Styles lifted out of the message's own <head>.
+                        (bodyHeadExtra || '') +
                         '<script>' +
                         'var lastH = 0;' +
                         'function notifyHeight() {' +
@@ -12565,7 +12600,7 @@ Delegated     : ${inboxesDesc}
                         '  if (e.target && e.target.tagName === "IMG") notifyHeight();' +
                         '}, true);' +
                         '<\/script>' +
-                        '</head><body><div id="email-body-root">' + rawBodyContent + '</div></body></html>';
+                        '</head><body' + (bodyAttrs ? ' ' + bodyAttrs : '') + '><div id="email-body-root">' + rawBodyContent + '</div></body></html>';
                     iframe.srcdoc = docHtml;
                 }
             } catch (err) {
