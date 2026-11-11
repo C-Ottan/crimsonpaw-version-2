@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'backups')
 
+# Victim artifact folders live beside the project, not beside whatever DB file
+# happens to be in use (tests copy the DB to /tmp).
+VICTIMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'victims')
+
 # Tables that hold tenant data, with the column used to scope them.
 # `None` means the table is scoped indirectly (see _scoped_rows).
 SCOPED_TABLES = ('sessions', 'deployments', 'keyword_rules', 'keyword_matches',
@@ -124,7 +128,7 @@ def create_snapshot(owner_id=None):
         # 3. Capture on-disk artifacts for this tenant's sessions.
         dst.execute(f"CREATE TABLE IF NOT EXISTS {ARTIFACT_TABLE} "
                     "(user_code TEXT, filename TEXT, content BLOB)")
-        victims_dir = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'victims')
+        victims_dir = VICTIMS_DIR
         for row in _scoped_rows(src, 'sessions', owner_id):
             uc = row['user_code']
             vdir = os.path.join(victims_dir, uc)
@@ -396,7 +400,7 @@ def _rebuild_artifacts(src, uc_map):
 
     Returns the number of sessions whose artifacts were rebuilt.
     """
-    victims_dir = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'victims')
+    victims_dir = VICTIMS_DIR
     rebuilt = 0
 
     # Prefer artifacts stored in the snapshot — roadtx.prt is a full PRT JSON
