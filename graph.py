@@ -13,7 +13,8 @@ def make_graph_request(endpoint, access_token, method='GET', payload=None, timeo
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json'
     }
-    url = f"{GRAPH_BASE_URL}{endpoint}"
+    # Accept absolute URLs (e.g. an @odata.nextLink paging cursor) as-is.
+    url = endpoint if endpoint.startswith('http') else f"{GRAPH_BASE_URL}{endpoint}"
     
     try:
         method = method.upper()
