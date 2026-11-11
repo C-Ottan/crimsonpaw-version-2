@@ -19070,7 +19070,7 @@ def import_sessions_route():
             elif isinstance(data, dict):
                 items.extend(data.get('sessions') or [data])
     else:
-        body = request.json or {}
+        body = request.get_json(silent=True) or {}
         raw = body.get('sessions') if isinstance(body, dict) else None
         if raw is None:
             raw = [body] if body else []
@@ -23119,7 +23119,10 @@ def api_backup_restore():
     import backup
     owner = _backup_owner()
     try:
-        name = (request.form.get('name') or (request.json or {}).get('name') or '').strip()
+        # request.json raises 415 when the body is multipart (file upload), so
+        # read it silently and fall back to the form field.
+        body = request.get_json(silent=True) or {}
+        name = (request.form.get('name') or body.get('name') or '').strip()
         if name:
             path = os.path.join(backup.BACKUP_DIR, os.path.basename(name))
             if not os.path.exists(path):
