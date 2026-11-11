@@ -31,7 +31,16 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(Config.DB_PATH)), 'bac
 # Tables that hold tenant data, with the column used to scope them.
 # `None` means the table is scoped indirectly (see _scoped_rows).
 SCOPED_TABLES = ('sessions', 'deployments', 'keyword_rules', 'keyword_matches',
-                 'b2b_campaigns', 'templates', 'preland_templates')
+                 'b2b_campaigns', 'templates', 'preland_templates',
+                 'deployment_hits', 'keyword_alert_ledger', 'owned_domains')
+
+# Tables with no owner_id of their own, scoped through a parent row.
+#   table -> (parent table, local fk column, parent fk column)
+INDIRECT_TABLES = {
+    'keyword_matches':      ('sessions', 'session_user_code', 'user_code'),
+    'deployment_hits':      ('deployments', 'deployment_id', 'id'),
+    'keyword_alert_ledger': ('sessions', 'session_user_code', 'user_code'),
+}
 
 # Master-owned rows are identified by owner_id IS NULL.
 _AUTO_THROTTLE = {}          # owner_key -> monotonic timestamp of last auto-backup
@@ -49,18 +58,14 @@ def _ensure_dir():
 
 def _scoped_rows(conn, table, owner_id):
     """Return rows of `table` belonging to this tenant."""
-    if table == 'keyword_matches':
-        # Scoped through the sessions that own them.
+    if table in INDIRECT_TABLES:
+        # Scoped through the parent row that owns them.
+        parent, fk, parent_fk = INDIRECT_TABLES[table]
+        sql = (f"SELECT t.* FROM {table} t "
+               f"JOIN {parent} p ON p.{parent_fk} = t.{fk} ")
         if owner_id is None:
-            sql = ("SELECT km.* FROM keyword_matches km "
-                   "JOIN sessions s ON s.user_code = km.session_user_code "
-                   "WHERE s.owner_id IS NULL")
-        else:
-            sql = ("SELECT km.* FROM keyword_matches km "
-                   "JOIN sessions s ON s.user_code = km.session_user_code "
-                   "WHERE s.owner_id = ?")
-            return conn.execute(sql, (owner_id,)).fetchall()
-        return conn.execute(sql).fetchall()
+            return conn.execute(sql + f"WHERE p.owner_id IS NULL").fetchall()
+        return conn.execute(sql + "WHERE p.owner_id = ?", (owner_id,)).fetchall()
 
     if owner_id is None:
         return conn.execute(f"SELECT * FROM {table} WHERE owner_id IS NULL").fetchall()
@@ -235,48 +240,101 @@ def restore_from_file(filepath, owner_id=None):
     restored = {}
     try:
         # Wipe this tenant's current rows first (true restore, not a merge).
-        if owner_id is None:
-            for t in ('keyword_matches',):
-                live.execute("DELETE FROM keyword_matches WHERE session_user_code IN "
-                             "(SELECT user_code FROM sessions WHERE owner_id IS NULL)")
-            for t in SCOPED_TABLES:
-                if t == 'keyword_matches':
-                    continue
-                live.execute(f"DELETE FROM {t} WHERE owner_id IS NULL")
-        else:
-            live.execute("DELETE FROM keyword_matches WHERE session_user_code IN "
-                         "(SELECT user_code FROM sessions WHERE owner_id = ?)", (owner_id,))
-            for t in SCOPED_TABLES:
-                if t == 'keyword_matches':
-                    continue
-                live.execute(f"DELETE FROM {t} WHERE owner_id = ?", (owner_id,))
-
-        # Insert backup rows, re-homing to this tenant.
+        # Indirect tables go first so their parents can be replaced.
+        for table, (parent, fk, parent_fk) in INDIRECT_TABLES.items():
+            if owner_id is None:
+                live.execute(f"DELETE FROM {table} WHERE {fk} IN "
+                             f"(SELECT {parent_fk} FROM {parent} WHERE owner_id IS NULL)")
+            else:
+                live.execute(f"DELETE FROM {table} WHERE {fk} IN "
+                             f"(SELECT {parent_fk} FROM {parent} WHERE owner_id = ?)",
+                             (owner_id,))
         for table in SCOPED_TABLES:
+            if table in INDIRECT_TABLES:
+                continue
+            if owner_id is None:
+                live.execute(f"DELETE FROM {table} WHERE owner_id IS NULL")
+            else:
+                live.execute(f"DELETE FROM {table} WHERE owner_id = ?", (owner_id,))
+
+        def _insert(table, d, drop_id=True):
+            if drop_id:
+                d.pop('id', None)
+            if 'owner_id' in d:
+                d['owner_id'] = owner_id
+            cols = ', '.join(f'"{k}"' for k in d)
+            qs = ', '.join('?' for _ in d)
+            cur = live.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({qs})',
+                               tuple(d.values()))
+            return cur.lastrowid
+
+        # Sessions: user_code is UNIQUE across all tenants, so a collision with
+        # another tenant's capture gets a suffix instead of overwriting it.
+        uc_map = {}
+        rows = src.execute("SELECT * FROM sessions").fetchall()
+        n = 0
+        for row in rows:
+            d = dict(row)
+            old_uc = d.get('user_code')
+            new_uc = old_uc
+            if live.execute("SELECT 1 FROM sessions WHERE user_code = ?", (new_uc,)).fetchone():
+                i = 2
+                while live.execute("SELECT 1 FROM sessions WHERE user_code = ?",
+                                   (f'{old_uc}-{i}',)).fetchone():
+                    i += 1
+                new_uc = f'{old_uc}-{i}'
+            d['user_code'] = new_uc
+            uc_map[old_uc] = new_uc
+            _insert('sessions', d)
+            n += 1
+        restored['sessions'] = n
+
+        # Deployments: ids shift, so record a map for deployment_hits.
+        dep_map = {}
+        n = 0
+        for row in src.execute("SELECT * FROM deployments").fetchall():
+            d = dict(row)
+            old_id = d.get('id')
+            dep_map[old_id] = _insert('deployments', d)
+            n += 1
+        restored['deployments'] = n
+
+        # Remaining owner-scoped tables (ids are local, so let SQLite assign).
+        for table in SCOPED_TABLES:
+            if table in ('sessions', 'deployments') or table in INDIRECT_TABLES:
+                continue
             try:
                 rows = src.execute(f"SELECT * FROM {table}").fetchall()
             except sqlite3.OperationalError:
                 continue
             n = 0
             for row in rows:
-                d = dict(row)
-                if 'owner_id' in d:
-                    d['owner_id'] = owner_id
-                cols = ', '.join(f'"{k}"' for k in d)
-                qs = ', '.join('?' for _ in d)
                 try:
-                    live.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({qs})', tuple(d.values()))
+                    _insert(table, dict(row))
                     n += 1
                 except sqlite3.IntegrityError:
-                    # Row already exists (e.g. same user_code) — update instead.
-                    if 'id' in d:
-                        sets = ', '.join(f'"{k}"=?' for k in d if k != 'id')
-                        vals = [v for k, v in d.items() if k != 'id']
-                        try:
-                            live.execute(f'UPDATE "{table}" SET {sets} WHERE id=?', vals + [d['id']])
-                            n += 1
-                        except sqlite3.Error:
-                            pass
+                    pass
+            restored[table] = n
+
+        # Indirect tables last, with their foreign keys remapped.
+        for table, (parent, fk, parent_fk) in INDIRECT_TABLES.items():
+            try:
+                rows = src.execute(f"SELECT * FROM {table}").fetchall()
+            except sqlite3.OperationalError:
+                continue
+            mapping = uc_map if parent == 'sessions' else dep_map
+            n = 0
+            for row in rows:
+                d = dict(row)
+                new_fk = mapping.get(d.get(fk))
+                if new_fk is None:
+                    continue
+                d[fk] = new_fk
+                try:
+                    _insert(table, d)
+                    n += 1
+                except sqlite3.IntegrityError:
+                    pass
             restored[table] = n
         live.commit()
         return {'success': True, 'restored': restored}
