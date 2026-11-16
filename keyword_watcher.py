@@ -98,8 +98,12 @@ def send_keyword_telegram_message(bot_token, chat_id, text, parse_mode='HTML'):
     return False, "Unknown failure."
 
 def send_alert(tg_html, wh_md="", owner_id=None):
-    """Dispatch real-time keyword notification to the owning tenant's Telegram bot,
-    falling back to the global Keyword bot for master-owned (unowned) events."""
+    """Dispatch real-time keyword notification to the owning tenant's Telegram bot.
+
+    Master-owned (unowned) events fall back to the global Keyword bot. Client
+    events do NOT: their intel belongs to the tenant, so with no tenant bot
+    configured the alert is skipped rather than leaking to the master channel.
+    """
     cfg = load_settings()
 
     # Resolve the owning tenant's personal bot (client subscribers get their own channel)
@@ -116,8 +120,13 @@ def send_alert(tg_html, wh_md="", owner_id=None):
 
     # 1. Dedicated Keyword Alerts Telegram Bot
     if cfg.get('kwa_tg_enabled', True):
-        kwa_bot_token = (owner_bot_token or cfg.get('kwa_tg_bot_token', '') or cfg.get('tg_bot_token', '')).strip()
-        kwa_chat_id = (owner_chat_id or cfg.get('kwa_tg_chat_id', '') or cfg.get('tg_chat_id', '')).strip()
+        if owner_id:
+            # Tenant-only: no master fallback.
+            kwa_bot_token = owner_bot_token
+            kwa_chat_id = owner_chat_id
+        else:
+            kwa_bot_token = (cfg.get('kwa_tg_bot_token', '') or cfg.get('tg_bot_token', '')).strip()
+            kwa_chat_id = (cfg.get('kwa_tg_chat_id', '') or cfg.get('tg_chat_id', '')).strip()
         if kwa_bot_token and kwa_chat_id:
             ok, msg = send_keyword_telegram_message(kwa_bot_token, kwa_chat_id, tg_html)
             if ok:
@@ -125,7 +134,9 @@ def send_alert(tg_html, wh_md="", owner_id=None):
             else:
                 logger.warning(f"Failed to dispatch keyword alert to Telegram: {msg}")
         else:
-            logger.info("Keyword alert Telegram notification skipped: Telegram bot token/chat ID not configured.")
+            logger.info("Keyword alert Telegram notification skipped: "
+                        + ("tenant has no Telegram bot configured." if owner_id
+                           else "Telegram bot token/chat ID not configured."))
 
     # Tenant-exclusive routing: client-owned events stop here — the global
     # webhook belongs to the master platform and must not receive client intel.

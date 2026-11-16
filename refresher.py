@@ -49,6 +49,11 @@ class TokenRefresher(threading.Thread):
                         # Only act when 10 minutes (600 seconds) or less remain
                         if time_left <= 600:
                             uc = s['user_code']
+                            # Skip sessions already backing off after a failure,
+                            # otherwise this thread retries every 30s and burns
+                            # the credential while the cooldown is meant to rest.
+                            if executor.in_refresh_cooldown(uc):
+                                continue
                             # PRT-only refresh — no fallback to oauth broker grant
                             success, new_at, new_exp = executor.refresh_via_prt(uc)
                             if success:
@@ -60,6 +65,10 @@ class TokenRefresher(threading.Thread):
                             else:
                                 fails = self._prt_failures.get(uc, 0) + 1
                                 self._prt_failures[uc] = fails
+                                # Only auto-revoke when the failure is not a
+                                # transient blip: refresh_via_prt already armed a
+                                # cooldown, so 3 real failures span ~30 minutes of
+                                # retries rather than ~90 seconds.
                                 if fails >= 3:
                                     # 3 consecutive refresh failures (~90s): the credentials
                                     # were almost certainly rotated/revoked externally (password

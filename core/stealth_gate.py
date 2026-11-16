@@ -280,11 +280,23 @@ def log_bot_hit(client_ip, user_agent, bot_type="scanner", host=None, path=None)
                 except Exception:
                     pass
 
+            # Only the visitor's first deflected hit moves the counters, matching
+            # deployments.log_hit() — a bot that retries must not inflate visits.
+            # Checked BEFORE the insert so the row we just wrote is not counted.
+            first_hit = True
+            if dep_id:
+                try:
+                    first_hit = conn.execute(
+                        "SELECT 1 FROM deployment_hits WHERE deployment_id=? AND visitor_ip=? LIMIT 1",
+                        (dep_id, client_ip)).fetchone() is None
+                except Exception:
+                    first_hit = True
+
             conn.execute(
                 "INSERT INTO deployment_hits (deployment_id, visitor_ip, visitor_ua, stage, is_bot, bot_type) VALUES (?, ?, ?, 'bot_deflected', 1, ?)",
                 (dep_id, client_ip, user_agent, bot_type)
             )
-            if dep_id:
+            if dep_id and first_hit:
                 try:
                     conn.execute("UPDATE deployments SET victim_hits=victim_hits+1, bot_hits=bot_hits+1 WHERE id=?", (dep_id,))
                 except Exception:

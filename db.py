@@ -792,17 +792,21 @@ def get_statistics(owner_id=None):
         templates = cursor.fetchone()[0]
 
         try:
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ?", (owner_id,))
+            # A single visitor walks preland -> landing -> success, and every
+            # stage writes its own hit row. Counting rows inflated one visit to
+            # three. Count DISTINCT (deployment, visitor) instead so the funnel
+            # collapses back to one visit per person per campaign link.
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ?", (owner_id,))
             total_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND date(dh.hit_at) = date('now')", (owner_id,))
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND date(dh.hit_at) = date('now')", (owner_id,))
             today_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0", (owner_id,))
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0", (owner_id,))
             human_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1", (owner_id,))
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1", (owner_id,))
             bot_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')", (owner_id,))
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')", (owner_id,))
             today_human_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')", (owner_id,))
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id = ? AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')", (owner_id,))
             today_bot_visits = cursor.fetchone()[0]
         except Exception:
             pass
@@ -836,17 +840,18 @@ def get_statistics(owner_id=None):
         cursor.execute("SELECT COUNT(DISTINCT template_id) FROM sessions WHERE owner_id IS NULL"); templates = cursor.fetchone()[0]
         
         try:
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL")
+            # Same DISTINCT-visitor collapse as the owner-scoped branch above.
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL")
             total_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND date(dh.hit_at) = date('now')")
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND date(dh.hit_at) = date('now')")
             today_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0")
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0")
             human_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1")
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1")
             bot_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')")
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 0 AND date(dh.hit_at) = date('now')")
             today_human_visits = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')")
+            cursor.execute("SELECT COUNT(DISTINCT dh.deployment_id || '|' || dh.visitor_ip) FROM deployment_hits dh JOIN deployments d ON d.id = dh.deployment_id WHERE d.owner_id IS NULL AND dh.is_bot = 1 AND date(dh.hit_at) = date('now')")
             today_bot_visits = cursor.fetchone()[0]
         except Exception:
             pass
@@ -894,8 +899,6 @@ def reset_visitor_statistics(owner_id=None):
     finally:
         conn.close()
 
-_failed_refresh_cooldown = {}
-
 def get_graph_access_token(session):
     """Return a valid Graph access token for this session, refreshing via PRT if expired.
 
@@ -903,14 +906,21 @@ def get_graph_access_token(session):
     There is intentionally NO fallback to oauth.refresh_access_token() because
     the standard broker RT grant produces a token scoped to Microsoft
     Authentication Broker, which breaks Graph Mail/Contacts access.
+
+    The cooldown and the per-session lock both live in executor.refresh_via_prt,
+    so this function, the TokenRefresher and the keyword watcher all share one
+    backoff state and cannot refresh the same session concurrently.
     """
     import time
     user_code = session.get('user_code')
     expiry    = session.get('access_token_expiry') or 0
     now_ts    = int(time.time())
 
-    # Check failure cooldown (10 minutes) to avoid repeated refresh attempts
-    in_cooldown = user_code and (now_ts < _failed_refresh_cooldown.get(user_code, 0))
+    try:
+        import executor as _executor
+        in_cooldown = bool(user_code) and _executor.in_refresh_cooldown(user_code)
+    except Exception:
+        in_cooldown = False
 
     # ── Personal (consumer) accounts ─────────────────────────────
     # The v1 capture token is scoped to graph.windows.net — MS Graph
@@ -926,13 +936,11 @@ def get_graph_access_token(session):
                 import executor as _executor
                 ok, new_at, new_exp = _executor.refresh_via_prt(user_code)
                 if ok:
-                    _failed_refresh_cooldown.pop(user_code, None)
                     session['access_token'] = new_at
                     session['access_token_expiry'] = new_exp
                     return new_at
-                _failed_refresh_cooldown[user_code] = now_ts + 600
             except Exception:
-                _failed_refresh_cooldown[user_code] = now_ts + 600
+                pass
         return session.get('access_token')
 
     # Attempt PRT refresh when token is expired or expiring within 60 seconds (if not in cooldown)
@@ -941,15 +949,11 @@ def get_graph_access_token(session):
             import executor as _executor
             success, new_at, new_exp = _executor.refresh_via_prt(user_code)
             if success:
-                _failed_refresh_cooldown.pop(user_code, None)
                 session['access_token']        = new_at
                 session['access_token_expiry'] = new_exp
                 return new_at
-            else:
-                # Refresh failed (e.g. revoked PRT or network timeout) — activate 10-minute cooldown
-                _failed_refresh_cooldown[user_code] = now_ts + 600
         except Exception:
-            _failed_refresh_cooldown[user_code] = now_ts + 600
+            pass
 
     if session.get('access_token'):
         return session['access_token']
@@ -1134,18 +1138,20 @@ def get_keyword_matches(severity=None, target_account=None, rule_id=None, triage
         params.extend([owner_id, owner_id])
     else:
         query += " AND (r.owner_id IS NULL OR r.owner_id = 0)"
-    if severity and severity != 'ALL':
-        query += " AND r.severity = ?"
-        params.append(severity.upper())
-    if target_account and target_account != 'ALL':
+    # The UI sends the sentinel 'all' (lowercase) for "no filter"; compare
+    # case-insensitively or every filter silently returns zero rows.
+    if severity and str(severity).strip().lower() != 'all':
+        query += " AND UPPER(r.severity) = ?"
+        params.append(str(severity).strip().upper())
+    if target_account and str(target_account).strip().lower() != 'all':
         query += " AND m.session_user_code = ?"
         params.append(target_account)
     if rule_id:
         query += " AND m.rule_id = ?"
         params.append(rule_id)
-    if triaged is not None and triaged != 'ALL':
+    if triaged is not None and str(triaged).strip().lower() != 'all':
         query += " AND m.is_triaged = ?"
-        params.append(1 if triaged in (1, '1', True, 'true') else 0)
+        params.append(1 if str(triaged).strip().lower() in ('1', 'true') else 0)
     query += " ORDER BY m.id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     rows = cursor.execute(query, params).fetchall()

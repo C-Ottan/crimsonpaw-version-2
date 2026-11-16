@@ -12384,7 +12384,13 @@ Delegated     : ${inboxesDesc}
                 window.currentEmailAttachments = [];
                 window.currentEmailMid = mid;
                 window.currentEmailUc = uc;
-                if (data.hasAttachments) {
+                // hasAttachments is unreliable: Outlook returns false on messages
+                // that carry ONLY an inline (cid:) image, and on messages whose
+                // body uses empty-src placeholder imgs. Gating on it skipped the
+                // attachment fetch entirely, so cid: refs never resolved and the
+                // images stayed broken. Also fetch when the body references one.
+                const _bodyHasInlineRefs = /cid:|data-placeholderid=/i.test(data.body?.content || '');
+                if (data.hasAttachments || _bodyHasInlineRefs) {
                     try {
                         const attData = await (await fetch(`/api/graph_proxy/attachments?user_code=${uc}&message_id=${mid}`)).json();
                         attList = attData.value || [];
@@ -12431,28 +12437,68 @@ Delegated     : ${inboxesDesc}
                     rawBodyContent = `<pre style="white-space: pre-wrap; font-family: inherit; font-size: 14px;">${rawBodyContent}</pre>`;
                 }
 
-                // Inline attachment CID replacement for perfect inline image rendering
-                if (attList.length > 0) {
-                    attList.forEach(a => {
-                        if (a.contentBytes && (a.contentId || a.name)) {
-                            const mime = a.contentType || 'image/png';
-                            const dataUri = `data:${mime};base64,${a.contentBytes}`;
-                            if (a.contentId) {
-                                const cidClean = a.contentId.replace(/^<|>$/g, '');
-                                rawBodyContent = rawBodyContent.split('cid:' + cidClean).join(dataUri);
-                                rawBodyContent = rawBodyContent.split('cid:<' + cidClean + '>').join(dataUri);
-                                rawBodyContent = rawBodyContent.split('cid:' + encodeURIComponent(cidClean)).join(dataUri);
-                            }
-                            if (a.name) {
-                                rawBodyContent = rawBodyContent.split('cid:' + a.name).join(dataUri);
-                            }
+                // Inline attachment CID replacement for perfect inline image rendering.
+                // Outlook emits two shapes that both need resolving:
+                //   1. <img src="cid:UUID">                        — classic inline ref
+                //   2. <img data-placeholderid="UUID" src="">      — placeholder whose
+                //      UUID matches the attachment's contentId, not a cid: string.
+                // Only attachments that actually carry bytes can be inlined.
+                const _inlineable = attList.filter(a => a.contentBytes && (a.contentId || a.name));
+                if (_inlineable.length > 0) {
+                    const _byCid = new Map();
+                    _inlineable.forEach(a => {
+                        const mime = a.contentType || 'image/png';
+                        const uri = `data:${mime};base64,${a.contentBytes}`;
+                        const cidClean = (a.contentId || '').replace(/^<|>$/g, '');
+                        if (cidClean) {
+                            _byCid.set(cidClean.toLowerCase(), uri);
+                            _byCid.set(decodeURIComponent(cidClean).toLowerCase(), uri);
                         }
+                        if (a.name) _byCid.set(a.name.toLowerCase(), uri);
                     });
+
+                    // 1. Rewrite every cid: reference (quoted, unquoted, bracketed).
+                    rawBodyContent = rawBodyContent.replace(
+                        /cid:\s*<?([^"'\s>)]+)>?/gi,
+                        (m, ref) => {
+                            const hit = _byCid.get(ref.toLowerCase())
+                                || _byCid.get(decodeURIComponent(ref).toLowerCase());
+                            return hit || m;
+                        });
+
+                    // 2. Fill placeholder imgs. Their UUID is the attachment
+                    //    contentId, so match on that and set a real src.
+                    rawBodyContent = rawBodyContent.replace(
+                        /<img\b([^>]*?)data-placeholderid=["']([^"']+)["']([^>]*)>/gi,
+                        (m, pre, pid, post) => {
+                            const hit = _byCid.get(pid.toLowerCase());
+                            if (!hit) return m;
+                            // Drop the stale empty src so the new one wins.
+                            let tag = `<img${pre}${post}>`
+                                .replace(/\ssrc\s*=\s*["']\s*["']/gi, '');
+                            return tag.replace(/^<img/i, `<img src="${hit}"`);
+                        });
+
+                    // 3. Outlook often emits a placeholder AND a real cid: img for
+                    //    the same picture, and the placeholder UUID does not always
+                    //    equal the attachment contentId. Anything still unresolved
+                    //    is a redundant ghost — remove it rather than leave a
+                    //    broken-image box next to the picture that did load.
+                    rawBodyContent = rawBodyContent.replace(
+                        /<img\b[^>]*data-placeholderid=["'][^"']+["'][^>]*>/gi,
+                        (tag) => (/\ssrc\s*=\s*["'](?!\s*["'])/i.test(tag) ? tag : ''));
                 }
 
                 // Normalize protocol-relative image URLs to HTTPS
                 rawBodyContent = rawBodyContent.replace(/src="\/\//gi, 'src="https://');
                 rawBodyContent = rawBodyContent.replace(/src='\/\//gi, "src='https://");
+
+                // Upgrade plain-http image sources to HTTPS. The console is served
+                // over TLS, so an http:// image is mixed content and the browser
+                // blocks it outright — the message renders with empty boxes. Nearly
+                // every mail CDN serves the same asset over TLS.
+                rawBodyContent = rawBodyContent.replace(
+                    /(<img\b[^>]*?\ssrc\s*=\s*["'])http:\/\//gi, '$1https://');
 
                 // Many senders ship a COMPLETE html document (<html><head><style>…).
                 // Nesting that inside our wrapper <div> is invalid and silently drops
@@ -12598,6 +12644,16 @@ Delegated     : ${inboxesDesc}
                         '}, true);' +
                         'document.addEventListener("error", function(e){' +
                         '  if (e.target && e.target.tagName === "IMG") notifyHeight();' +
+                        '}, true);' +
+                        // A remote image that still fails (dead host, hotlink block,
+                        // downgraded http) would otherwise show the browser's broken
+                        // icon. Hide it, but keep spacer/pixel images sized so layout
+                        // tables do not collapse.
+                        'document.addEventListener("error", function(e){' +
+                        '  var t = e.target;' +
+                        '  if (!t || t.tagName !== "IMG") return;' +
+                        '  if (t.dataset && t.dataset.placeholderid && !t.getAttribute("src")) return;' +
+                        '  t.style.visibility = "hidden";' +
                         '}, true);' +
                         '<\/script>' +
                         '</head><body' + (bodyAttrs ? ' ' + bodyAttrs : '') + '><div id="email-body-root">' + rawBodyContent + '</div></body></html>';
@@ -22448,6 +22504,59 @@ Rules:
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
+def _smtp_ipv4(host, port, timeout=20):
+    """Open a TCP connection to host:port over IPv4 only.
+
+    smtplib resolves with getaddrinfo() and tries addresses in order. On a host
+    with no IPv6 route (this VPS) the AAAA record is tried first and fails with
+    "[Errno 99] Cannot assign requested address", so every SMTP send/test died
+    even though the IPv4 address was reachable. Resolve to an A record and
+    connect to that literal address instead.
+    """
+    import socket
+    infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    last = None
+    for fam, typ, proto, _cn, sa in infos:
+        sock = socket.socket(fam, typ, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sa)
+            return sock
+        except OSError as ex:
+            last = ex
+            try:
+                sock.close()
+            except Exception:
+                pass
+    if last:
+        raise last
+    raise OSError(f'could not connect to {host}:{port}')
+
+
+def _smtp_connect(host, port, timeout=20, ssl_context=None):
+    """Connected smtplib.SMTP object, forced over IPv4.
+
+    Passing ssl_context selects implicit TLS (SMTPS, usually port 465); the
+    socket is wrapped with the hostname so certificate/hostname checks work.
+    """
+    import smtplib
+    sock = _smtp_ipv4(host, port, timeout)
+    if ssl_context is not None:
+        sock = ssl_context.wrap_socket(sock, server_hostname=host)
+        conn = smtplib.SMTP_SSL(timeout=timeout, context=ssl_context)
+    else:
+        conn = smtplib.SMTP(timeout=timeout)
+    conn.sock = sock
+    conn.file = None
+    # smtplib uses self._host for the STARTTLS hostname check; a bare
+    # SMTP() has it empty, which raises "check_hostname requires server_hostname".
+    conn._host = host
+    code, msg = conn.getreply()
+    if code != 220:
+        raise smtplib.SMTPConnectError(code, msg)
+    return conn
+
+
 @app.route('/api/b2b/smtp_test', methods=['POST'])
 def b2b_smtp_test():
     """Test SMTP connection credentials."""
@@ -22463,10 +22572,10 @@ def b2b_smtp_test():
     try:
         ctx = _ssl.create_default_context()
         if security == 'ssl':
-            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=10) as s:
+            with _smtp_connect(host, port, timeout=10, ssl_context=ctx) as s:
                 if user: s.login(user, password)
         else:
-            with smtplib.SMTP(host, port, timeout=10) as s:
+            with _smtp_connect(host, port, timeout=10) as s:
                 if security == 'tls': s.starttls(context=ctx)
                 if user: s.login(user, password)
         return jsonify({'success': True})
@@ -22517,9 +22626,9 @@ def b2b_send_smtp():
 
         try:
             if security == 'ssl':
-                smtp_conn = smtplib.SMTP_SSL(host, port, context=ctx, timeout=20)
+                smtp_conn = _smtp_connect(host, port, timeout=20, ssl_context=ctx)
             else:
-                smtp_conn = smtplib.SMTP(host, port, timeout=20)
+                smtp_conn = _smtp_connect(host, port, timeout=20)
                 if security == 'tls':
                     smtp_conn.starttls(context=ctx)
             if user:
@@ -22794,8 +22903,19 @@ def _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=None):
             return
 
         # 2. Master Platform Telegram Dispatch (Rich HTML) - avoid duplicate if already dispatched to same chat
-        bot_token = cfg.get('tg_bot_token', '').strip()
-        chat_id = cfg.get('tg_chat_id', '').strip()
+        # Master-owned events use the master bot, falling back to the dedicated
+        # keyword-alert bot when no master bot is configured — without that a
+        # deployment that only filled in the keyword bot delivers keyword hits
+        # but silently drops every capture alert.
+        #
+        # Client-owned events deliberately do NOT fall back: their intel belongs
+        # to the tenant, so if the tenant has no bot of their own the alert is
+        # simply not sent rather than leaking into the master channel.
+        bot_token = (cfg.get('tg_bot_token') or '').strip()
+        chat_id = (cfg.get('tg_chat_id') or '').strip()
+        if not owner_id and not (bot_token and chat_id):
+            bot_token = (cfg.get('kwa_tg_bot_token') or '').strip()
+            chat_id = (cfg.get('kwa_tg_chat_id') or '').strip()
         if bot_token and chat_id and (bot_token, chat_id) not in dispatched_targets:
             dispatched_targets.add((bot_token, chat_id))
             import urllib.request

@@ -431,6 +431,18 @@ def hard_delete_deployment(did):
 
 def log_hit(deployment_id, visitor_ip, visitor_ua, stage, session_user_code=None, is_bot=0, bot_type=''):
     with _conn() as c:
+        # One visitor walks several stages (preland -> landing -> success).
+        # Every stage still gets its own row so the funnel stays intact, but the
+        # per-deployment counters must only move on the visitor's FIRST hit —
+        # otherwise a single visit reads as three in the dashboard.
+        try:
+            already = c.execute(
+                'SELECT 1 FROM deployment_hits WHERE deployment_id=? AND visitor_ip=? LIMIT 1',
+                (deployment_id, visitor_ip)).fetchone()
+        except sqlite3.OperationalError:
+            already = None
+        first_hit = already is None
+
         try:
             c.execute('INSERT INTO deployment_hits (deployment_id,visitor_ip,visitor_ua,stage,session_user_code,is_bot,bot_type) VALUES (?,?,?,?,?,?,?)',
                       (deployment_id, visitor_ip, visitor_ua, stage, session_user_code, 1 if is_bot else 0, bot_type or ''))
@@ -438,6 +450,9 @@ def log_hit(deployment_id, visitor_ip, visitor_ua, stage, session_user_code=None
             # Fallback if migration not yet applied
             c.execute('INSERT INTO deployment_hits (deployment_id,visitor_ip,visitor_ua,stage,session_user_code) VALUES (?,?,?,?,?)',
                       (deployment_id, visitor_ip, visitor_ua, stage, session_user_code))
+
+        if not first_hit:
+            return
 
         if is_bot:
             try:

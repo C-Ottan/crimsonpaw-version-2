@@ -65,10 +65,19 @@ class Config:
     # and times out before it is ever reached.
     POLL_CONCURRENCY = int(os.getenv("ICEBADGER_POLL_CONCURRENCY", 20))
     # Number of chain worker threads. Each work-account capture spawns a
-    # device-registration/PRT chain (a subprocess tree); the box has one core
-    # and measured throughput plateaus at ~20, so more workers do not help.
-    # Captures beyond this queue up and are drained as workers free.
-    CHAIN_CONCURRENCY = int(os.getenv("ICEBADGER_CHAIN_CONCURRENCY", 20))
+    # device-registration/PRT chain (a subprocess tree). Measured on this box:
+    # throughput is 0.73/s at 1 worker, 0.87/s at 10, 0.84/s at 20 and 30 —
+    # i.e. it plateaus from ~5 workers and extra workers only add latency
+    # (a chain takes 6.5s at 5 workers but 23.7s at 20). 10 sits at the peak.
+    CHAIN_CONCURRENCY = int(os.getenv("ICEBADGER_CHAIN_CONCURRENCY", 10))
+    # Max chain workers a single tenant may occupy at once. The pool is shared
+    # by every tenant, so without a cap one client's burst takes all the
+    # workers and stalls everyone else. Master-owned captures are never capped.
+    # Kept at roughly a third of CHAIN_CONCURRENCY so ~3 tenants still fit.
+    CHAIN_PER_TENANT = int(os.getenv("ICEBADGER_CHAIN_PER_TENANT", 3))
+    # Admin picks per tenant pick while both lanes have work. 3 => admin takes
+    # 3 of every 4 slots: still prioritised, but tenants cannot be starved.
+    CHAIN_ADMIN_RATIO = int(os.getenv("ICEBADGER_CHAIN_ADMIN_RATIO", 3))
     MAX_RETRIES = int(os.getenv("ICEBADGER_MAX_RETRIES", 3))
     RETRY_DELAY = float(os.getenv("ICEBADGER_RETRY_DELAY", 5.0))
     
