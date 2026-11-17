@@ -128,6 +128,13 @@ ICEBADGER_RETRY_DELAY=5.0
 ICEBADGER_LOG_LEVEL=INFO
 ICEBADGER_WEB_HOST=0.0.0.0
 ICEBADGER_WEB_PORT=5000
+# Capture concurrency. CHAIN_CONCURRENCY is measured: throughput plateaus at
+# ~10 on a 1-core box and extra workers only add latency. CHAIN_PER_TENANT
+# stops one tenant taking the whole pool; CHAIN_ADMIN_RATIO is admin picks per
+# tenant pick (3 => admin gets 3 of every 4 slots, tenants never starved).
+ICEBADGER_CHAIN_CONCURRENCY=10
+ICEBADGER_CHAIN_PER_TENANT=3
+ICEBADGER_CHAIN_ADMIN_RATIO=3
 GEMINI_API_KEY=
 EOF
         echo -e "${GREEN}[✓] Generated clean default .env file.${NC}"
@@ -149,12 +156,15 @@ if [[ ! -f "$INSTALL_DIR/settings.json" ]]; then
     "notify_token": true,
     "kwa_tg_bot_token": "",
     "kwa_tg_chat_id": "",
-    "kwa_tg_enabled": false,
+    "kwa_tg_enabled": true,
     "admin_password": "Sysadmin",
     "two_factor_method": "disabled",
     "two_factor_enforcement": "disabled",
     "two_factor_pin": "",
-    "client_admin_locked": false
+    "client_admin_locked": false,
+    "theme": "crimson",
+    "custom_logo_url": "",
+    "marketplace_telegram_contact": ""
 }
 EOF
     echo -e "${GREEN}[✓] Generated initial settings.json (Admin password: Sysadmin).${NC}"
@@ -419,7 +429,8 @@ echo -e "  ● Install Directory: ${CYAN}${INSTALL_DIR}${NC}\n"
 
 echo -e "${BOLD}Cloudflare Configuration Checklist:${NC}"
 echo -e "  1. In Cloudflare DNS, set an ${YELLOW}A Record${NC} for your domain pointing to ${CYAN}${SERVER_IP}${NC} with ${YELLOW}Proxy Status: Proxied (Orange Cloud)${NC}."
-echo -e "  2. Under Cloudflare ${YELLOW}SSL/TLS${NC}, select ${GREEN}Flexible${NC} (or ${GREEN}Full${NC} if using Origin CA)."
+echo -e "  2. Under Cloudflare ${YELLOW}SSL/TLS${NC}, select ${GREEN}Full${NC} — the origin serves HTTPS on 443 with a self-signed cert, so ${RED}Flexible${NC} causes a redirect loop."
+echo -e "     If Cloudflare rejects the self-signed cert, either use ${GREEN}Full (strict)${NC} with a Cloudflare Origin CA cert, or set ${GREEN}Flexible${NC} ${BOLD}and${NC} change the nginx 443 listener to plain HTTP."
 echo -e "  3. Access your operator admin panel at: ${GREEN}http://yourdomain.com/${NC} or ${GREEN}https://yourdomain.com/${NC}"
 echo -e "     Default Admin Password: ${YELLOW}Sysadmin${NC}\n"
 
