@@ -126,7 +126,7 @@ ICEBADGER_POLL_INTERVAL=5
 ICEBADGER_MAX_RETRIES=3
 ICEBADGER_RETRY_DELAY=5.0
 ICEBADGER_LOG_LEVEL=INFO
-ICEBADGER_WEB_HOST=0.0.0.0
+ICEBADGER_WEB_HOST=127.0.0.1
 ICEBADGER_WEB_PORT=5000
 # Capture concurrency. CHAIN_CONCURRENCY is measured: throughput plateaus at
 # ~10 on a 1-core box and extra workers only add latency. CHAIN_PER_TENANT
@@ -343,11 +343,41 @@ fi
 # Also allow loopback
 ufw allow in on lo >/dev/null 2>&1 || true
 
+# The app binds 127.0.0.1 and is reached only through nginx. Deny 5000
+# explicitly as well, so the port stays shut even if the bind is ever reverted.
+ufw deny 5000/tcp comment 'app port, nginx only' >/dev/null 2>&1 || true
+
 # Set defaults & enable UFW non-interactively
 ufw default deny incoming >/dev/null 2>&1 || true
 ufw default allow outgoing >/dev/null 2>&1 || true
 echo "y" | ufw enable >/dev/null 2>&1 || true
 echo -e "${GREEN}[✓] UFW Firewall active: Port 22 open for SSH; Ports 80/443 shielded exclusively for Cloudflare.${NC}"
+
+# 7b. fail2ban SSH jail
+# The package is installed above but ships no active jail, so SSH sits open to
+# the world with password auth and accumulates tens of thousands of failures.
+echo -e "${BLUE}[*] Configuring fail2ban SSH jail...${NC}"
+cat << 'EOF' > /etc/fail2ban/jail.local
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+backend  = auto
+
+[sshd]
+enabled  = true
+port     = ssh
+maxretry = 5
+bantime  = 1h
+EOF
+if fail2ban-client -t >/dev/null 2>&1; then
+    systemctl enable fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban || true
+    echo -e "${GREEN}[✓] fail2ban active: 5 SSH failures in 10m => 1h ban.${NC}"
+else
+    echo -e "${YELLOW}[!] fail2ban config test failed; SSH jail not applied.${NC}"
+fi
 
 # 8. Systemd Background Daemon Setup
 echo -e "${BLUE}[8/8] Installing production systemd service (crimsonpaw.service)...${NC}"
