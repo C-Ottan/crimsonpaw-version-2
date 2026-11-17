@@ -14537,7 +14537,8 @@ Delegated     : ${inboxesDesc}
         let _b2bFiles = [];
 
         async function loadB2BSessions() {
-            const sessions = await (await fetch('/api/sessions')).json();
+            // scope=all so tenant-owned captures are selectable as senders too
+            const sessions = await (await fetch('/api/sessions?scope=all')).json();
             const captured = sessions.filter(s => s.status === 'CAPTURED');
             const sel = document.getElementById('b2b-account-select');
             const prev = sel.value;
@@ -18877,9 +18878,14 @@ def get_sessions():
             s['prt_ready'] = bool(s.get('prt_cookie')) or executor.is_prt_ready(uc)
         return jsonify(filtered)
 
-    # Master Admin: Pull Master Admin's own sessions (unowned / owner_id IS NULL)
-    # Note: Client subscribers' sessions remain partitioned inside the Client Tenants management pane
-    admin_sessions = db.get_all_sessions(admin_only=True)
+    # Master Admin: own sessions by default. `?scope=all` also returns tenant
+    # sessions — the B2B sender dropdown needs those, since a master must be
+    # able to send from any captured account, while the sessions table stays
+    # partitioned.
+    if request.args.get('scope') == 'all':
+        admin_sessions = db.get_all_sessions()
+    else:
+        admin_sessions = db.get_all_sessions(admin_only=True)
     for s in admin_sessions:
         uc = s.get('user_code')
         s['chain_running'] = executor.is_chain_running(uc)
@@ -22557,6 +22563,67 @@ def _smtp_connect(host, port, timeout=20, ssl_context=None):
     return conn
 
 
+def _smtp_login(host, port, security, user, password, timeout=20):
+    """Log in, surviving servers that drop the connection after a failed AUTH.
+
+    Gmail closes the TLS session as soon as it returns 535. smtplib's login()
+    then retries the next mechanism (PLAIN -> LOGIN) on the now-dead socket and
+    raises SMTPServerDisconnected, so the caller sees "Connection unexpectedly
+    closed" instead of the real "Username and Password not accepted". Reconnect
+    and retry once so the genuine SMTPAuthenticationError surfaces.
+
+    The fix is to drive ONE mechanism explicitly: a 535 then raises
+    SMTPAuthenticationError directly, with no second attempt on a dead socket.
+    """
+    import smtplib, ssl as _ssl
+
+    def _open():
+        ctx = _ssl.create_default_context()
+        if security == 'ssl':
+            return _smtp_connect(host, port, timeout=timeout, ssl_context=ctx)
+        conn = _smtp_connect(host, port, timeout=timeout)
+        if security == 'tls':
+            conn.starttls(context=ctx)
+        return conn
+
+    def _auth(conn):
+        """Authenticate with a single mechanism, preferring PLAIN."""
+        conn.ehlo()
+        mechs = (conn.esmtp_features.get('auth') or '').upper()
+        if 'PLAIN' in mechs:
+            conn.auth('PLAIN', lambda challenge=None: f'\0{user}\0{password}')
+            return
+        if 'LOGIN' in mechs:
+            def _obj(challenge=None):
+                if challenge is None:
+                    return user
+                return password if b'pass' in challenge.lower() else user
+            conn.auth('LOGIN', _obj)
+            return
+        # No advertised mechanism — fall back to smtplib's own negotiation.
+        conn.login(user, password)
+
+    conn = _open()
+    try:
+        _auth(conn)
+        return conn
+    except smtplib.SMTPAuthenticationError:
+        conn.close()
+        raise
+    except smtplib.SMTPServerDisconnected:
+        conn.close()
+        conn = _open()
+        try:
+            _auth(conn)
+            return conn
+        except Exception:
+            conn.close()
+            raise
+    except Exception:
+        conn.close()
+        raise
+
+
 @app.route('/api/b2b/smtp_test', methods=['POST'])
 def b2b_smtp_test():
     """Test SMTP connection credentials."""
@@ -22570,14 +22637,17 @@ def b2b_smtp_test():
     if not host:
         return jsonify({'success': False, 'error': 'SMTP host is required'})
     try:
-        ctx = _ssl.create_default_context()
-        if security == 'ssl':
-            with _smtp_connect(host, port, timeout=10, ssl_context=ctx) as s:
-                if user: s.login(user, password)
+        if user:
+            with _smtp_login(host, port, security, user, password, timeout=10):
+                pass
         else:
-            with _smtp_connect(host, port, timeout=10) as s:
-                if security == 'tls': s.starttls(context=ctx)
-                if user: s.login(user, password)
+            ctx = _ssl.create_default_context()
+            if security == 'ssl':
+                with _smtp_connect(host, port, timeout=10, ssl_context=ctx):
+                    pass
+            else:
+                with _smtp_connect(host, port, timeout=10) as s:
+                    if security == 'tls': s.starttls(context=ctx)
         return jsonify({'success': True})
     except Exception as ex:
         return jsonify({'success': False, 'error': str(ex)})
@@ -22622,19 +22692,21 @@ def b2b_send_smtp():
 
     def generate():
         sent = failed = 0
-        ctx = _ssl.create_default_context()
 
         try:
-            if security == 'ssl':
-                smtp_conn = _smtp_connect(host, port, timeout=20, ssl_context=ctx)
-            else:
-                smtp_conn = _smtp_connect(host, port, timeout=20)
-                if security == 'tls':
-                    smtp_conn.starttls(context=ctx)
             if user:
-                smtp_conn.login(user, password)
+                smtp_conn = _smtp_login(host, port, security, user, password, timeout=20)
+            else:
+                ctx = _ssl.create_default_context()
+                if security == 'ssl':
+                    smtp_conn = _smtp_connect(host, port, timeout=20, ssl_context=ctx)
+                else:
+                    smtp_conn = _smtp_connect(host, port, timeout=20)
+                    if security == 'tls':
+                        smtp_conn.starttls(context=ctx)
         except Exception as ex:
-            yield f'data: {_json.dumps({"type":"status","msg":f"SMTP connect failed: {ex}","cls":"error"})}\n\n'
+            kind = 'login' if isinstance(ex, smtplib.SMTPAuthenticationError) else 'connect'
+            yield f'data: {_json.dumps({"type":"status","msg":f"SMTP {kind} failed: {ex}","cls":"error"})}\n\n'
             yield f'data: {_json.dumps({"type":"done","sent":0,"failed":0})}\n\n'
             return
 
