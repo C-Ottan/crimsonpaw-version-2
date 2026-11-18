@@ -581,7 +581,7 @@ HTML_TEMPLATE = r'''
         .b2b-ticker-wrap { background:var(--bg-panel); border-bottom:1px solid var(--border-color); padding:5px 18px; overflow:hidden; white-space:nowrap; flex-shrink:0; }
         .b2b-ticker-inner { display:inline-block; animation:b2bTicker 30s linear infinite; font-size:.74em; color:var(--accent-color); font-weight:600; }
         @keyframes b2bTicker { 0%{transform:translateX(100vw)} 100%{transform:translateX(-100%)} }
-        .b2b-main-body { display:flex; flex:1; overflow:hidden; min-height:0; width:100%; }
+        .b2b-main-body { display:flex; flex:1; overflow-x:auto; overflow-y:hidden; min-height:0; width:100%; }
         
         /* ── Column 1: Recipients List (Generous Breathing Space) ── */
         .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:var(--bg-sidebar); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
@@ -609,7 +609,11 @@ HTML_TEMPLATE = r'''
         .b2b-col-params { width:365px; min-width:330px; max-width:420px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
         
         /* ── Column 3: Full Static Canvas Touching Right Edge ── */
-        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:var(--bg-primary); box-sizing:border-box; min-width:0; }
+        /* The two side columns are fixed-width, so without a floor here the
+           compose panel is crushed to ~95px on a 1000px window and the preview
+           iframe collapses to ~37px. Keep a usable minimum and let the row
+           scroll horizontally instead of squeezing the editor away. */
+        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:var(--bg-primary); box-sizing:border-box; min-width:420px; }
         .b2b-body-container { width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; gap:0; }
         
         .b2b-field-section { display:flex; flex-direction:column; gap:6px; }

