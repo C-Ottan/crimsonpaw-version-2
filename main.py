@@ -4409,6 +4409,18 @@ HTML_TEMPLATE = r'''
                             <div class="ai-section-label">FROM NAME (optional)</div>
                             <input type="text" id="smtp-fromname" class="b2b-campaign-input" placeholder="Microsoft IT Support" style="font-size:.85em;padding:7px 10px">
                         </div>
+                        <div class="ai-opt-group" style="grid-column:1/-1">
+                            <div class="ai-section-label">REPLY-TO (optional)</div>
+                            <input type="email" id="smtp-replyto" class="b2b-campaign-input" placeholder="Defaults to the From address" style="font-size:.85em;padding:7px 10px">
+                            <div style="font-size:.7em;color:#8b949e;margin-top:3px">Replies go here. Leaving it blank uses the From address, which is what a real sender would do.</div>
+                        </div>
+                        <div class="ai-opt-group" style="grid-column:1/-1">
+                            <label style="display:flex;align-items:center;gap:7px;font-size:.78em;color:#c9d1d9;cursor:pointer">
+                                <input type="checkbox" id="smtp-unsub" style="cursor:pointer">
+                                <span>Add <code>List-Unsubscribe</code> header (one-click)</span>
+                            </label>
+                            <div style="font-size:.7em;color:#8b949e;margin-top:3px">Lets Gmail/Outlook show an unsubscribe button. Uses <code>unsubscribe@&lt;your domain&gt;</code>; it does not need to exist.</div>
+                        </div>
                         <div class="ai-opt-group">
                             <div class="ai-section-label">USERNAME</div>
                             <input type="text" id="smtp-user" class="b2b-campaign-input" placeholder="user@domain.com" style="font-size:.85em;padding:7px 10px" autocomplete="off">
@@ -15451,6 +15463,8 @@ Delegated     : ${inboxesDesc}
             document.getElementById('smtp-security').value = m.security || 'tls';
             document.getElementById('smtp-from').value     = m.from_addr|| '';
             document.getElementById('smtp-fromname').value = m.from_name|| '';
+            document.getElementById('smtp-replyto').value  = m.reply_to || '';
+            document.getElementById('smtp-unsub').checked  = !!m.unsub;
             document.getElementById('smtp-user').value     = m.user     || '';
             document.getElementById('smtp-pass').value     = m.pass_enc || '';
             document.getElementById('smtp-test-result').textContent = '';
@@ -15468,6 +15482,8 @@ Delegated     : ${inboxesDesc}
                 security:  document.getElementById('smtp-security').value,
                 from_addr: document.getElementById('smtp-from').value.trim(),
                 from_name: document.getElementById('smtp-fromname').value.trim(),
+                reply_to:  document.getElementById('smtp-replyto').value.trim(),
+                unsub:     document.getElementById('smtp-unsub').checked,
                 user:      document.getElementById('smtp-user').value.trim(),
                 pass_enc:  document.getElementById('smtp-pass').value
             };
@@ -22695,6 +22711,8 @@ def b2b_send_smtp():
     security    = smtp_cfg.get('security', 'tls')
     from_addr   = smtp_cfg.get('from_addr', '').strip()
     from_name   = smtp_cfg.get('from_name', '').strip()
+    reply_to    = smtp_cfg.get('reply_to', '').strip()
+    add_unsub   = bool(smtp_cfg.get('unsub'))
     user        = smtp_cfg.get('user', '').strip()
     password    = smtp_cfg.get('pass_enc', '')
 
@@ -22707,6 +22725,16 @@ def b2b_send_smtp():
                         mimetype='text/event-stream')
 
     sender_str = f'"{from_name}" <{from_addr}>' if from_name else from_addr
+
+    # Deliverability headers. A Reply-To that differs from From is normal for
+    # bulk senders; defaulting to From keeps the two aligned when unset.
+    # List-Unsubscribe gives Gmail/Outlook a one-click button and is one of the
+    # signals their bulk-sender heuristics look for. The mailto: address is
+    # derived from the sending domain and does not need a real mailbox.
+    reply_to_final = reply_to or from_addr
+    unsub_mailto = ''
+    if add_unsub and '@' in from_addr:
+        unsub_mailto = 'unsubscribe@' + from_addr.rsplit('@', 1)[1]
 
     def generate():
         sent = failed = 0
@@ -22780,6 +22808,13 @@ def b2b_send_smtp():
                 msg['Subject'] = subj_final
                 msg['From']    = sender_str
                 msg['To']      = rec
+                msg['Reply-To'] = reply_to_final
+                if unsub_mailto:
+                    # RFC 2369 + RFC 8058 one-click. The URL form needs an
+                    # endpoint; the mailto form alone still satisfies the
+                    # header requirement and is what most filters check for.
+                    msg['List-Unsubscribe'] = f'<mailto:{unsub_mailto}>'
+                    msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
                 if priority == 'high':
                     msg['X-Priority'] = '1'
                     msg['Importance'] = 'high'
