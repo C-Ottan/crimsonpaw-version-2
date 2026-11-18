@@ -584,7 +584,10 @@ HTML_TEMPLATE = r'''
         .b2b-main-body { display:flex; flex:1; overflow-x:auto; overflow-y:hidden; min-height:0; width:100%; }
         
         /* ── Column 1: Recipients List (Generous Breathing Space) ── */
-        .b2b-col-recipients { width:300px; min-width:270px; max-width:340px; background:var(--bg-sidebar); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:12px; gap:8px; box-sizing:border-box; }
+        /* Side columns must be able to give ground: 300+365 fixed plus a usable
+           compose panel is wider than the content area on a normal laptop, which
+           pushed the preview off-screen. Let them shrink to a floor instead. */
+        .b2b-col-recipients { width:300px; min-width:190px; max-width:340px; background:var(--bg-sidebar); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:1; padding:12px; gap:8px; box-sizing:border-box; }
         .b2b-panel-header { display:flex; justify-content:space-between; align-items:center; font-size:.74em; font-weight:700; color:#ffffff; letter-spacing:.08em; }
         .b2b-mode-selector { display:flex; background:var(--bg-panel); border:1px solid var(--border-color); border-radius:14px; padding:2px; gap:2px; }
         .b2b-mode-btn { background:transparent; border:none; color:var(--text-secondary); font-size:.68em; font-weight:700; padding:2px 7px; border-radius:10px; cursor:pointer; transition:all .15s; letter-spacing:.03em; }
@@ -606,14 +609,14 @@ HTML_TEMPLATE = r'''
         .b2b-rec-count { font-size:.74em; color:#cbd5e1; text-align:center; font-weight:600; }
         
         /* ── Column 2: Campaign Parameters & Controls (Spacious & Non-overflowing) ── */
-        .b2b-col-params { width:365px; min-width:330px; max-width:420px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
+        .b2b-col-params { width:365px; min-width:250px; max-width:420px; background:var(--bg-primary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:1; padding:14px 14px 18px; gap:12px; overflow-y:auto; box-sizing:border-box; height:100%; }
         
         /* ── Column 3: Full Static Canvas Touching Right Edge ── */
         /* The two side columns are fixed-width, so without a floor here the
            compose panel is crushed to ~95px on a 1000px window and the preview
            iframe collapses to ~37px. Keep a usable minimum and let the row
            scroll horizontally instead of squeezing the editor away. */
-        .b2b-compose-panel { flex:1; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:var(--bg-primary); box-sizing:border-box; min-width:420px; }
+        .b2b-compose-panel { flex:1 1 340px; height:100%; display:flex; flex-direction:column; padding:10px 14px; overflow:hidden; background:var(--bg-primary); box-sizing:border-box; min-width:300px; }
         .b2b-body-container { width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; gap:0; }
         
         .b2b-field-section { display:flex; flex-direction:column; gap:6px; }
@@ -14812,7 +14815,18 @@ Delegated     : ${inboxesDesc}
                 .replace(/\[COMPANY\]/g, cleanCompany)
                 .replace(/\[LINK\]/g, firstLink);
 
-            iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:18px 12px;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;} .b2b-card-outer{margin:0 auto!important;} img{max-width:100%;object-fit:contain;} table{border-collapse:separate;} a{text-decoration:none;}</style></head><body>${rendered}</body></html>`;
+            // The editor constrains tables with `.b2b-editor-content table
+            // {max-width:100%}`, but this iframe is a separate document and only
+            // gets the rules below. Without the same constraint a fixed-width
+            // signature table (e.g. 560px) overflows the ~362px frame and the
+            // right side is clipped, so the preview looked wrong next to the
+            // editor. Mirror the editor's constraint here.
+            // Pasted HTML carries inline width/max-width on its tables, so a
+            // fixed-width signature block cannot shrink to the frame. The
+            // editor copes by scrolling horizontally (overflow-x:auto); mirror
+            // that here so the preview matches instead of clipping the right
+            // edge. max-width/!important still lets simple tables fit.
+            iframe.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:18px 12px;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow-wrap:break-word;overflow-x:auto;} .b2b-card-outer{margin:0 auto!important;} img{max-width:100%!important;height:auto;object-fit:contain;} table{border-collapse:separate;max-width:100%!important;} td,th{overflow-wrap:break-word;} a{text-decoration:none;}</style></head><body>${rendered}</body></html>`;
             setTimeout(autoResizePreviewFrame, 120);
         }
 
